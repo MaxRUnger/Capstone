@@ -161,7 +161,10 @@ def logout():
 def student_dashboard():
     if 'user_id' not in session:
         return redirect('/login')
-    return render_template("student_view.html")
+    # Mock enrolled student for demo (backend would fetch real enrollment)
+    class_data = classes.get('1', {})
+    sample_student = class_data.get('students', [{}])[0] if class_data.get('students') else None
+    return render_template("student_view.html", student=sample_student, class_name=class_data.get('name') if class_data else None)
 
 @main_bp.route("/instructor/dashboard")
 def instructor_dashboard():
@@ -210,6 +213,50 @@ def class_objectives(class_id):
                          class_id=class_id,
                          class_name=class_data['name'],
                          learning_objectives=learning_objectives)
+
+
+@main_bp.route("/class/<class_id>/grader")
+def class_speed_grader(class_id):
+    if class_id not in classes:
+        return redirect(url_for('main.instructor_dashboard'))
+    class_data = classes[class_id]
+    students = class_data['students']
+    learning_objectives = organize_by_learning_objectives(students)
+    lo_names = [lo['name'] for lo in learning_objectives]
+    return render_template('class_speed_grader.html',
+                         class_id=class_id,
+                         class_name=class_data['name'],
+                         students=students,
+                         lo_names=lo_names)
+
+
+@main_bp.route("/class/<class_id>/reports")
+def class_reports(class_id):
+    if class_id not in classes:
+        return redirect(url_for('main.instructor_dashboard'))
+    class_data = classes[class_id]
+    students = class_data['students']
+    learning_objectives = organize_by_learning_objectives(students)
+    return render_template('class_reports.html',
+                         class_id=class_id,
+                         class_name=class_data['name'],
+                         students=students,
+                         learning_objectives=learning_objectives)
+
+
+@main_bp.route("/class/<class_id>/student/<student_id>")
+def class_student_detail(class_id, student_id):
+    if class_id not in classes:
+        return redirect(url_for('main.instructor_dashboard'))
+    class_data = classes[class_id]
+    students = class_data['students']
+    student = next((s for s in students if s['id'] == student_id), None)
+    if not student:
+        return redirect(url_for('main.class_students', class_id=class_id))
+    return render_template('class_student_detail.html',
+                         class_id=class_id,
+                         class_name=class_data['name'],
+                         student=student)
 
 
 @main_bp.route("/support")

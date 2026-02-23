@@ -1,0 +1,183 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Speed Grader</h1>
+    <div class="flex items-center gap-2">
+      <button type="button" id="undoBtn" disabled class="px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors bg-slate-100 dark:bg-slate-700 text-slate-400 cursor-not-allowed" title="Undo (Ctrl+Z)">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"></path></svg>
+        <span id="undoLabel">Undo</span>
+      </button>
+      <a href="{{ url_for('main.update_grade', class_id=class_id) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 font-medium">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+        Upload Picture Grades
+      </a>
+    </div>
+  </div>
+
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6">
+    <h3 class="font-semibold text-slate-900 dark:text-white mb-4">Keyboard Shortcuts</h3>
+    <div class="grid grid-cols-3 md:grid-cols-4 gap-4 text-sm">
+      <div class="flex items-center gap-2">
+        <kbd class="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded text-xs font-mono">M</kbd>
+        <span class="text-slate-600 dark:text-slate-400">Mastered</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <kbd class="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded text-xs font-mono">R</kbd>
+        <span class="text-slate-600 dark:text-slate-400">Revise</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <kbd class="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded text-xs font-mono">X</kbd>
+        <span class="text-slate-600 dark:text-slate-400">No Evidence</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <kbd class="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded text-xs font-mono">A</kbd>
+        <span class="text-slate-600 dark:text-slate-400">Absent</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <kbd class="px-2 py-1 bg-slate-100 dark:bg-slate-700 rounded text-xs font-mono">Ctrl+Z</kbd>
+        <span class="text-slate-600 dark:text-slate-400">Undo</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm overflow-hidden">
+    <div class="overflow-x-auto">
+      <table class="w-full">
+        <thead class="bg-slate-50 dark:bg-slate-700 border-b border-slate-100 dark:border-slate-600">
+          <tr>
+            <th class="px-4 py-3 text-left text-sm font-semibold text-slate-900 dark:text-white sticky left-0 bg-slate-50 dark:bg-slate-700 z-20">Student</th>
+            {% for lo in lo_names %}
+            <th class="px-4 py-3 text-center text-sm font-semibold text-slate-900 dark:text-white min-w-[100px]">
+              <span class="text-xs line-clamp-2">{{ lo }}</span>
+            </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-50 dark:divide-slate-700">
+          {% for student in students %}
+          <tr class="hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors">
+            <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white sticky left-0 bg-white dark:bg-slate-800 z-10">{{ student.name }}</td>
+            {% for lo in lo_names %}
+            {% set student_lo = student.learning_objectives|selectattr('name', 'equalto', lo)|first %}
+            {% set grade = student_lo.top_score if student_lo else '' %}
+            <td class="px-2 py-2">
+              <div class="grade-cell w-full min-h-[44px] flex items-center justify-center rounded-lg border-2 border-slate-100 dark:border-slate-600 hover:border-slate-300 dark:hover:border-slate-500 transition-all cursor-pointer"
+                   data-student-id="{{ student.id }}"
+                   data-lo-name="{{ lo }}"
+                   tabindex="0">
+                {% if grade %}
+                <span class="mastery-badge mastery-{{ grade|lower }} px-3 py-1 text-sm font-semibold font-mono rounded border">{{ grade }}</span>
+                {% else %}
+                <span class="text-slate-300 dark:text-slate-600">—</span>
+                {% endif %}
+              </div>
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6">
+    <button type="button" id="saveBtn" class="w-full px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors font-semibold">
+      Save All Grades
+    </button>
+  </div>
+</div>
+
+<style>
+.mastery-m { background: #dcfce7; color: #15803d; border-color: #86efac; }
+.mastery-r { background: #fef9c3; color: #a16207; border-color: #fde047; }
+.mastery-rq { background: #ffedd5; color: #c2410c; border-color: #fdba74; }
+.mastery-p { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
+.mastery-x { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
+.mastery-a { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+@media print { .print\\:hidden { display: none !important; } }
+</style>
+
+<script>
+const GRADES = ['M','R','RQ','P','X','A'];
+const gradeHistory = [];
+const grades = {};
+
+document.querySelectorAll('.grade-cell').forEach(cell => {
+  const sid = cell.dataset.studentId;
+  const lo = cell.dataset.loName;
+  const key = sid + '|' + lo;
+  const badge = cell.querySelector('.mastery-badge');
+  if (badge) grades[key] = badge.textContent.trim();
+
+  cell.addEventListener('click', () => cell.focus());
+  cell.addEventListener('keydown', (e) => {
+    const k = e.key.toUpperCase();
+    if (GRADES.includes(k)) {
+      e.preventDefault();
+      const prev = grades[key];
+      grades[key] = k;
+      gradeHistory.push({ key, prev, newGrade: k });
+      renderCell(cell, k);
+      updateUndoBtn();
+      advanceCell(cell);
+    } else if (e.key === 'Backspace' || e.key === 'Delete') {
+      e.preventDefault();
+      const prev = grades[key];
+      grades[key] = null;
+      gradeHistory.push({ key, prev, newGrade: null });
+      renderCell(cell, null);
+      updateUndoBtn();
+    }
+  });
+});
+
+function renderCell(cell, grade) {
+  cell.innerHTML = grade
+    ? `<span class="mastery-badge mastery-${grade.toLowerCase()} px-3 py-1 text-sm font-semibold font-mono rounded border">${grade}</span>`
+    : `<span class="text-slate-300 dark:text-slate-600">—</span>`;
+}
+
+function advanceCell(current) {
+  const cells = [...document.querySelectorAll('.grade-cell')];
+  const i = cells.indexOf(current);
+  if (i >= 0 && i < cells.length - 1) cells[i + 1].focus();
+}
+
+function updateUndoBtn() {
+  const btn = document.getElementById('undoBtn');
+  const label = document.getElementById('undoLabel');
+  if (gradeHistory.length > 0) {
+    btn.disabled = false;
+    btn.className = 'px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors bg-blue-600 text-white hover:bg-blue-700';
+    label.textContent = 'Undo (' + gradeHistory.length + ')';
+  } else {
+    btn.disabled = true;
+    btn.className = 'px-4 py-2 rounded-lg flex items-center gap-2 font-medium transition-colors bg-slate-100 dark:bg-slate-700 text-slate-400 cursor-not-allowed';
+    label.textContent = 'Undo';
+  }
+}
+
+document.getElementById('undoBtn').addEventListener('click', () => {
+  if (gradeHistory.length === 0) return;
+  const last = gradeHistory.pop();
+  grades[last.key] = last.prev;
+  const [sid, lo] = last.key.split('|');
+  const cell = document.querySelector(`[data-student-id="${sid}"][data-lo-name="${lo}"]`);
+  if (cell) renderCell(cell, last.prev);
+  updateUndoBtn();
+});
+
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+    e.preventDefault();
+    document.getElementById('undoBtn').click();
+  }
+});
+
+document.getElementById('saveBtn').addEventListener('click', () => {
+  alert('Grades saved! (In production, this would POST to the server.)');
+});
+</script>
+{% endblock %}

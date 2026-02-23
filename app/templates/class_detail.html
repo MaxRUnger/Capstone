@@ -1,4 +1,5 @@
 {% extends "app_base.html" %}
+{% from "_components.html" import homework_percentage_badge, progress_bar %}
 
 {% block content %}
 <div class="space-y-6">
@@ -7,13 +8,17 @@
       <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Dashboard</h1>
       <p class="text-slate-500 dark:text-slate-400 mt-1">{{ class_name }}</p>
     </div>
+    <button type="button" onclick="document.getElementById('classSettingsModal').classList.remove('hidden')" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors text-sm font-medium text-slate-900 dark:text-white flex items-center gap-2">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path></svg>
+      Class Settings
+    </button>
   </div>
 
   <!-- Stats -->
   {% set total_students = students|length %}
   {% set total_los = learning_objectives|length %}
   <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-    <div class="bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm">
+    <button type="button" onclick="document.getElementById('studentManagementModal').classList.remove('hidden')" class="text-left bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm hover:scale-[1.02] transition-transform">
       <div class="flex items-start justify-between">
         <div>
           <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Active Students</p>
@@ -23,7 +28,18 @@
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
         </div>
       </div>
-    </div>
+    </button>
+    <button type="button" onclick="document.getElementById('overdueRevisionsModal').classList.remove('hidden')" class="text-left bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm hover:scale-[1.02] transition-transform">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Overdue Revisions</p>
+          <p class="text-3xl font-semibold text-orange-600 dark:text-orange-400">0</p>
+        </div>
+        <div class="p-2.5 rounded-lg bg-orange-50 dark:bg-orange-900 text-orange-600 dark:text-orange-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+        </div>
+      </div>
+    </button>
     <div class="bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm">
       <div class="flex items-start justify-between">
         <div>
@@ -59,12 +75,18 @@
     <!-- Students View -->
     <div id="studentsView" class="divide-y divide-slate-50 dark:divide-slate-700">
       {% for student in students %}
+      {% set los = student.learning_objectives %}
+      {% set mastered = los|selectattr('top_score', 'equalto', 'M')|selectattr('second_score', 'equalto', 'M')|list|length %}
       <div class="student-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-name="{{ student.name|lower }}">
         <div class="flex items-center justify-between cursor-pointer" onclick="toggleStudent(this)">
-          <span class="font-medium text-slate-900 dark:text-white">{{ student.name }}</span>
-          <svg class="w-5 h-5 text-slate-400 chevron transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+          <div class="flex items-center gap-3 min-w-0">
+            <span class="font-medium text-slate-900 dark:text-white">{{ student.name }}</span>
+            {{ homework_percentage_badge(mastered, los|length) }}
+          </div>
+          <svg class="w-5 h-5 text-slate-400 chevron transition-transform flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
         </div>
         <div class="learning-objectives-content mt-4 hidden">
+          <div class="mb-3 max-w-[240px]">{{ progress_bar(mastered, los|length, show_label=true) }}</div>
           {% for lo in student.learning_objectives %}
           <div class="grid grid-cols-3 gap-4 py-2 text-sm">
             <div class="text-slate-700 dark:text-slate-300">{{ lo.name }}</div>
@@ -133,6 +155,100 @@
     </div>
   </div>
 </div>
+
+<!-- Overdue Revisions Modal -->
+<div id="overdueRevisionsModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-8">
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900 dark:text-white">Overdue Revisions Report</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Students with revisions past due date</p>
+      </div>
+      <button type="button" onclick="document.getElementById('overdueRevisionsModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-6">
+      <p class="text-slate-500 dark:text-slate-400 text-center py-8">No overdue revisions. This feature tracks R grades past their revision due date.</p>
+    </div>
+  </div>
+</div>
+
+<!-- Student Management Modal -->
+<div id="studentManagementModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-8">
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-4xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900 dark:text-white">Manage Students</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ students|length }} active students</p>
+      </div>
+      <button type="button" onclick="document.getElementById('studentManagementModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700">
+      <div class="relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+        <input type="text" id="modalSearchInput" placeholder="Search students..." oninput="filterModalStudents()" class="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-900 dark:text-white dark:placeholder-slate-400">
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto p-6 space-y-2" id="modalStudentList">
+      {% for student in students %}
+      <div class="modal-student flex items-center justify-between p-4 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 gap-4" data-name="{{ student.name|lower }}" data-student-id="{{ student.id }}">
+        <p class="font-medium text-slate-900 dark:text-white flex-1 min-w-0">{{ student.name }}</p>
+        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 cursor-pointer shrink-0">
+          <input type="checkbox" class="mute-toggle rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" data-student-id="{{ student.id }}" onchange="toggleMute(this)">
+          <span>Mute</span>
+        </label>
+        <a href="{{ url_for('main.class_student_detail', class_id=class_id, student_id=student.id) }}" class="text-sm text-blue-600 dark:text-blue-400 hover:underline shrink-0">View progress →</a>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm text-slate-600 dark:text-slate-400">
+      Muted students are hidden from grading views. Changes are shown in this session only (backend persistence coming soon).
+    </div>
+  </div>
+</div>
+
+<!-- Class Settings Modal -->
+<div id="classSettingsModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onclick="if(event.target===this) this.classList.add('hidden')">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full" onclick="event.stopPropagation()">
+    <div class="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+      <h2 class="font-semibold text-slate-900 dark:text-white">Class Settings</h2>
+      <button type="button" onclick="document.getElementById('classSettingsModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <div class="p-6 space-y-6">
+      <div class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+        <p class="text-sm text-blue-900 dark:text-blue-300">Adjust the minimum number of masteries (Ms) required for each learning objective. This applies to all objectives and progress tracking.</p>
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Minimum Masteries Required</label>
+        <input type="number" id="minMasteriesInput" min="1" max="10" value="2" class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white text-lg font-medium">
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-2">Students need this many "M" grades to master each objective</p>
+      </div>
+    </div>
+    <div class="p-6 border-t border-slate-200 dark:border-slate-700 flex gap-3">
+      <button type="button" onclick="document.getElementById('classSettingsModal').classList.add('hidden')" class="flex-1 px-6 py-3 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors font-medium text-slate-900 dark:text-white">Cancel</button>
+      <button type="button" onclick="alert('Settings saved! (Backend persistence coming soon)'); document.getElementById('classSettingsModal').classList.add('hidden')" class="flex-1 px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors font-medium">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<script>
+function filterModalStudents() {
+  const q = document.getElementById('modalSearchInput')?.value.toLowerCase() || '';
+  document.querySelectorAll('.modal-student').forEach(el => {
+    el.style.display = (!q || el.dataset.name.includes(q)) ? '' : 'none';
+  });
+}
+function toggleMute(checkbox) {
+  const row = checkbox.closest('.modal-student');
+  row.classList.toggle('opacity-60', checkbox.checked);
+  row.classList.toggle('line-through', checkbox.checked);
+}
+</script>
 
 <script>
 function switchView(view) {

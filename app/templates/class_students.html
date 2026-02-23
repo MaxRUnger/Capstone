@@ -1,4 +1,5 @@
 {% extends "app_base.html" %}
+{% from "_components.html" import homework_percentage_badge, progress_bar %}
 
 {% block content %}
 <div class="space-y-6">
@@ -26,19 +27,23 @@
     </div>
     <div class="divide-y divide-slate-50 dark:divide-slate-700">
       {% for student in students %}
-      <div class="student-row p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-name="{{ student.name|lower }}">
+      <a href="{{ url_for('main.class_student_detail', class_id=class_id, student_id=student.id) }}" class="student-row block p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-name="{{ student.name|lower }}">
         <div class="flex items-center justify-between">
-          <div class="flex-1">
+          <div class="flex-1 min-w-0">
             <h3 class="font-semibold text-slate-900 dark:text-white mb-2">{{ student.name }}</h3>
-            <div class="flex items-center gap-4 text-sm text-slate-600 dark:text-slate-400">
+            <div class="flex items-center gap-4 text-sm text-slate-600 dark:text-slate-400 flex-wrap">
               {% set los = student.learning_objectives %}
               {% set mastered = los|selectattr('top_score', 'equalto', 'M')|selectattr('second_score', 'equalto', 'M')|list|length %}
               <span>{{ mastered }} / {{ los|length }} objectives mastered</span>
+              {{ homework_percentage_badge(mastered, los|length) }}
+            </div>
+            <div class="mt-2 max-w-[200px]">
+              {{ progress_bar(mastered, los|length) }}
             </div>
           </div>
           <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
         </div>
-      </div>
+      </a>
       {% else %}
       <div class="p-12 text-center text-slate-500 dark:text-slate-400">No students in this class</div>
       {% endfor %}

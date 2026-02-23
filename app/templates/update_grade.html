@@ -5,38 +5,110 @@
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Update Grades</h1>
-      <p class="text-slate-500 dark:text-slate-400 mt-1">{{ class_name }} · Import grades from a file</p>
+      <p class="text-slate-500 dark:text-slate-400 mt-1">{{ class_name }} · Import grades from a file or photo</p>
     </div>
     <a href="{{ url_for('main.class_detail', class_id=class_id) }}" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors text-sm font-medium text-slate-900 dark:text-white">← Back</a>
   </div>
 
   <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-12">
     <div class="max-w-xl mx-auto">
-      <div class="text-center mb-8">
-        <div class="w-16 h-16 bg-blue-50 dark:bg-blue-900 rounded-full flex items-center justify-center mx-auto mb-4">
-          <svg class="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
-        </div>
-        <h2 class="font-semibold text-slate-900 dark:text-white mb-2">Upload Grade File</h2>
-        <p class="text-sm text-slate-500 dark:text-slate-400">CSV or Excel files accepted</p>
+      <div class="flex gap-2 mb-8">
+        <button type="button" id="btnFile" onclick="switchUploadMode('file')" class="flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-blue-600 text-white transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+          Upload File (CSV/Excel)
+        </button>
+        <button type="button" id="btnPicture" onclick="switchUploadMode('picture')" class="flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+          Upload Picture Grades
+        </button>
       </div>
 
-      <form action="{{ url_for('main.upload_grades', class_id=class_id) }}" method="post" enctype="multipart/form-data">
+      <!-- File upload (CSV/Excel) -->
+      <div id="fileUploadPanel" class="upload-panel">
+        <div class="text-center mb-8">
+          <div class="w-16 h-16 bg-blue-50 dark:bg-blue-900 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg class="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+          </div>
+          <h2 class="font-semibold text-slate-900 dark:text-white mb-2">Upload Grade File</h2>
+          <p class="text-sm text-slate-500 dark:text-slate-400">CSV or Excel files accepted</p>
+        </div>
+        <form action="{{ url_for('main.upload_grades', class_id=class_id) }}" method="post" enctype="multipart/form-data">
+          <label class="block">
+            <div class="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-12 text-center hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all cursor-pointer">
+              <svg class="w-12 h-12 text-slate-400 dark:text-slate-500 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+              <p class="font-medium text-slate-900 dark:text-white mb-1">Click to upload or drag and drop</p>
+              <p class="text-sm text-slate-500 dark:text-slate-400">CSV, XLS, or XLSX up to 10MB</p>
+              <input type="file" name="file" accept=".csv,.xlsx,.xls" required class="hidden" id="fileInput" onchange="document.getElementById('fileName').textContent = this.files[0]?.name || 'No file chosen'">
+            </div>
+          </label>
+          <p id="fileName" class="text-sm text-slate-500 dark:text-slate-400 mt-2 text-center">No file chosen</p>
+          <button type="submit" class="w-full mt-6 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center justify-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+            Upload
+          </button>
+        </form>
+      </div>
+
+      <!-- Picture upload (photos of graded work) -->
+      <div id="pictureUploadPanel" class="upload-panel hidden">
+        <div class="text-center mb-8">
+          <div class="w-16 h-16 bg-blue-50 dark:bg-blue-900 rounded-full flex items-center justify-center mx-auto mb-4">
+            <svg class="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
+          </div>
+          <h2 class="font-semibold text-slate-900 dark:text-white mb-2">Upload Picture Grades</h2>
+          <p class="text-sm text-slate-500 dark:text-slate-400">Upload photos of graded papers or answer sheets</p>
+        </div>
         <label class="block">
           <div class="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-12 text-center hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all cursor-pointer">
-            <svg class="w-12 h-12 text-slate-400 dark:text-slate-500 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            <svg class="w-12 h-12 text-slate-400 dark:text-slate-500 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"></path></svg>
             <p class="font-medium text-slate-900 dark:text-white mb-1">Click to upload or drag and drop</p>
-            <p class="text-sm text-slate-500 dark:text-slate-400">CSV, XLS, or XLSX up to 10MB</p>
-            <input type="file" name="file" accept=".csv,.xlsx,.xls" required class="hidden" id="fileInput" onchange="document.getElementById('fileName').textContent = this.files[0]?.name || 'No file chosen'">
+            <p class="text-sm text-slate-500 dark:text-slate-400">PNG, JPG, or JPEG up to 10MB</p>
+            <input type="file" id="pictureInput" accept="image/png,image/jpeg,image/jpg" class="hidden" onchange="handlePictureUpload(this)">
           </div>
         </label>
-        <p id="fileName" class="text-sm text-slate-500 dark:text-slate-400 mt-2 text-center">No file chosen</p>
-
-        <button type="submit" class="w-full mt-6 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center justify-center gap-2">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
-          Upload
-        </button>
-      </form>
+        <p id="pictureFileName" class="text-sm text-slate-500 dark:text-slate-400 mt-2 text-center">No file chosen</p>
+        <div id="picturePreview" class="hidden mt-6">
+          <img id="picturePreviewImg" src="" alt="Preview" class="max-h-64 mx-auto rounded-lg border border-slate-200 dark:border-slate-600">
+          <p class="text-sm text-slate-500 dark:text-slate-400 mt-4 text-center">Image uploaded. Connect AI extraction service to extract grades from images.</p>
+        </div>
+      </div>
     </div>
   </div>
 </div>
+
+<script>
+function switchUploadMode(mode) {
+  const filePanel = document.getElementById('fileUploadPanel');
+  const picturePanel = document.getElementById('pictureUploadPanel');
+  const btnFile = document.getElementById('btnFile');
+  const btnPicture = document.getElementById('btnPicture');
+  if (mode === 'file') {
+    filePanel.classList.remove('hidden');
+    picturePanel.classList.add('hidden');
+    btnFile.className = 'flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-blue-600 text-white transition-colors';
+    btnPicture.className = 'flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+  } else {
+    filePanel.classList.add('hidden');
+    picturePanel.classList.remove('hidden');
+    btnPicture.className = 'flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-blue-600 text-white transition-colors';
+    btnFile.className = 'flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+  }
+}
+function handlePictureUpload(input) {
+  const file = input.files[0];
+  document.getElementById('pictureFileName').textContent = file ? file.name : 'No file chosen';
+  const preview = document.getElementById('picturePreview');
+  const img = document.getElementById('picturePreviewImg');
+  if (file) {
+    const reader = new FileReader();
+    reader.onload = function(e) {
+      img.src = e.target.result;
+      preview.classList.remove('hidden');
+    };
+    reader.readAsDataURL(file);
+  } else {
+    preview.classList.add('hidden');
+  }
+}
+</script>
 {% endblock %}

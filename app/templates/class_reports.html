@@ -1,0 +1,133 @@
+{% extends "app_base.html" %}
+{% from "_components.html" import homework_percentage_badge %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between print:hidden">
+    <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Reports</h1>
+    <button type="button" onclick="window.print()" class="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center gap-2 font-medium">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+      Print
+    </button>
+  </div>
+
+  <div class="flex gap-3 print:hidden">
+    <button type="button" onclick="showReport('homework')" id="btnHomework" class="flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-blue-600 text-white transition-colors">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+      Homework Report
+    </button>
+    <button type="button" onclick="showReport('exam')" id="btnExam" class="flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+      Exam Report
+    </button>
+  </div>
+
+  <div id="homeworkReport" class="report-panel bg-white dark:bg-slate-800 rounded-xl shadow-sm print:shadow-none">
+    <div class="p-8">
+      <div class="mb-8 print:mb-6">
+        <h2 class="font-semibold text-slate-900 dark:text-white">Homework Progress Report</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ class_name }}</p>
+      </div>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-200 dark:border-slate-700">
+            <th class="text-left py-2 font-medium text-slate-600 dark:text-slate-400">Student</th>
+            <th class="text-center py-2 font-medium text-slate-600 dark:text-slate-400 w-16">Homework %</th>
+            {% for lo in learning_objectives %}
+            <th class="text-center py-2 font-medium text-slate-600 dark:text-slate-400 px-2">{{ lo.name }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for student in students %}
+          {% set los = student.learning_objectives %}
+          {% set mastered = los|selectattr('top_score', 'equalto', 'M')|selectattr('second_score', 'equalto', 'M')|list|length %}
+          <tr class="border-b border-slate-100 dark:border-slate-700">
+            <td class="py-3 text-slate-900 dark:text-white">{{ student.name }}</td>
+            <td class="py-3 text-center">{{ homework_percentage_badge(mastered, los|length) }}</td>
+            {% for lo in learning_objectives %}
+            {% set student_lo = student.learning_objectives|selectattr('name', 'equalto', lo.name)|first %}
+            {% set grade = student_lo.top_score if student_lo else None %}
+            <td class="text-center py-3 px-2">
+              {% if grade %}
+              <span class="mastery-badge mastery-{{ grade|lower }} inline-block px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ grade }}</span>
+              {% else %}
+              <span class="text-slate-300 dark:text-slate-600">—</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <div id="examReport" class="report-panel hidden bg-white dark:bg-slate-800 rounded-xl shadow-sm print:shadow-none">
+    <div class="p-8">
+      <div class="mb-8 print:mb-6">
+        <h2 class="font-semibold text-slate-900 dark:text-white">Exam Progress Report</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ class_name }}</p>
+      </div>
+      <table class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-slate-200 dark:border-slate-700">
+            <th class="text-left py-2 font-medium text-slate-600 dark:text-slate-400">Student</th>
+            <th class="text-center py-2 font-medium text-slate-600 dark:text-slate-400 w-16">Homework %</th>
+            {% for lo in learning_objectives %}
+            <th class="text-center py-2 font-medium text-slate-600 dark:text-slate-400 px-2">{{ lo.name }}</th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody>
+          {% for student in students %}
+          {% set los = student.learning_objectives %}
+          {% set mastered = los|selectattr('top_score', 'equalto', 'M')|selectattr('second_score', 'equalto', 'M')|list|length %}
+          <tr class="border-b border-slate-100 dark:border-slate-700">
+            <td class="py-3 text-slate-900 dark:text-white font-medium">{{ student.name }}</td>
+            <td class="py-3 text-center">{{ homework_percentage_badge(mastered, los|length) }}</td>
+            {% for lo in learning_objectives %}
+            {% set student_lo = student.learning_objectives|selectattr('name', 'equalto', lo.name)|first %}
+            {% set grade = student_lo.top_score if student_lo else None %}
+            <td class="text-center py-3 px-2">
+              {% if grade %}
+              <span class="mastery-badge mastery-{{ grade|lower }} inline-block px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ grade }}</span>
+              {% else %}
+              <span class="text-slate-300 dark:text-slate-600">—</span>
+              {% endif %}
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<style>
+.mastery-m { background: #dcfce7; color: #15803d; border-color: #86efac; }
+.mastery-r { background: #fef9c3; color: #a16207; border-color: #fde047; }
+.mastery-rq { background: #ffedd5; color: #c2410c; border-color: #fdba74; }
+.mastery-p { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
+.mastery-x { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
+.mastery-a { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+@media print {
+  .print\:hidden, nav, .print\:shadow-none { box-shadow: none !important; }
+  body { background: white; }
+}
+</style>
+
+<script>
+function showReport(type) {
+  document.getElementById('homeworkReport').classList.toggle('hidden', type !== 'homework');
+  document.getElementById('examReport').classList.toggle('hidden', type !== 'exam');
+  document.getElementById('btnHomework').className = type === 'homework'
+    ? 'flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-blue-600 text-white transition-colors'
+    : 'flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+  document.getElementById('btnExam').className = type === 'exam'
+    ? 'flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-blue-600 text-white transition-colors'
+    : 'flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+}
+</script>
+{% endblock %}
