@@ -1,203 +1,179 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Fall 2025 - Section 1 Class 1 - Project Clarity{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/class_detail.css') }}">
-</head>
-<body>
-    <header>
-        <div class="logo">
-            <img src="{{ url_for('static', filename='project_clarity.png') }}" alt="Project Clarity Logo" class="logo-img">
-            <h1>Project Clarity</h1>
-            <div class="header-icons">
-                <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                </svg>
-                <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path>
-                </svg>
-                <img src="{{ url_for('static', filename='profile.png') }}" alt="Profile" class="profile-img">
-            </div>
+{% extends "app_base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Dashboard</h1>
+      <p class="text-slate-500 dark:text-slate-400 mt-1">{{ class_name }}</p>
+    </div>
+  </div>
+
+  <!-- Stats -->
+  {% set total_students = students|length %}
+  {% set total_los = learning_objectives|length %}
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <div class="bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Active Students</p>
+          <p class="text-3xl font-semibold text-slate-900 dark:text-white">{{ total_students }}</p>
         </div>
-    </header>
-
-    <main>
-        <a href="{{ url_for('main.instructor_dashboard') }}" class="back-link">< Back</a>
-        
-        <h1 class="page-title">{{ class_name }}</h1>
-
-        <div class="action-buttons">
-            <a href="{{ url_for('main.create_learning_objective', class_id=class_id) }}" class="btn">Create New LO</a>
-            <a href="{{ url_for('main.update_grade', class_id=class_id) }}" class="btn">Update Grade</a>
+        <div class="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
         </div>
-
-        <div class="view-toggle">
-            <div class="radio-holder">
-            <label class="radio-group">
-                <input type="radio" name="view" value="students" checked onchange="switchView('students')">
-                <span>By Students</span>
-            </label>
-            <label class="radio-group">
-                <input type="radio" name="view" value="objectives" onchange="switchView('objectives')">
-                <span>By Learning Objectives</span>
-            </label>
-            </div>
-            <div class="search-box">
-                <svg class="search-icon" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
-                </svg>
-                <input type="text" id="searchInput" placeholder="Search for Student" oninput="handleSearch()">
-            </div>
+      </div>
+    </div>
+    <div class="bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Learning Objectives</p>
+          <p class="text-3xl font-semibold text-slate-900 dark:text-white">{{ total_los }}</p>
         </div>
-
-        <!-- Students View -->
-        <div id="studentsView">
-            <div class="content-header">
-                <h2 class="content-title">Students</h2>
-                <div class="expand-controls">
-                    <button onclick="expandAllStudents()">Expand All</button>
-                    <button onclick="collapseAllStudents()">Collapse All</button>
-                </div>
-            </div>
-
-            <div class="student-list">
-                {% for student in students %}
-                <div class="student-item">
-                    <div class="student-header" onclick="toggleStudent(this)">
-                        <span>{{ student.name }}</span>
-                        <div class="chevron"></div>
-                    </div>
-                    <div class="learning-objectives-content">
-                        {% for lo in student.learning_objectives %}
-                        <div class="lo-row">
-                            <div class="lo-name">{{ lo.name }}</div>
-                            <div class="lo-score">Top Highest: {{ lo.top_score }}</div>
-                            <div class="lo-score">Second Highest: {{ lo.second_score }}</div>
-                        </div>
-                        {% endfor %}
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
+        <div class="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"></path></svg>
         </div>
+      </div>
+    </div>
+  </div>
 
-        <!-- Learning Objectives View -->
-        <div id="objectivesView" class="hidden">
-            <div class="content-header">
-                <h2 class="content-title">Learning Objectives</h2>
-                <div class="expand-controls">
-                    <button onclick="expandAllObjectives()">Expand All</button>
-                    <button onclick="collapseAllObjectives()">Collapse All</button>
-                </div>
-            </div>
-
-            <div class="lo-list">
-                {% for lo in learning_objectives %}
-                <div class="lo-item" data-lo-name="{{ lo.name }}">
-                    <div class="lo-header" onclick="toggleObjective(this)">
-                        <span>{{ lo.name }}</span>
-                        <div class="chevron"></div>
-                    </div>
-                    <div class="lo-content">
-                        <!-- Students with 2 M -->
-                        <div class="mastery-group" data-mastery="2">
-                            <div class="mastery-header">
-                                <span>Students with 2 M</span>
-                                <span class="mastery-count">{{ lo.two_m_count }}/{{ lo.total_students }}</span>
-                            </div>
-                            <div class="student-rows-container">
-                                {% for student in lo.students_with_2m %}
-                                <div class="student-row">
-                                    <div class="student-name">{{ student.name }}</div>
-                                    <div class="score-badge">Top Highest: {{ student.top_score }}</div>
-                                    <div class="score-badge">Second Highest: {{ student.second_score }}</div>
-                                </div>
-                                {% endfor %}
-                            </div>
-                        </div>
-
-                        <!-- Students with 1 M -->
-                        <div class="mastery-group" data-mastery="1">
-                            <div class="mastery-header">
-                                <span>Students with 1 M</span>
-                                <span class="mastery-count">{{ lo.one_m_count }}/{{ lo.total_students }}</span>
-                            </div>
-                            <div class="student-rows-container">
-                                {% for student in lo.students_with_1m %}
-                                <div class="student-row">
-                                    <div class="student-name">{{ student.name }}</div>
-                                    <div class="score-badge">Top Highest: {{ student.top_score }}</div>
-                                    <div class="score-badge">Second Highest: {{ student.second_score }}</div>
-                                </div>
-                                {% endfor %}
-                            </div>
-                        </div>
-
-                        <!-- Students with 0 M -->
-                        <div class="mastery-group" data-mastery="0">
-                            <div class="mastery-header">
-                                <span>Students with 0 M</span>
-                                <span class="mastery-count">{{ lo.zero_m_count }}/{{ lo.total_students }}</span>
-                            </div>
-                            <div class="student-rows-container">
-                                {% for student in lo.students_with_0m %}
-                                <div class="student-row">
-                                    <div class="student-name">{{ student.name }}</div>
-                                    <div class="score-badge">Top Highest: {{ student.top_score }}</div>
-                                    <div class="score-badge">Second Highest: {{ student.second_score }}</div>
-                                </div>
-                                {% endfor %}
-                            </div>
-                        </div>
-
-                        <!-- Add Student Form -->
-                        <div class="add-student-form">
-                            <h4>Add New Student to {{ lo.name }}</h4>
-                            <div class="form-grid">
-                                <div class="form-group">
-                                    <label>Student Name</label>
-                                    <select class="student-name-select" onchange="handleStudentSelect(this)">
-                                        <option value="">Select a student</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>Top Highest</label>
-                                    <select class="top-score-input">
-                                        M', 'R', 'RQ', 'P', 'X', 'A'
-                                        <option value="">Select</option>
-                                        <option value="M">M</option>
-                                        <option value="R">R</option>
-                                        <option value="X">RQ</option>
-                                        <option value="X">P</option>
-                                        <option value="X">X</option>
-                                        <option value="X">A</option>
-                                    </select>
-                                </div>
-                                <div class="form-group">
-                                    <label>Second Highest</label>
-                                    <select class="second-score-input">
-                                        <option value="">Select</option>
-                                        <option value="M">M</option>
-                                        <option value="R">R</option>
-                                        <option value="X">RQ</option>
-                                        <option value="X">P</option>
-                                        <option value="X">X</option>
-                                        <option value="X">A</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <button type="button" class="btn-add-student" onclick="addStudentToLO(this)">Add Student</button>
-                        </div>
-                    </div>
-                </div>
-                {% endfor %}
-            </div>
+  <!-- View Toggle & Search -->
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex gap-2">
+          <button type="button" onclick="switchView('students')" id="btnStudents" class="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors">By Students</button>
+          <button type="button" onclick="switchView('objectives')" id="btnObjectives" class="px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">By Learning Objectives</button>
         </div>
-    </main>
+        <div class="flex gap-2">
+          <a href="{{ url_for('main.update_grade', class_id=class_id) }}" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium">Upload Grades</a>
+          <a href="{{ url_for('main.create_learning_objective', class_id=class_id) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">Manage LOs</a>
+        </div>
+      </div>
+      <div class="relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+        <input type="text" id="searchInput" placeholder="Search..." oninput="handleSearch()" class="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-900 dark:text-white dark:placeholder-slate-400">
+      </div>
+    </div>
 
-    <script src="{{ url_for('static', filename='js/class_detail.js') }}"></script>
-</body>
-</html>
+    <!-- Students View -->
+    <div id="studentsView" class="divide-y divide-slate-50 dark:divide-slate-700">
+      {% for student in students %}
+      <div class="student-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-name="{{ student.name|lower }}">
+        <div class="flex items-center justify-between cursor-pointer" onclick="toggleStudent(this)">
+          <span class="font-medium text-slate-900 dark:text-white">{{ student.name }}</span>
+          <svg class="w-5 h-5 text-slate-400 chevron transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+        </div>
+        <div class="learning-objectives-content mt-4 hidden">
+          {% for lo in student.learning_objectives %}
+          <div class="grid grid-cols-3 gap-4 py-2 text-sm">
+            <div class="text-slate-700 dark:text-slate-300">{{ lo.name }}</div>
+            <div class="text-slate-600 dark:text-slate-400">Top: {{ lo.top_score }}</div>
+            <div class="text-slate-600 dark:text-slate-400">Second: {{ lo.second_score }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <!-- Learning Objectives View -->
+    <div id="objectivesView" class="hidden divide-y divide-slate-50 dark:divide-slate-700">
+      {% for lo in learning_objectives %}
+      <div class="lo-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-lo-name="{{ lo.name|lower }}">
+        <div class="flex items-center justify-between cursor-pointer" onclick="toggleObjective(this)">
+          <span class="font-medium text-slate-900 dark:text-white">{{ lo.name }}</span>
+          <svg class="w-5 h-5 text-slate-400 chevron transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+        </div>
+        <div class="lo-content mt-4 hidden">
+          <div class="space-y-4">
+            <div>
+              <div class="flex justify-between text-sm mb-2">
+                <span class="text-slate-600 dark:text-slate-400">Students with 2 M</span>
+                <span class="font-medium text-slate-900 dark:text-white">{{ lo.two_m_count }}/{{ lo.total_students }}</span>
+              </div>
+              {% for s in lo.students_with_2m %}
+              <div class="grid grid-cols-3 gap-4 py-1 text-sm">
+                <span class="text-slate-700 dark:text-slate-300">{{ s.name }}</span>
+                <span>Top: {{ s.top_score }}</span>
+                <span>Second: {{ s.second_score }}</span>
+              </div>
+              {% endfor %}
+            </div>
+            <div>
+              <div class="flex justify-between text-sm mb-2">
+                <span class="text-slate-600 dark:text-slate-400">Students with 1 M</span>
+                <span class="font-medium text-slate-900 dark:text-white">{{ lo.one_m_count }}/{{ lo.total_students }}</span>
+              </div>
+              {% for s in lo.students_with_1m %}
+              <div class="grid grid-cols-3 gap-4 py-1 text-sm">
+                <span class="text-slate-700 dark:text-slate-300">{{ s.name }}</span>
+                <span>Top: {{ s.top_score }}</span>
+                <span>Second: {{ s.second_score }}</span>
+              </div>
+              {% endfor %}
+            </div>
+            <div>
+              <div class="flex justify-between text-sm mb-2">
+                <span class="text-slate-600 dark:text-slate-400">Students with 0 M</span>
+                <span class="font-medium text-slate-900 dark:text-white">{{ lo.zero_m_count }}/{{ lo.total_students }}</span>
+              </div>
+              {% for s in lo.students_with_0m %}
+              <div class="grid grid-cols-3 gap-4 py-1 text-sm">
+                <span class="text-slate-700 dark:text-slate-300">{{ s.name }}</span>
+                <span>Top: {{ s.top_score }}</span>
+                <span>Second: {{ s.second_score }}</span>
+              </div>
+              {% endfor %}
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<script>
+function switchView(view) {
+  const studentsView = document.getElementById('studentsView');
+  const objectivesView = document.getElementById('objectivesView');
+  const btnStudents = document.getElementById('btnStudents');
+  const btnObjectives = document.getElementById('btnObjectives');
+  if (view === 'students') {
+    studentsView.classList.remove('hidden');
+    objectivesView.classList.add('hidden');
+    btnStudents.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors';
+    btnObjectives.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+  } else {
+    studentsView.classList.add('hidden');
+    objectivesView.classList.remove('hidden');
+    btnObjectives.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors';
+    btnStudents.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+  }
+}
+function toggleStudent(el) {
+  const content = el.nextElementSibling;
+  const chevron = el.querySelector('.chevron');
+  content.classList.toggle('hidden');
+  chevron.classList.toggle('rotate-180');
+}
+function toggleObjective(el) {
+  const content = el.nextElementSibling;
+  const chevron = el.querySelector('.chevron');
+  content.classList.toggle('hidden');
+  chevron.classList.toggle('rotate-180');
+}
+function handleSearch() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  document.querySelectorAll('.student-item').forEach(item => {
+    const name = item.dataset.name || '';
+    item.style.display = (!q || name.includes(q)) ? '' : 'none';
+  });
+  document.querySelectorAll('.lo-item').forEach(item => {
+    const name = item.dataset.loName || '';
+    item.style.display = (!q || name.includes(q)) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}

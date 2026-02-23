@@ -1,58 +1,42 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Update Grades - Project Clarity</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/upload.css') }}">
-</head>
-<body>
-    <header>
-        <div class="logo">
-            <img src="{{ url_for('static', filename='project_clarity.png') }}" alt="Project Clarity Logo" class="logo-img">
-            <h1>Project Clarity</h1>
-            <div class="header-icons">
-                <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
-                </svg>
-                <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path>
-                </svg>
-                <img src="{{ url_for('static', filename='profile.png') }}" alt="Profile" class="profile-img">
-            </div>
+{% extends "app_base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Update Grades</h1>
+      <p class="text-slate-500 dark:text-slate-400 mt-1">{{ class_name }} · Import grades from a file</p>
+    </div>
+    <a href="{{ url_for('main.class_detail', class_id=class_id) }}" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors text-sm font-medium text-slate-900 dark:text-white">← Back</a>
+  </div>
+
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-12">
+    <div class="max-w-xl mx-auto">
+      <div class="text-center mb-8">
+        <div class="w-16 h-16 bg-blue-50 dark:bg-blue-900 rounded-full flex items-center justify-center mx-auto mb-4">
+          <svg class="w-8 h-8 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
         </div>
-    </header>
+        <h2 class="font-semibold text-slate-900 dark:text-white mb-2">Upload Grade File</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400">CSV or Excel files accepted</p>
+      </div>
 
-    <main>
-        <a href="{{ url_for('main.class_detail', class_id=class_id) }}" class="back-link">< Back</a>
-        
-        <h1 class="page-title">{{ class_name }} - Update Grades</h1>
+      <form action="{{ url_for('main.upload_grades', class_id=class_id) }}" method="post" enctype="multipart/form-data">
+        <label class="block">
+          <div class="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-12 text-center hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all cursor-pointer">
+            <svg class="w-12 h-12 text-slate-400 dark:text-slate-500 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>
+            <p class="font-medium text-slate-900 dark:text-white mb-1">Click to upload or drag and drop</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400">CSV, XLS, or XLSX up to 10MB</p>
+            <input type="file" name="file" accept=".csv,.xlsx,.xls" required class="hidden" id="fileInput" onchange="document.getElementById('fileName').textContent = this.files[0]?.name || 'No file chosen'">
+          </div>
+        </label>
+        <p id="fileName" class="text-sm text-slate-500 dark:text-slate-400 mt-2 text-center">No file chosen</p>
 
-        <form action="{{ url_for('main.upload_grades', class_id=class_id) }}" method="post" enctype="multipart/form-data">
-            <div class="upload-container">
-                <label for="file-upload" class="file-upload-label">
-                    <svg class="upload-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path>
-                    </svg>
-                    <span class="browse-text">Browse</span>
-                    <input type="file" id="file-upload" name="file" accept=".csv,.xlsx,.xls" required>
-                </label>
-                <span id="file-name" class="file-name">No file chosen</span>
-            </div>
-
-            <p class="file-info">Only accepts .csv or .excel</p>
-
-            <button type="submit" class="btn-upload">Upload</button>
-        </form>
-    </main>
-
-    <script>
-        // Display selected file name
-        document.getElementById('file-upload').addEventListener('change', function(e) {
-            const fileName = e.target.files[0]?.name || 'No file chosen';
-            document.getElementById('file-name').textContent = fileName;
-        });
-    </script>
-</body>
-</html>
+        <button type="submit" class="w-full mt-6 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center justify-center gap-2">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+          Upload
+        </button>
+      </form>
+    </div>
+  </div>
+</div>
+{% endblock %}

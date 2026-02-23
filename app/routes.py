@@ -140,6 +140,10 @@ def home():
 def login_page():
     return render_template("login.html")
 
+@main_bp.route("/signup")
+def signup_page():
+    return render_template("signup.html")
+
 @main_bp.route("/logout")
 def logout():
     try:
@@ -163,7 +167,7 @@ def student_dashboard():
 def instructor_dashboard():
     if 'user_id' not in session:
         return redirect('/login')
-    return render_template("instructor_FrontEnd.html", classes=classes)
+    return render_template("instructor_select_class.html", classes=classes)
 
 # ============================================================================
 # CLASS ROUTES
@@ -181,6 +185,38 @@ def class_detail(class_id):
                          class_name=class_data['name'],
                          students=students,
                          learning_objectives=learning_objectives)
+
+
+@main_bp.route("/class/<class_id>/students")
+def class_students(class_id):
+    if class_id not in classes:
+        return redirect(url_for('main.instructor_dashboard'))
+    class_data = classes[class_id]
+    students = class_data['students']
+    return render_template('class_students.html',
+                         class_id=class_id,
+                         class_name=class_data['name'],
+                         students=students)
+
+
+@main_bp.route("/class/<class_id>/objectives")
+def class_objectives(class_id):
+    if class_id not in classes:
+        return redirect(url_for('main.instructor_dashboard'))
+    class_data = classes[class_id]
+    students = class_data['students']
+    learning_objectives = organize_by_learning_objectives(students)
+    return render_template('class_objectives.html',
+                         class_id=class_id,
+                         class_name=class_data['name'],
+                         learning_objectives=learning_objectives)
+
+
+@main_bp.route("/support")
+def support():
+    if 'user_id' not in session:
+        return redirect('/login')
+    return render_template('support.html')
 
 @main_bp.route("/select_class", methods=['POST'])
 def select_class():

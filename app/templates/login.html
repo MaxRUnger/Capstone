@@ -1,75 +1,108 @@
-{% extends "base.html" %}
+{% extends "auth_base.html" %}
 
 {% block content %}
-<link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+<div class="flex-1 flex items-center justify-center p-8">
+  <div class="w-full max-w-md">
+    <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-8">
+      <div class="text-center mb-8">
+        <h2 class="text-2xl font-semibold text-slate-900 dark:text-white mb-2">Sign In</h2>
+        <p class="text-slate-500 dark:text-slate-400">Select your role and sign in to continue</p>
+      </div>
 
-<div class="login-container">
-    <h2>Welcome Back</h2>
-    <p>Select your role and sign in</p>
+      <!-- Role selection -->
+      <div class="flex gap-2 mb-6">
+        <button type="button" id="student-btn" onclick="selectRole('student')" class="flex-1 py-2 px-4 rounded-lg font-medium transition-colors border-2 role-btn border-slate-200 dark:border-slate-600" data-role="student">Student</button>
+        <button type="button" id="instructor-btn" onclick="selectRole('instructor')" class="flex-1 py-2 px-4 rounded-lg font-medium transition-colors border-2 role-btn role-active border-blue-600 bg-blue-50 dark:bg-blue-900/20" data-role="instructor">Instructor</button>
+      </div>
 
-    <div class="role-selection">
-        <button class="btn btn-role" id="student-btn" onclick="selectRole('student')">Student</button>
-        <button class="btn btn-role" id="instructor-btn" onclick="selectRole('instructor')">Instructor</button>
+      <form id="loginForm" onsubmit="submitLogin(event)" class="space-y-6">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Email Address</label>
+          <input id="email" name="email" type="email" placeholder="your.email@university.edu" required
+            class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white placeholder:text-slate-400" />
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Password</label>
+          <input id="password" name="password" type="password" placeholder="••••••••" required
+            class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white" />
+        </div>
+        <div class="flex items-center">
+          <input type="checkbox" id="keepLoggedIn" class="w-4 h-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+          <label for="keepLoggedIn" class="ml-2 text-sm text-slate-600 dark:text-slate-400">Keep me logged in</label>
+        </div>
+        <input type="hidden" id="role" name="role" value="instructor" />
+        <button type="submit" class="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center justify-center gap-2">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14m-5 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h7a3 3 0 013 3v1" /></svg>
+          Sign In
+        </button>
+      </form>
+
+      <div class="mt-6 text-center">
+        <a href="/signup" class="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium">Don't have an account? Sign up</a>
+      </div>
     </div>
+  </div>
+</div>
 
-    <form id="loginForm" style="display:none;" onsubmit="submitLogin(event)">
-        <div class="form-group">
-            <label for="email">Email Address</label>
-            <input id="email" name="email" type="email" class="form-control" placeholder="you@example.com" required>
-        </div>
-    
-        <div class="form-group">
-            <label for="password">Password</label>
-            <input id="password" name="password" type="password" class="form-control" placeholder="••••••••" required>
-        </div>
-
-        <input type="hidden" id="role" name="role">
-    
-        <button type="submit" class="btn btn-primary w-100 mt-3">Sign In</button>
-    </form>
-
-    <p style="text-align: center; margin-top: 1.5rem;">
-        Don't have an account? <a href="/" style="font-weight: 500;">Sign up</a>
-    </p>
+<!-- Notification modal for errors -->
+<div id="notificationModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden p-8 text-center">
+    <div class="mb-4">
+      <svg class="w-16 h-16 text-red-500 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+    </div>
+    <h2 id="notificationTitle" class="text-2xl font-semibold text-slate-900 dark:text-white mb-3"></h2>
+    <p id="notificationMessage" class="text-slate-600 dark:text-slate-400 text-lg mb-6"></p>
+    <button onclick="closeNotification()" class="px-6 py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors">Got it</button>
+  </div>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
 function selectRole(role) {
-    const buttons = document.querySelectorAll('.btn-role');
-    buttons.forEach(btn => btn.classList.remove('active-role'));
+  document.getElementById('role').value = role;
+  document.querySelectorAll('.role-btn').forEach(btn => {
+    btn.classList.remove('role-active', 'border-blue-600', 'bg-blue-50', 'dark:bg-blue-900/20');
+    btn.classList.add('border-slate-200', 'dark:border-slate-600');
+  });
+  const btn = document.getElementById(role + '-btn');
+  btn?.classList.add('role-active', 'border-blue-600', 'bg-blue-50', 'dark:bg-blue-900/20');
+  btn?.classList.remove('border-slate-200', 'dark:border-slate-600');
+}
 
-    const selectedBtn = document.getElementById(`${role}-btn`);
-    selectedBtn.classList.add('active-role');
+function showNotification(title, message) {
+  document.getElementById('notificationTitle').textContent = title;
+  document.getElementById('notificationMessage').textContent = message;
+  document.getElementById('notificationModal').classList.remove('hidden');
+  document.getElementById('notificationModal').classList.add('flex');
+}
 
-    document.getElementById('role').value = role;
-    document.getElementById('loginForm').style.display = 'block';
+function closeNotification() {
+  document.getElementById('notificationModal').classList.add('hidden');
+  document.getElementById('notificationModal').classList.remove('flex');
 }
 
 function submitLogin(event) {
-    event.preventDefault();
-
-    const data = {
-        email: document.getElementById('email').value,
-        password: document.getElementById('password').value,
-        role: document.getElementById('role').value
-    };
-
-    fetch('/api/login', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify(data)
-    })
-    .then(r => r.json())
-    .then(response => {
-        if (response.success) {
-            window.location.href = response.redirect;
-        } else {
-            alert(response.message || 'Login failed. Try again.');
-        }
-    })
-    .catch(() => alert('Error during login.'));
+  event.preventDefault();
+  const data = {
+    email: document.getElementById('email').value,
+    password: document.getElementById('password').value,
+    role: document.getElementById('role').value
+  };
+  fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data)
+  })
+  .then(r => r.json())
+  .then(response => {
+    if (response.success) {
+      window.location.href = response.redirect;
+    } else {
+      showNotification('Login Failed', response.message || 'Invalid credentials. Please try again.');
+    }
+  })
+  .catch(() => showNotification('Error', 'Something went wrong. Please try again.'));
 }
 </script>
 {% endblock %}

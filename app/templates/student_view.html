@@ -1,26 +1,31 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>{% block title %}Project Clarity{% endblock %}</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
-</head>
-<body>
-    <header>
-        <div class="logo">
-            <img src="{{ url_for('static', filename='project_clarity.png') }}" alt="Project Clarity Logo" class="logo-img">
-            <h1>Project Clarity</h1>
+{% extends "app_base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+  <div>
+    <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Student Dashboard</h1>
+    <p class="text-slate-500 dark:text-slate-400 mt-1">View your mastery progress</p>
+  </div>
+
+  <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+    <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Your Progress</p>
+          <p class="text-2xl font-semibold text-slate-900 dark:text-white">Coming Soon</p>
         </div>
-    </header>
-    
-    <main>
-        <div class="student_container">
-            <h2>Student View Page</h2>
+        <div class="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"></path></svg>
         </div>
-    </main>
-    
-    <script src="{{ url_for('static', filename='js/main.js') }}"></script>
-    {% block scripts %}{% endblock %}
-</body>
-</html>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-8 text-center">
+    <div class="max-w-md mx-auto">
+      <p class="text-slate-600 dark:text-slate-400">Your class enrollment and mastery data will appear here once your instructor has set up your class.</p>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mt-4">Contact your instructor if you need access to a course.</p>
+    </div>
+  </div>
+</div>
+{% endblock %}

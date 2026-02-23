@@ -1,0 +1,58 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Students</h1>
+      <p class="text-slate-500 dark:text-slate-400 mt-1">{{ class_name }} · View individual student progress</p>
+    </div>
+    <a href="{{ url_for('main.class_detail', class_id=class_id) }}" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors text-sm font-medium text-slate-900 dark:text-white">← Back to Dashboard</a>
+  </div>
+
+  <div class="grid grid-cols-3 gap-4">
+    <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6">
+      <p class="text-sm text-slate-600 dark:text-slate-400 mb-2">Total Students</p>
+      <p class="text-2xl font-semibold text-slate-900 dark:text-white">{{ students|length }}</p>
+    </div>
+  </div>
+
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700">
+      <div class="relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+        <input type="text" id="searchInput" placeholder="Search students by name..." oninput="handleSearch()" class="w-full pl-10 pr-4 py-2.5 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-900 dark:text-white dark:placeholder-slate-400">
+      </div>
+    </div>
+    <div class="divide-y divide-slate-50 dark:divide-slate-700">
+      {% for student in students %}
+      <div class="student-row p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-name="{{ student.name|lower }}">
+        <div class="flex items-center justify-between">
+          <div class="flex-1">
+            <h3 class="font-semibold text-slate-900 dark:text-white mb-2">{{ student.name }}</h3>
+            <div class="flex items-center gap-4 text-sm text-slate-600 dark:text-slate-400">
+              {% set los = student.learning_objectives %}
+              {% set mastered = los|selectattr('top_score', 'equalto', 'M')|selectattr('second_score', 'equalto', 'M')|list|length %}
+              <span>{{ mastered }} / {{ los|length }} objectives mastered</span>
+            </div>
+          </div>
+          <svg class="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+        </div>
+      </div>
+      {% else %}
+      <div class="p-12 text-center text-slate-500 dark:text-slate-400">No students in this class</div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<script>
+function handleSearch() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  document.querySelectorAll('.student-row').forEach(row => {
+    const name = row.dataset.name || '';
+    row.style.display = (!q || name.includes(q)) ? '' : 'none';
+  });
+}
+</script>
+{% endblock %}
