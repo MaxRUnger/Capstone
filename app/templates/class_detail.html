@@ -14,7 +14,6 @@
     </button>
   </div>
 
-  <!-- Stats -->
   {% set total_students = students|length %}
   {% set total_los = learning_objectives|length %}
   <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -47,13 +46,12 @@
           <p class="text-3xl font-semibold text-slate-900 dark:text-white">{{ total_los }}</p>
         </div>
         <div class="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-400">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138 3.42 3.42 0 00-.806-1.946 3.42 3.42 0 010-4.438 3.42 3.42 0 00.806-1.946 3.42 3.42 0 013.138-3.138z"></path></svg>
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138z"></path></svg>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- View Toggle & Search -->
   <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm">
     <div class="p-6 border-b border-slate-100 dark:border-slate-700">
       <div class="flex items-center justify-between mb-4">
@@ -62,8 +60,8 @@
           <button type="button" onclick="switchView('objectives')" id="btnObjectives" class="px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">By Learning Objectives</button>
         </div>
         <div class="flex gap-2">
-          <a href="{{ url_for('main.update_grade', class_id=class_id) }}" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium">Upload Grades</a>
-          <a href="{{ url_for('main.create_learning_objective', class_id=class_id) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">Manage LOs</a>
+          <a href="{{ url_for('main.upload_grades', class_id=class_id) }}" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium">Upload Grades</a>
+          <a href="{{ url_for('main.class_objectives', class_id=class_id) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">Manage LOs</a>
         </div>
       </div>
       <div class="relative">
@@ -72,7 +70,6 @@
       </div>
     </div>
 
-    <!-- Students View -->
     <div id="studentsView" class="divide-y divide-slate-50 dark:divide-slate-700">
       {% for student in students %}
       {% set los = student.learning_objectives %}
@@ -99,7 +96,6 @@
       {% endfor %}
     </div>
 
-    <!-- Learning Objectives View -->
     <div id="objectivesView" class="hidden divide-y divide-slate-50 dark:divide-slate-700">
       {% for lo in learning_objectives %}
       <div class="lo-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-lo-name="{{ lo.name|lower }}">
@@ -156,7 +152,6 @@
   </div>
 </div>
 
-<!-- Overdue Revisions Modal -->
 <div id="overdueRevisionsModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-8">
   <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col">
     <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
@@ -174,7 +169,6 @@
   </div>
 </div>
 
-<!-- Student Management Modal -->
 <div id="studentManagementModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-8">
   <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-4xl w-full max-h-[80vh] overflow-hidden flex flex-col">
     <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
@@ -210,7 +204,6 @@
   </div>
 </div>
 
-<!-- Class Settings Modal -->
 <div id="classSettingsModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onclick="if(event.target===this) this.classList.add('hidden')">
   <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full" onclick="event.stopPropagation()">
     <div class="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">

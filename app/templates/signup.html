@@ -3,119 +3,195 @@
 {% block content %}
 <div class="flex-1 flex items-center justify-center p-8">
   <div class="w-full max-w-md">
-    <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-8">
+    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-sm border border-slate-200 dark:border-slate-700 p-8">
+
+      <!-- Title -->
       <div class="text-center mb-8">
-        <h2 class="text-2xl font-semibold text-slate-900 dark:text-white mb-2">Create Account</h2>
-        <p class="text-slate-500 dark:text-slate-400">Select your role and sign up to get started</p>
+        <h2 class="text-2xl font-bold text-slate-900 dark:text-white mb-1">Create Account</h2>
+        <p class="text-slate-500 dark:text-slate-400 text-sm">Sign up to get started</p>
       </div>
 
-      <!-- Role selection -->
-      <div class="flex gap-2 mb-6">
-        <button type="button" id="student-btn" onclick="selectRole('student')" class="flex-1 py-2 px-4 rounded-lg font-medium transition-colors border-2 role-btn role-active border-blue-600 bg-blue-50 dark:bg-blue-900/20" data-role="student">Student</button>
-        <button type="button" id="instructor-btn" onclick="selectRole('instructor')" class="flex-1 py-2 px-4 rounded-lg font-medium transition-colors border-2 role-btn border-slate-200 dark:border-slate-600" data-role="instructor">Instructor</button>
-      </div>
+      <form onsubmit="submitSignup(event)" class="space-y-5">
 
-      <form id="signupForm" onsubmit="submitSignup(event)" class="space-y-6">
+        <!-- Full Name -->
         <div>
-          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
-          <input id="name" name="name" type="text" placeholder="John Doe" required
-            class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white placeholder:text-slate-400" />
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Full Name</label>
+          <input type="text" id="name" required
+            placeholder="John Doe"
+            class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" />
         </div>
+
+        <!-- Email -->
         <div>
-          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Email Address</label>
-          <input id="email" name="email" type="email" placeholder="your.email@university.edu" required
-            class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white placeholder:text-slate-400" />
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Email Address</label>
+          <input type="email" id="email" required
+            placeholder="your.email@university.edu"
+            class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" />
         </div>
+
+        <!-- Password -->
         <div>
-          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Password</label>
-          <input id="password" name="password" type="password" placeholder="••••••••" minlength="6" required
-            class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white" />
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Password</label>
+          <input type="password" id="password" required
+            placeholder="••••••••"
+            class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" />
         </div>
+
+        <!-- Confirm Password -->
         <div>
-          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Confirm Password</label>
-          <input id="confirmPassword" name="confirmPassword" type="password" placeholder="••••••••" required
-            class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white" />
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Confirm Password</label>
+          <input type="password" id="confirmPassword" required
+            placeholder="••••••••"
+            class="w-full px-4 py-3 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-xl text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all" />
+          <p id="passwordError" class="hidden text-xs text-red-500 mt-1.5">Passwords do not match.</p>
         </div>
-        <input type="hidden" id="role" name="role" value="student" />
-        <button type="submit" class="w-full px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center justify-center gap-2">
-          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" /></svg>
+
+        <!-- Error banner -->
+        <div id="errorBanner" class="hidden flex items-start gap-3 px-4 py-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl">
+          <svg class="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
+            <path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clip-rule="evenodd"/>
+          </svg>
+          <p id="errorText" class="text-sm text-red-700 dark:text-red-400"></p>
+        </div>
+
+        <!-- Create Account button -->
+        <button type="submit" id="submitBtn"
+          class="w-full flex items-center justify-center gap-2 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-sm transition-all shadow-sm shadow-blue-500/20 mt-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"/>
+          </svg>
           Create Account
         </button>
       </form>
 
-      <div class="mt-6 text-center">
-        <a href="/login" class="text-sm text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 font-medium">Already have an account? Sign in</a>
-      </div>
+      <!-- Sign in link -->
+      <p class="text-center text-sm text-slate-500 dark:text-slate-400 mt-6">
+        Already have an account?
+        <a href="/login" class="text-blue-600 dark:text-blue-400 hover:underline font-medium">Sign in</a>
+      </p>
+
     </div>
   </div>
 </div>
 
-<!-- Notification modal for errors -->
-<div id="notificationModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
-  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden p-8 text-center">
-    <div class="mb-4">
-      <svg class="w-16 h-16 text-red-500 mx-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+<!-- Email Confirmation Modal -->
+<div id="confirmModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-sm p-8 text-center animate-in">
+
+    <!-- Animated envelope icon -->
+    <div class="w-20 h-20 bg-blue-50 dark:bg-blue-900/30 rounded-full flex items-center justify-center mx-auto mb-6">
+      <svg class="w-10 h-10 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+      </svg>
     </div>
-    <h2 id="notificationTitle" class="text-2xl font-semibold text-slate-900 dark:text-white mb-3"></h2>
-    <p id="notificationMessage" class="text-slate-600 dark:text-slate-400 text-lg mb-6"></p>
-    <button onclick="closeNotification()" class="px-6 py-3 bg-red-500 hover:bg-red-600 text-white rounded-lg font-medium transition-colors">Got it</button>
+
+    <h3 class="text-xl font-bold text-slate-900 dark:text-white mb-2">Check your email</h3>
+    <p class="text-slate-500 dark:text-slate-400 text-sm mb-1">We sent a confirmation link to</p>
+    <p id="confirmedEmail" class="text-blue-600 dark:text-blue-400 font-semibold text-sm mb-4 break-all"></p>
+    <p class="text-slate-400 dark:text-slate-500 text-xs leading-relaxed mb-7">
+      Click the link in your email to activate your account, then come back here to sign in.
+    </p>
+
+    <!-- Divider -->
+    <div class="border-t border-slate-100 dark:border-slate-700 mb-6"></div>
+
+    <!-- Go to login -->
+    <a href="/login"
+      class="flex items-center justify-center gap-2 w-full py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-sm transition-all">
+      <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 16l-4-4m0 0l4-4m-4 4h14"/>
+      </svg>
+      Go to Sign In
+    </a>
+
+    <p class="text-xs text-slate-400 dark:text-slate-500 mt-4">Didn't receive it? Check your spam folder.</p>
   </div>
 </div>
+
+<style>
+.animate-in {
+  animation: slideUp 0.25s ease-out;
+}
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px) scale(0.97); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
+</style>
+
 {% endblock %}
 
 {% block scripts %}
 <script>
-function selectRole(role) {
-  document.getElementById('role').value = role;
-  document.querySelectorAll('.role-btn').forEach(btn => {
-    btn.classList.remove('role-active', 'border-blue-600', 'bg-blue-50', 'dark:bg-blue-900/20');
-    btn.classList.add('border-slate-200', 'dark:border-slate-600');
-  });
-  const btn = document.getElementById(role + '-btn');
-  btn?.classList.add('role-active', 'border-blue-600', 'bg-blue-50', 'dark:bg-blue-900/20');
-  btn?.classList.remove('border-slate-200', 'dark:border-slate-600');
+function showError(msg) {
+  document.getElementById('errorText').textContent = msg;
+  document.getElementById('errorBanner').classList.remove('hidden');
 }
 
-function showNotification(title, message) {
-  document.getElementById('notificationTitle').textContent = title;
-  document.getElementById('notificationMessage').textContent = message;
-  document.getElementById('notificationModal').classList.remove('hidden');
-  document.getElementById('notificationModal').classList.add('flex');
+function hideError() {
+  document.getElementById('errorBanner').classList.add('hidden');
 }
 
-function closeNotification() {
-  document.getElementById('notificationModal').classList.add('hidden');
-  document.getElementById('notificationModal').classList.remove('flex');
+function showConfirmModal(email) {
+  document.getElementById('confirmedEmail').textContent = email;
+  document.getElementById('confirmModal').classList.remove('hidden');
 }
 
 function submitSignup(event) {
   event.preventDefault();
+  hideError();
+
   const password = document.getElementById('password').value;
-  const confirmPassword = document.getElementById('confirmPassword').value;
-  if (password !== confirmPassword) {
-    showNotification('Password Mismatch', 'Passwords do not match. Please try again.');
+  const confirm = document.getElementById('confirmPassword').value;
+  const errorEl = document.getElementById('passwordError');
+  const email = document.getElementById('email').value;
+
+  if (password !== confirm) {
+    errorEl.classList.remove('hidden');
+    document.getElementById('confirmPassword').classList.add('ring-2', 'ring-red-400');
     return;
   }
-  const data = {
-    name: document.getElementById('name').value,
-    email: document.getElementById('email').value,
-    password: password,
-    role: document.getElementById('role').value
-  };
+  errorEl.classList.add('hidden');
+  document.getElementById('confirmPassword').classList.remove('ring-2', 'ring-red-400');
+
+  const btn = document.getElementById('submitBtn');
+  const orig = btn.innerHTML;
+  btn.disabled = true;
+  btn.innerHTML = `<svg class="animate-spin w-4 h-4" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path></svg> Creating account...`;
+
   fetch('/api/signup', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
+    body: JSON.stringify({
+      name: document.getElementById('name').value,
+      email: email,
+      password: password
+    })
   })
   .then(r => r.json())
-  .then(response => {
-    if (response.success) {
-      window.location.href = response.redirect;
+  .then(res => {
+    if (res.success) {
+      // Account created + session set — show confirmation modal
+      showConfirmModal(email);
+      btn.innerHTML = `<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg> Account created!`;
     } else {
-      showNotification('Sign-up Failed', response.message || 'Something went wrong. Please try again.');
+      btn.disabled = false;
+      btn.innerHTML = orig;
+      const msg = res.message || '';
+      // Rate limit means Supabase still created the account but hit email limit — show modal anyway
+      if (msg.toLowerCase().includes('rate limit') || msg.toLowerCase().includes('email rate')) {
+        showConfirmModal(email);
+      } else if (msg.toLowerCase().includes('already registered') || msg.toLowerCase().includes('already been registered')) {
+        showError('An account with this email already exists. Try signing in instead.');
+      } else {
+        showError(msg || 'Signup failed. Please try again.');
+      }
     }
   })
-  .catch(() => showNotification('Error', 'Something went wrong. Please try again.'));
+  .catch(() => {
+    btn.disabled = false;
+    btn.innerHTML = orig;
+    showError('Connection error. Please check your internet and try again.');
+  });
 }
 </script>
 {% endblock %}

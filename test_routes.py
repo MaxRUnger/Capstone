@@ -13,7 +13,6 @@ import pytest
 from flask import Flask
 from app.routes import main_bp, classes, organize_by_learning_objectives
 
-
 # ============================================================================
 # PYTEST FIXTURES
 # ============================================================================

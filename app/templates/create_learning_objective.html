@@ -20,7 +20,7 @@
         <p class="text-sm text-slate-500 dark:text-slate-400">CSV or Excel files with objective data</p>
       </div>
 
-      <form action="{{ url_for('main.upload_learning_objective', class_id=class_id) }}" method="post" enctype="multipart/form-data">
+      <form action="{{ url_for('main.create_learning_objective', class_id=class_id) }}" method="post" enctype="multipart/form-data">
         <label class="block">
           <div class="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-12 text-center hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all cursor-pointer">
             <svg class="w-12 h-12 text-slate-400 dark:text-slate-500 mx-auto mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path></svg>

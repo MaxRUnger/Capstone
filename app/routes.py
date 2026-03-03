@@ -1,141 +1,70 @@
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session
 from app.authentication import supabase
+from app.models import Course, Grade, Student, Profile, Homework
 
-main_bp = Blueprint('main', __name__)
-
-# ============================================================================
-# SAMPLE DATA - Replace this with database queries later
-# ============================================================================
-
-classes = {
-    '1': {
-        'id': '1',
-        'name': 'Fall 2025 - Math 211 - Section 2',
-        'semester': 'Fall 2025',
-        'students': [
-            {
-                'id': '1',
-                'name': 'Adams, John',
-                'learning_objectives': [
-                    {'name': 'Learning Objective 1', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 2', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 3', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 4', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 5', 'top_score': 'M', 'second_score': 'M'},
-                ]
-            },
-            {
-                'id': '2',
-                'name': 'Basic, Anna',
-                'learning_objectives': [
-                    {'name': 'Learning Objective 1', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 2', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 3', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 4', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 5', 'top_score': 'M', 'second_score': 'M'},
-                ]
-            },
-            {
-                'id': '3',
-                'name': 'Smith, George W.',
-                'learning_objectives': [
-                    {'name': 'Learning Objective 1', 'top_score': 'M', 'second_score': 'R'},
-                    {'name': 'Learning Objective 2', 'top_score': 'M', 'second_score': 'R'},
-                    {'name': 'Learning Objective 3', 'top_score': 'R', 'second_score': 'X'},
-                    {'name': 'Learning Objective 4', 'top_score': 'R', 'second_score': 'X'},
-                    {'name': 'Learning Objective 5', 'top_score': 'M', 'second_score': 'M'},
-                ]
-            },
-            {
-                'id': '4',
-                'name': 'Tucker, Cameron',
-                'learning_objectives': [
-                    {'name': 'Learning Objective 1', 'top_score': 'R', 'second_score': 'X'},
-                    {'name': 'Learning Objective 2', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 3', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 4', 'top_score': 'M', 'second_score': 'R'},
-                    {'name': 'Learning Objective 5', 'top_score': 'R', 'second_score': 'X'},
-                ]
-            },
-        ]
-    },
-    '2': {
-        'id': '2',
-        'name': 'Fall 2025 - Math 101 - Section 1',
-        'semester': 'Fall 2025',
-        'students': [
-            {
-                'id': '5',
-                'name': 'Johnson, Emily',
-                'learning_objectives': [
-                    {'name': 'Learning Objective 1', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 2', 'top_score': 'M', 'second_score': 'R'},
-                    {'name': 'Learning Objective 3', 'top_score': 'R', 'second_score': 'R'},
-                ]
-            },
-            {
-                'id': '6',
-                'name': 'Williams, Michael',
-                'learning_objectives': [
-                    {'name': 'Learning Objective 1', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 2', 'top_score': 'M', 'second_score': 'M'},
-                    {'name': 'Learning Objective 3', 'top_score': 'M', 'second_score': 'M'},
-                ]
-            },
-        ]
-    }
-}
+main_bp = Blueprint('main', __name__, template_folder='templates')
 
 # ============================================================================
 # HELPER FUNCTIONS
 # ============================================================================
 
-def organize_by_learning_objectives(students):
-    lo_dict = {}
+def organize_by_learning_objectives(students, learning_objectives):
+    """Maps student grades to the relevant Learning Objectives for the UI."""
+    lo_dict = {str(lo['id']): {
+        'id': str(lo['id']),
+        'name': lo['name'],
+        'students_with_2m': [],
+        'students_with_1m': [],
+        'students_with_0m': [],
+        'total_students': len(students)
+    } for lo in learning_objectives}
+
     for student in students:
-        for lo in student['learning_objectives']:
-            lo_name = lo['name']
-            if lo_name not in lo_dict:
-                lo_dict[lo_name] = {
-                    'name': lo_name,
-                    'students_with_2m': [],
-                    'students_with_1m': [],
-                    'students_with_0m': [],
-                    'total_students': len(students)
+        student_grades = student.get('grades', [])
+        for grade in student_grades:
+            lo_id = str(grade['learning_objective_id'])
+            if lo_id in lo_dict:
+                m_count = 0
+                top = grade.get('top_score')
+                sec = grade.get('second_score')
+                
+                if top == 'M': m_count += 1
+                if sec == 'M': m_count += 1
+                
+                student_data = {
+                    'id': student['id'],
+                    'name': student.get('full_name', 'Unknown Student'),
+                    'top_score': top,
+                    'second_score': sec
                 }
-            m_count = 0
-            if lo['top_score'] == 'M':
-                m_count += 1
-            if lo['second_score'] == 'M':
-                m_count += 1
-            student_data = {
-                'name': student['name'],
-                'top_score': lo['top_score'],
-                'second_score': lo['second_score']
-            }
-            if m_count == 2:
-                lo_dict[lo_name]['students_with_2m'].append(student_data)
-            elif m_count == 1:
-                lo_dict[lo_name]['students_with_1m'].append(student_data)
-            else:
-                lo_dict[lo_name]['students_with_0m'].append(student_data)
+
+                if m_count == 2: lo_dict[lo_id]['students_with_2m'].append(student_data)
+                elif m_count == 1: lo_dict[lo_id]['students_with_1m'].append(student_data)
+                else: lo_dict[lo_id]['students_with_0m'].append(student_data)
     
-    learning_objectives = []
-    for lo_name, lo_data in lo_dict.items():
-        lo_data['two_m_count'] = len(lo_data['students_with_2m'])
-        lo_data['one_m_count'] = len(lo_data['students_with_1m'])
-        lo_data['zero_m_count'] = len(lo_data['students_with_0m'])
-        learning_objectives.append(lo_data)
-    return learning_objectives
+    return list(lo_dict.values())
+
+
+def ensure_profile_exists(user_id, full_name=None, role='instructor'):
+    """
+    Upserts a row in the profiles table for the given user_id.
+    Prevents foreign key errors when inserting classes or other records
+    that reference profiles.id.
+    """
+    data = {"id": user_id, "role": role}
+    if full_name:
+        data["full_name"] = full_name
+    try:
+        supabase.table("profiles").upsert(data, on_conflict="id").execute()
+    except Exception:
+        pass  # Silently continue if upsert fails — profile may already exist
+
 
 # ============================================================================
-# PAGE ROUTES
+# AUTHENTICATION ROUTES
 # ============================================================================
 
 @main_bp.route("/")
-def home():
-    return render_template("login.html")
-
 @main_bp.route("/login")
 def login_page():
     return render_template("login.html")
@@ -146,12 +75,64 @@ def signup_page():
 
 @main_bp.route("/logout")
 def logout():
+    session.clear()
+    return redirect(url_for('main.login_page'))
+
+@main_bp.route("/api/login", methods=["POST"])
+def login():
+    data = request.get_json()
     try:
-        supabase.auth.sign_out()
-        session.clear()
-        return redirect('/')
+        result = supabase.auth.sign_in_with_password({
+            "email": data.get("email"), "password": data.get("password")
+        })
+        if result.user:
+            actual_role = result.user.user_metadata.get('role', 'student')
+            session['user_id'] = result.user.id
+            session['role'] = actual_role
+            session['full_name'] = result.user.user_metadata.get('full_name', '')
+            # Ensure profile exists on every login in case it was missed at signup
+            ensure_profile_exists(
+                result.user.id,
+                full_name=result.user.user_metadata.get('full_name'),
+                role=actual_role
+            )
+            return jsonify({"success": True, "redirect": f"/{actual_role}/dashboard"})
+        return jsonify({"success": False, "message": "Invalid credentials"})
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"success": False, "message": str(e)})
+
+
+@main_bp.route("/api/signup", methods=["POST"])
+def signup():
+    data = request.get_json()
+    try:
+        result = supabase.auth.sign_up({
+            "email": data.get("email"),
+            "password": data.get("password"),
+            "options": {
+                "data": {
+                    "full_name": data.get("name"),
+                    "role": "instructor"
+                }
+            }
+        })
+
+        if result.user:
+            session['user_id'] = result.user.id
+            session['role'] = 'instructor'
+            session['full_name'] = data.get("name", "")
+            # Create profile row immediately so foreign keys work right away
+            ensure_profile_exists(
+                result.user.id,
+                full_name=data.get("name"),
+                role='instructor'
+            )
+            return jsonify({"success": True, "redirect": "/instructor/dashboard"})
+        return jsonify({"success": False, "message": "Failed to create account. Please try again."})
+
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)})
+
 
 # ============================================================================
 # DASHBOARD ROUTES
@@ -159,281 +140,296 @@ def logout():
 
 @main_bp.route("/student/dashboard")
 def student_dashboard():
-    if 'user_id' not in session:
-        return redirect('/login')
-    # Mock enrolled student for demo (backend would fetch real enrollment)
-    class_data = classes.get('1', {})
-    sample_student = class_data.get('students', [{}])[0] if class_data.get('students') else None
-    return render_template("student_view.html", student=sample_student, class_name=class_data.get('name') if class_data else None)
+    if 'user_id' not in session: 
+        return redirect(url_for('main.login_page'))
+    
+    data = Student.get_dashboard_data(session['user_id'])
+    
+    if data:
+        cleaned_grades = []
+        for g in data.get('grades', []):
+            cleaned_grades.append({
+                'name': g.get('learning_objectives', {}).get('name', 'Unknown LO'),
+                'top_score': g.get('top_score'),
+                'second_score': g.get('second_score')
+            })
+        data['learning_objectives'] = cleaned_grades
+
+    return render_template("student_view.html", student=data)
 
 @main_bp.route("/instructor/dashboard")
 def instructor_dashboard():
-    if 'user_id' not in session:
-        return redirect('/login')
-    return render_template("instructor_select_class.html", classes=classes)
+    if 'user_id' not in session or session.get('role') != 'instructor':
+        return redirect(url_for('main.login_page'))
+    db_classes = Course.get_all_for_instructor(session['user_id'])
+    return render_template("instructor_select_class.html", classes=db_classes)
 
 # ============================================================================
-# CLASS ROUTES
+# CLASS MANAGEMENT ROUTES
 # ============================================================================
 
 @main_bp.route("/class/<class_id>")
 def class_detail(class_id):
-    if class_id not in classes:
+    if 'user_id' not in session: 
+        return redirect(url_for('main.login_page'))
+    
+    class_data = Course.get_full_class_data(class_id)
+    if not class_data: 
         return redirect(url_for('main.instructor_dashboard'))
-    class_data = classes[class_id]
-    students = class_data['students']
-    learning_objectives = organize_by_learning_objectives(students)
-    return render_template('class_detail.html',
-                         class_id=class_id,
-                         class_name=class_data['name'],
-                         students=students,
-                         learning_objectives=learning_objectives)
 
+    raw_enrollments = class_data.get('enrollments', [])
+    students_for_template = []
+    
+    for enrollment in raw_enrollments:
+        student_profile = enrollment.get('profiles', {})
+        student_profile['learning_objectives'] = student_profile.get('grades', [])
+        if 'name' not in student_profile:
+            student_profile['name'] = student_profile.get('full_name', 'Unnamed Student')
+        students_for_template.append(student_profile)
+
+    summary = organize_by_learning_objectives(students_for_template, class_data.get('learning_objectives', []))
+    
+    return render_template('class_detail.html', 
+                            class_id=class_id, 
+                            class_name=class_data.get('name'), 
+                            students=students_for_template, 
+                            learning_objectives=summary)
 
 @main_bp.route("/class/<class_id>/students")
 def class_students(class_id):
-    if class_id not in classes:
+    if 'user_id' not in session: return redirect(url_for('main.login_page'))
+    class_data = Course.get_full_class_data(class_id)
+    
+    if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
-    class_data = classes[class_id]
-    students = class_data['students']
-    return render_template('class_students.html',
-                         class_id=class_id,
-                         class_name=class_data['name'],
-                         students=students)
 
+    students = []
+    for e in class_data.get('enrollments', []):
+        prof = e.get('profiles', {})
+        prof['learning_objectives'] = prof.get('grades', [])
+        if 'name' not in prof:
+            prof['name'] = prof.get('full_name', 'Unnamed Student')
+        students.append(prof)
+        
+    return render_template("class_students.html", 
+                            class_id=class_id, 
+                            class_name=class_data['name'], 
+                            students=students)
 
 @main_bp.route("/class/<class_id>/objectives")
 def class_objectives(class_id):
-    if class_id not in classes:
+    if 'user_id' not in session: return redirect(url_for('main.login_page'))
+    class_data = Course.get_full_class_data(class_id)
+    
+    if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
-    class_data = classes[class_id]
-    students = class_data['students']
-    learning_objectives = organize_by_learning_objectives(students)
-    return render_template('class_objectives.html',
-                         class_id=class_id,
-                         class_name=class_data['name'],
-                         learning_objectives=learning_objectives)
 
-
-@main_bp.route("/class/<class_id>/grader")
-def class_speed_grader(class_id):
-    if class_id not in classes:
-        return redirect(url_for('main.instructor_dashboard'))
-    class_data = classes[class_id]
-    students = class_data['students']
-    learning_objectives = organize_by_learning_objectives(students)
-    lo_names = [lo['name'] for lo in learning_objectives]
-    return render_template('class_speed_grader.html',
-                         class_id=class_id,
-                         class_name=class_data['name'],
-                         students=students,
-                         lo_names=lo_names)
-
+    return render_template("class_objectives.html", 
+                            class_id=class_id, 
+                            class_name=class_data['name'], 
+                            learning_objectives=class_data.get('learning_objectives', []))
 
 @main_bp.route("/class/<class_id>/reports")
 def class_reports(class_id):
-    if class_id not in classes:
+    if 'user_id' not in session: return redirect(url_for('main.login_page'))
+    class_data = Course.get_full_class_data(class_id)
+    
+    if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
-    class_data = classes[class_id]
-    students = class_data['students']
-    learning_objectives = organize_by_learning_objectives(students)
-    return render_template('class_reports.html',
-                         class_id=class_id,
-                         class_name=class_data['name'],
-                         students=students,
-                         learning_objectives=learning_objectives)
 
+    return render_template("class_reports.html", class_id=class_id, class_name=class_data['name'])
 
-@main_bp.route("/class/<class_id>/student/<student_id>")
-def class_student_detail(class_id, student_id):
-    if class_id not in classes:
+@main_bp.route("/class/<class_id>/speed_grader", endpoint='class_speed_grader')
+def class_speed_grader(class_id):
+    if 'user_id' not in session:
+        return redirect(url_for('main.login_page'))
+    class_data = Course.get_full_class_data(class_id)
+
+    if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
-    class_data = classes[class_id]
-    students = class_data['students']
-    student = next((s for s in students if s['id'] == student_id), None)
-    if not student:
-        return redirect(url_for('main.class_students', class_id=class_id))
-    return render_template('class_student_detail.html',
-                         class_id=class_id,
-                         class_name=class_data['name'],
-                         student=student)
 
+    # Load assignments with their linked LOs
+    try:
+        assignments_result = supabase.table("assignments") \
+            .select("*, assignment_objectives(learning_objective_id, learning_objectives(id, name, vendor_code))") \
+            .eq("class_id", class_id) \
+            .order("created_at") \
+            .execute()
+        assignments = assignments_result.data or []
+    except Exception as e:
+        print(f"Error loading assignments: {e}")
+        assignments = []
+
+    # Load students with their grades
+    raw_enrollments = class_data.get('enrollments', [])
+    students = []
+    for enrollment in raw_enrollments:
+        prof = enrollment.get('profiles', {})
+        prof['learning_objectives'] = prof.get('grades', [])
+        if 'name' not in prof:
+            prof['name'] = prof.get('full_name', 'Unnamed Student')
+        students.append(prof)
+
+    # Get all LOs for the table columns (pass full objects)
+    lo_names = []
+    try:
+        los_result = supabase.table("learning_objectives") \
+            .select("id, name, vendor_code") \
+            .eq("class_id", class_id) \
+            .execute()
+        lo_names = los_result.data or []
+    except Exception as e:
+        print(f"Error loading LOs: {e}")
+
+    return render_template("class_speed_grader.html",
+                            class_id=class_id,
+                            class_name=class_data.get('name'),
+                            assignments=assignments,
+                            students=students,
+                            lo_names=lo_names)
+
+@main_bp.route("/class/<class_id>/update_grade", methods=["GET", "POST"], endpoint='upload_grades')
+def update_grade_handler(class_id):
+    if 'user_id' not in session: 
+        return redirect(url_for('main.login_page'))
+    
+    class_data = Course.get_full_class_data(class_id)
+
+    if not class_data:
+        return redirect(url_for('main.instructor_dashboard'))
+    
+    if request.method == "POST":
+        file = request.files.get('file')
+        if not file or file.filename == '':
+            return "No file selected", 400
+        print(f"File uploaded for class {class_id}: {file.filename}")
+        return redirect(url_for('main.class_detail', class_id=class_id))
+
+    return render_template("update_grade.html", class_id=class_id, class_name=class_data.get('name'))
+
+@main_bp.route("/class/<class_id>/create_learning_objective", methods=["GET", "POST"], endpoint='create_learning_objective')
+def create_lo_handler(class_id):
+    if 'user_id' not in session:
+        return redirect(url_for('main.login_page'))
+
+    class_data = Course.get_full_class_data(class_id)
+    if not class_data:
+        return redirect(url_for('main.instructor_dashboard'))
+
+    if request.method == "POST":
+        form_type = request.form.get('form_type', 'create_lo')
+
+        if form_type == 'save_assignment':
+            # Save assignment + link selected LOs
+            assignment_name = request.form.get('assignment_name', '').strip()
+            hw_group = request.form.get('hw_group', '')
+            required_ms = request.form.get('required_ms', 2)
+            date_returned = request.form.get('date_returned') or None
+            revision_due = request.form.get('revision_due') or None
+            selected_lo_ids = request.form.get('selected_los', '')
+
+            if assignment_name:
+                try:
+                    result = supabase.table("assignments").insert({
+                        "class_id": class_id,
+                        "name": assignment_name,
+                        "homework_group": hw_group,
+                        "required_ms": int(required_ms),
+                        "date_returned": date_returned,
+                        "revision_due": revision_due
+                    }).execute()
+
+                    # Link selected LOs to this assignment
+                    if selected_lo_ids and result.data:
+                        assignment_id = result.data[0]['id']
+                        lo_ids = [lo_id.strip() for lo_id in selected_lo_ids.split(',') if lo_id.strip()]
+                        for lo_id in lo_ids:
+                            supabase.table("assignment_objectives").insert({
+                                "assignment_id": assignment_id,
+                                "learning_objective_id": lo_id
+                            }).execute()
+                except Exception as e:
+                    print(f"Error saving assignment: {e}")
+
+            return redirect(url_for('main.class_speed_grader', class_id=class_id))
+
+        else:
+            # Create a new learning objective
+            lo_name = request.form.get('name', '').strip()
+            lo_code = request.form.get('code', '').strip()
+            lo_description = request.form.get('description', '').strip()
+
+            if lo_name:
+                try:
+                    supabase.table("learning_objectives").insert({
+                        "class_id": class_id,
+                        "vendor_code": lo_code or None,
+                        "name": lo_name,
+                        "description": lo_description or None
+                    }).execute()
+                except Exception as e:
+                    print(f"Error creating LO: {e}")
+
+            return redirect(url_for('main.class_objectives', class_id=class_id))
+
+    # GET requests just redirect back to the objectives page (modal handles creation)
+    return redirect(url_for('main.class_objectives', class_id=class_id))
 
 @main_bp.route("/support")
 def support():
-    if 'user_id' not in session:
-        return redirect('/login')
-    return render_template('support.html')
+    return render_template("support.html")
 
-@main_bp.route("/select_class", methods=['POST'])
-def select_class():
-    class_id = request.form.get('class_id')
-    if class_id and class_id in classes:
-        return redirect(url_for('main.class_detail', class_id=class_id))
-    return redirect(url_for('main.instructor_dashboard'))
+# ============================================================================
+# API & ACTION ROUTES
+# ============================================================================
 
-@main_bp.route("/class/<class_id>/create_learning_objective")
-def create_learning_objective(class_id):
-    if class_id not in classes:
-        return redirect(url_for('main.instructor_dashboard'))
-    class_data = classes[class_id]
-    return render_template('create_learning_objective.html',
-                         class_id=class_id,
-                         class_name=class_data['name'])
-
-@main_bp.route("/class/<class_id>/update_grade")
-def update_grade(class_id):
-    if class_id not in classes:
-        return redirect(url_for('main.instructor_dashboard'))
-    class_data = classes[class_id]
-    return render_template('update_grade.html',
-                         class_id=class_id,
-                         class_name=class_data['name'])
-
-@main_bp.route("/class/<class_id>/upload_grades", methods=['POST'])
-def upload_grades(class_id):
-    if class_id not in classes:
-        return redirect(url_for('main.instructor_dashboard'))
-    if 'file' not in request.files:
-        return "No file uploaded", 400
-    file = request.files['file']
-    if file.filename == '':
-        return "No file selected", 400
-    return redirect(url_for('main.class_detail', class_id=class_id))
-
-@main_bp.route("/class/<class_id>/upload_learning_objective", methods=['POST'])
-def upload_learning_objective(class_id):
-    if class_id not in classes:
-        return redirect(url_for('main.instructor_dashboard'))
-    if 'file' not in request.files:
-        return "No file uploaded", 400
-    file = request.files['file']
-    if file.filename == '':
-        return "No file selected", 400
-    return redirect(url_for('main.class_detail', class_id=class_id))
-
-@main_bp.route("/add_class", methods=['POST'])
+@main_bp.route("/add_class", methods=["POST"])
 def add_class():
-    if 'user_id' not in session or session.get('role') != 'instructor':
-        return redirect('/login')
-    name = request.form.get('name')
-    number = request.form.get('number')
-    semester = request.form.get('semester')
-    start = request.form.get('start')
-    end = request.form.get('end')
-    days = request.form.get('days')
-    new_id = str(len(classes) + 1)
-    classes[new_id] = {
-        'id': new_id,
-        'name': f'{semester} - {number} - {name}',
-        'semester': semester,
-        'start_date': start,
-        'end_date': end,
-        'days': days,
-        'students': []
-    }
-    return redirect(url_for('main.class_detail', class_id=new_id))
+    if 'user_id' not in session:
+        return redirect(url_for('main.login_page'))
 
-# ============================================================================
-# API ROUTES - Authentication
-# ============================================================================
+    if not request.form.get("name"):
+        return "Class name is required.", 400
 
-@main_bp.route("/api/signup", methods=["POST"])
-def signup():
-    data = request.get_json()
-    email = data.get("email")
-    password = data.get("password")
-    name = data.get("name")
-    role = data.get("role")
-    
-    try:
-        response = supabase.auth.sign_up({
-            "email": email,
-            "password": password,
-            "data": {
-                "full_name": name,
-                "role": role
-            }
-        })
-        
-        if response.user:
-            session['user_id'] = response.user.id
-            session['role'] = role
-            return jsonify({"success": True, "redirect": f"/{role}/dashboard"})
-        else:
-            return jsonify({"success": False, "message": "Sign-up failed. Please try again."})
-    except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
-
-@main_bp.route("/api/login", methods=["POST"])
-def login():
-    data = request.get_json()
-    email = data.get("email")
-    password = data.get("password")
-    selected_role = data.get("role")
+    user_id = session['user_id']
 
     try:
-        result = supabase.auth.sign_in_with_password({
-            "email": email,
-            "password": password
-        })
+        # Always upsert the profile first to satisfy the foreign key constraint.
+        # Handles cases where the profile row wasn't created at signup.
+        ensure_profile_exists(
+            user_id,
+            full_name=session.get('full_name'),
+            role=session.get('role', 'instructor')
+        )
 
-        if result.user:
-            user_metadata = result.user.user_metadata or {}
-            actual_role = user_metadata.get('role')
-            
-            if not actual_role:
-                supabase.auth.update_user({"data": {"role": selected_role}})
-                actual_role = selected_role
-            
-            if actual_role != selected_role:
-                return jsonify({
-                    "success": False, 
-                    "message": f"This account is registered as a {actual_role}, not a {selected_role}"
-                })
-            
-            session['user_id'] = result.user.id
-            session['role'] = actual_role
-            return jsonify({"success": True, "redirect": f"/{actual_role}/dashboard"})
-        else:
-            return jsonify({"success": False, "message": "Invalid credentials"})
+        new_class_data = {
+            "name": request.form.get("name"),
+            "semester": request.form.get("semester"),
+            "instructor_id": user_id
+        }
+        supabase.table("classes").insert(new_class_data).execute()
+        return redirect(url_for('main.instructor_dashboard'))
     except Exception as e:
-        return jsonify({"success": False, "message": str(e)})
+        return f"Failed to create class: {str(e)}", 500
 
-@main_bp.route("/api/search", methods=['GET'])
-def search():
-    query = request.args.get('query', '').lower()
-    view = request.args.get('view', 'students')
-    class_id = request.args.get('class_id', '1')
-    
-    if class_id not in classes:
-        return jsonify({'error': 'Class not found'}), 404
-    
-    class_data = classes[class_id]
-    
-    if view == 'students':
-        filtered_students = [
-            student for student in class_data['students']
-            if query in student['name'].lower()
-        ]
-        return jsonify({'students': filtered_students})
-    else:
-        learning_objectives = organize_by_learning_objectives(class_data['students'])
-        filtered_los = []
-        for lo in learning_objectives:
-            if query in lo['name'].lower():
-                filtered_los.append(lo)
-            else:
-                matching_2m = [s for s in lo['students_with_2m'] if query in s['name'].lower()]
-                matching_1m = [s for s in lo['students_with_1m'] if query in s['name'].lower()]
-                matching_0m = [s for s in lo['students_with_0m'] if query in s['name'].lower()]
-                if matching_2m or matching_1m or matching_0m:
-                    filtered_lo = lo.copy()
-                    filtered_lo['students_with_2m'] = matching_2m
-                    filtered_lo['students_with_1m'] = matching_1m
-                    filtered_lo['students_with_0m'] = matching_0m
-                    filtered_lo['two_m_count'] = len(matching_2m)
-                    filtered_lo['one_m_count'] = len(matching_1m)
-                    filtered_lo['zero_m_count'] = len(matching_0m)
-                    filtered_los.append(filtered_lo)
-        return jsonify({'learning_objectives': filtered_los})
+
+@main_bp.route("/api/update_grade", methods=["POST"], endpoint='api_update_grade')
+def api_update_grade():
+    if 'user_id' not in session: return jsonify({"success": False, "error": "Unauthorized"}), 401
+    data = request.get_json()
+    try:
+        Grade.update_score(student_id=data['student_id'], lo_id=data['lo_id'], 
+                            top_score=data['top_score'], second_score=data.get('second_score'))
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+@main_bp.route("/debug/assignments/<class_id>")
+def debug_assignments(class_id):
+    try:
+        result = supabase.table("assignments") \
+            .select("*, assignment_objectives(learning_objective_id, learning_objectives(id, name, vendor_code))") \
+            .eq("class_id", class_id) \
+            .execute()
+        return jsonify(result.data)
+    except Exception as e:
+        return jsonify({"error": str(e)})

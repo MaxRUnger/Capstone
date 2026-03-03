@@ -1,39 +1,258 @@
 {% extends "app_base.html" %}
 
 {% block content %}
-<div class="space-y-6">
-  <div class="flex items-center justify-between">
-    <div>
-      <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Learning Objectives</h1>
-      <p class="text-slate-500 dark:text-slate-400 mt-1">{{ class_name }} · Manage objectives and assignments</p>
-    </div>
-    <div class="flex gap-2">
-      <a href="{{ url_for('main.class_detail', class_id=class_id) }}" class="px-4 py-2 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors text-sm font-medium text-slate-900 dark:text-white">← Dashboard</a>
-      <a href="{{ url_for('main.create_learning_objective', class_id=class_id) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">Create New LO</a>
-    </div>
+<div class="space-y-4">
+  <div>
+    <h1 class="text-xl font-semibold text-slate-900 dark:text-white">Learning Objectives</h1>
   </div>
 
-  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm">
-    <div class="p-6 border-b border-slate-100 dark:border-slate-700">
-      <h2 class="font-semibold text-slate-900 dark:text-white">Current Objectives</h2>
-      <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{{ learning_objectives|length }} objectives</p>
-    </div>
-    <div class="divide-y divide-slate-50 dark:divide-slate-700">
-      {% for lo in learning_objectives %}
-      <div class="p-6 flex items-center justify-between">
+  <div class="flex gap-5 items-start">
+
+    <!-- LEFT PANEL: All Objectives -->
+    <div class="flex-1 bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 flex flex-col" style="min-height: 600px;">
+      <!-- Header -->
+      <div class="flex items-center justify-between px-6 py-4 border-b border-slate-100 dark:border-slate-700">
         <div>
-          <h3 class="font-medium text-slate-900 dark:text-white">{{ lo.name }}</h3>
-          <div class="flex items-center gap-4 mt-2 text-sm text-slate-600 dark:text-slate-400">
-            <span>{{ lo.two_m_count }}/{{ lo.total_students }} with 2 M</span>
-            <span>{{ lo.one_m_count }} with 1 M</span>
-            <span>{{ lo.zero_m_count }} with 0 M</span>
-          </div>
+          <h2 class="font-semibold text-slate-900 dark:text-white">All Objectives</h2>
+          <p id="selectedCount" class="text-sm text-slate-500 dark:text-slate-400">0 selected</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button type="button" onclick="selectAll()" class="px-3 py-1.5 text-sm font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors">
+            Select All
+          </button>
+          <button type="button" onclick="document.getElementById('addLOModal').classList.remove('hidden')"
+            class="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition-colors shadow-sm">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+            Add
+          </button>
         </div>
       </div>
-      {% else %}
-      <div class="p-12 text-center text-slate-500 dark:text-slate-400">No learning objectives yet. Create one from the form above.</div>
-      {% endfor %}
+
+      <!-- Scrollable objective list -->
+      <div class="overflow-y-auto flex-1 divide-y divide-slate-50 dark:divide-slate-700/50" style="max-height: 560px;">
+        {% for lo in learning_objectives %}
+        {% set total = lo.get('total_students', 0) if lo is mapping else (lo.total_students if lo.total_students else 0) %}
+        {% set two_m = lo.get('two_m_count', 0) if lo is mapping else (lo.two_m_count if lo.two_m_count else 0) %}
+        {% set pct = (two_m * 100 // total) if total > 0 else 0 %}
+        <label class="flex items-center gap-4 px-6 py-4 hover:bg-slate-50 dark:hover:bg-slate-700/40 cursor-pointer transition-colors lo-row" data-lo-id="{{ lo.id }}" data-lo-name="{{ lo.name }}" data-lo-code="{{ lo.vendor_code or '' }}">
+          <input type="checkbox" class="lo-checkbox w-4 h-4 rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500 flex-shrink-0" onchange="updateSelection()">
+          <div class="flex items-center gap-2 flex-shrink-0">
+            {% if lo.vendor_code %}
+            <span class="px-2 py-0.5 rounded text-xs font-mono font-semibold bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300">{{ lo.vendor_code }}</span>
+            {% endif %}
+            <span class="px-2 py-0.5 rounded-full text-xs font-bold text-white
+              {% if pct >= 80 %}bg-green-500
+              {% elif pct >= 70 %}bg-orange-400
+              {% else %}bg-red-500{% endif %}">{{ pct }}%</span>
+          </div>
+          <span class="text-sm text-slate-700 dark:text-slate-300 font-medium">{{ lo.description if lo.description else lo.name }}</span>
+        </label>
+        {% else %}
+        <div class="p-12 text-center text-slate-400 dark:text-slate-500 text-sm">
+          No learning objectives yet.<br>
+          <span class="mt-1 inline-block">Click <strong>+ Add</strong> to create your first objective.</span>
+        </div>
+        {% endfor %}
+      </div>
     </div>
+
+    <!-- RIGHT PANEL: Assignment Builder -->
+    <div class="w-96 flex-shrink-0 bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-6" style="min-height: 600px;">
+      <div class="mb-5">
+        <h2 class="font-semibold text-slate-900 dark:text-white">Assignment</h2>
+        <p id="assignmentObjCount" class="text-sm text-slate-500 dark:text-slate-400">0 objectives</p>
+      </div>
+
+      <!-- Assignment Name -->
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Assignment Name</label>
+        <input type="text" id="assignmentName" placeholder="e.g., Week 3 Assessment"
+          class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+      </div>
+
+      <!-- Homework Group + Required Masteries -->
+      <div class="grid grid-cols-2 gap-3 mb-4">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Homework Group</label>
+          <select id="hwGroup" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all appearance-none" style="background-image: url('data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 fill=%22none%22 viewBox=%220 0 24 24%22 stroke=%22%2394a3b8%22><path stroke-linecap=%22round%22 stroke-linejoin=%22round%22 stroke-width=%222%22 d=%22M19 9l-7 7-7-7%22/></svg>'); background-repeat: no-repeat; background-position: right 10px center; background-size: 16px;">
+            <option>HW 1</option>
+            <option>HW 2</option>
+            <option>HW 3</option>
+            <option>HW 4</option>
+            <option>HW 5</option>
+            <option>Exam 1</option>
+            <option>Exam 2</option>
+            <option>Exam 3</option>
+          </select>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Required Masteries (Ms)</label>
+          <input type="number" id="requiredMs" value="2" min="1" max="5"
+            class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+        </div>
+      </div>
+
+      <!-- Date Returned + Revision Due -->
+      <div class="grid grid-cols-2 gap-3 mb-6">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Date Returned</label>
+          <input type="date" id="dateReturned"
+            class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-500 dark:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all"
+            onchange="autoSetRevisionDue()">
+          <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">When assignment is graded</p>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Revision Due</label>
+          <input type="date" id="revisionDue"
+            class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-500 dark:text-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+          <p class="text-xs text-slate-400 dark:text-slate-500 mt-1">Auto: 1 week after return</p>
+        </div>
+      </div>
+
+      <!-- Selected Objectives Preview -->
+      <div id="selectedObjectivesArea" class="flex-1">
+        <!-- Empty state -->
+        <div id="emptyObjectivesMsg" class="flex flex-col items-center justify-center py-12 text-slate-300 dark:text-slate-600">
+          <svg class="w-8 h-8 mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+          </svg>
+          <p class="text-sm text-slate-400 dark:text-slate-500">Select objectives to add</p>
+        </div>
+
+        <!-- Selected list -->
+        <div id="selectedList" class="hidden space-y-1.5 mb-5"></div>
+
+        <!-- Save Assignment Button -->
+        <form action="{{ url_for('main.create_learning_objective', class_id=class_id) }}" method="post" id="assignmentForm">
+          <input type="hidden" name="form_type" value="save_assignment">
+          <input type="hidden" name="assignment_name" id="hiddenName">
+          <input type="hidden" name="hw_group" id="hiddenGroup">
+          <input type="hidden" name="required_ms" id="hiddenMs">
+          <input type="hidden" name="date_returned" id="hiddenDate">
+          <input type="hidden" name="revision_due" id="hiddenRevision">
+          <input type="hidden" name="selected_los" id="hiddenLOs">
+
+          <button type="button" onclick="saveAssignment()" id="saveAssignmentBtn"
+            class="hidden w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2 shadow-sm shadow-blue-500/20">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+            Save Assignment
+          </button>
+        </form>
+      </div>
+    </div>
+
   </div>
 </div>
+
+<!-- Create LO Modal -->
+<div id="addLOModal" class="hidden fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+     onclick="if(event.target===this) this.classList.add('hidden')">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-md p-6" onclick="event.stopPropagation()">
+
+    <div class="flex items-center justify-between mb-5">
+      <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Add Learning Objective</h3>
+      <button type="button" onclick="document.getElementById('addLOModal').classList.add('hidden')"
+        class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+        </svg>
+      </button>
+    </div>
+
+    <form action="{{ url_for('main.create_learning_objective', class_id=class_id) }}" method="post" class="space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Objective Code</label>
+        <input type="text" name="code" required placeholder="e.g., ALG-1.1"
+          class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Objective Name</label>
+        <input type="text" name="name" required placeholder="e.g., Solve Linear Equations"
+          class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Description <span class="text-slate-400">(optional)</span></label>
+        <input type="text" name="description" placeholder="Brief description of the objective"
+          class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button type="button" onclick="document.getElementById('addLOModal').classList.add('hidden')"
+          class="flex-1 px-4 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-colors">
+          Cancel
+        </button>
+        <button type="submit"
+          class="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm shadow-blue-500/20">
+          Create Objective
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+let selectedLOs = [];
+
+function updateSelection() {
+  const checkboxes = document.querySelectorAll('.lo-checkbox:checked');
+  selectedLOs = Array.from(checkboxes).map(cb => {
+    const row = cb.closest('.lo-row');
+    return { id: row.dataset.loId, name: row.dataset.loName, code: row.dataset.loCode };
+  });
+
+  const count = selectedLOs.length;
+  document.getElementById('selectedCount').textContent = `${count} selected`;
+  document.getElementById('assignmentObjCount').textContent = `${count} objective${count !== 1 ? 's' : ''}`;
+
+  const emptyMsg = document.getElementById('emptyObjectivesMsg');
+  const selectedList = document.getElementById('selectedList');
+  const saveBtn = document.getElementById('saveAssignmentBtn');
+
+  if (count === 0) {
+    emptyMsg.classList.remove('hidden');
+    selectedList.classList.add('hidden');
+    saveBtn.classList.add('hidden');
+  } else {
+    emptyMsg.classList.add('hidden');
+    selectedList.classList.remove('hidden');
+    saveBtn.classList.remove('hidden');
+
+    selectedList.innerHTML = selectedLOs.map(lo => `
+      <div class="flex items-center gap-2 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
+        <svg class="w-3.5 h-3.5 text-blue-500 flex-shrink-0" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+        <span class="text-xs font-medium text-blue-700 dark:text-blue-300 truncate">${lo.name}</span>
+      </div>
+    `).join('');
+  }
+}
+
+function selectAll() {
+  const checkboxes = document.querySelectorAll('.lo-checkbox');
+  const allChecked = Array.from(checkboxes).every(cb => cb.checked);
+  checkboxes.forEach(cb => cb.checked = !allChecked);
+  updateSelection();
+}
+
+function addSelected() {
+  updateSelection();
+}
+
+function autoSetRevisionDue() {
+  const returned = document.getElementById('dateReturned').value;
+  if (returned) {
+    const d = new Date(returned);
+    d.setDate(d.getDate() + 7);
+    document.getElementById('revisionDue').value = d.toISOString().split('T')[0];
+  }
+}
+
+function saveAssignment() {
+  document.getElementById('hiddenName').value = document.getElementById('assignmentName').value;
+  document.getElementById('hiddenGroup').value = document.getElementById('hwGroup').value;
+  document.getElementById('hiddenMs').value = document.getElementById('requiredMs').value;
+  document.getElementById('hiddenDate').value = document.getElementById('dateReturned').value;
+  document.getElementById('hiddenRevision').value = document.getElementById('revisionDue').value;
+  document.getElementById('hiddenLOs').value = selectedLOs.map(lo => lo.id).join(',');
+  document.getElementById('assignmentForm').submit();
+}
+</script>
 {% endblock %}
