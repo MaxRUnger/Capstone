@@ -1,0 +1,16 @@
+/* Auth page overrides - Figma design uses Tailwind */
+.role-btn {
+  border-color: rgb(226 232 240);
+}
+.dark .role-btn {
+  border-color: rgb(71 85 105);
+}
+.role-btn.role-active,
+.role-btn.border-blue-600 {
+  border-color: rgb(37 99 235);
+  background-color: rgb(239 246 255);
+}
+.dark .role-btn.role-active,
+.dark .role-btn.bg-blue-50 {
+  background-color: rgba(30 58 138 / 0.2);
+}

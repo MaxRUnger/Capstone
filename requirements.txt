@@ -1,0 +1,7 @@
+Flask==2.3.0
+python-dotenv==1.0.0
+supabase==1.0.3
+Pillow==12.1.1
+opencv-python==4.8.0.76
+pdf2image==1.17.0
+pytesseract==0.3.13

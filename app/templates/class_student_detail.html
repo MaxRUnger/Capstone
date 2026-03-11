@@ -1,0 +1,76 @@
+{% extends "app_base.html" %}
+{% from "_components.html" import homework_percentage_badge, progress_bar %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center gap-4">
+    <a href="{{ url_for('main.class_students', class_id=class_id) }}" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+      <svg class="w-5 h-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+    </a>
+    <div class="flex-1">
+      <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">{{ student.name }}</h1>
+      <p class="text-slate-600 dark:text-slate-400 text-sm mt-1">{{ class_name }}</p>
+    </div>
+  </div>
+
+  {% set los = student.learning_objectives %}
+  {% set mastered = los|selectattr('top_score', 'equalto', 'M')|selectattr('second_score', 'equalto', 'M')|list|length %}
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6">
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+      <div>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Mastered</p>
+        <p class="text-2xl font-semibold text-slate-900 dark:text-white">{{ mastered }} / {{ los|length }}</p>
+      </div>
+      <div>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Homework %</p>
+        {{ homework_percentage_badge(mastered, los|length) }}
+      </div>
+      <div class="col-span-2">
+        <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Progress</p>
+        {{ progress_bar(mastered, los|length, show_label=true) }}
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700">
+      <h2 class="font-semibold text-slate-900 dark:text-white">Learning Objectives</h2>
+    </div>
+    <div class="divide-y divide-slate-50 dark:divide-slate-700">
+      {% for lo in student.learning_objectives %}
+      {% set is_mastered = lo.top_score == 'M' and lo.second_score == 'M' %}
+      <div class="p-6">
+        <div class="flex items-start gap-6">
+          <div class="flex-1">
+            <div class="flex items-center gap-3 mb-3">
+              <h3 class="font-medium text-slate-900 dark:text-white">{{ lo.name }}</h3>
+              {% if is_mastered %}
+              <span class="px-2 py-1 bg-green-500 text-white rounded-md text-xs font-medium">MASTERED</span>
+              {% endif %}
+            </div>
+            <div class="flex items-center gap-4 text-sm">
+              <div>
+                <p class="text-slate-500 dark:text-slate-400 mb-1">Grades</p>
+                <div class="flex items-center gap-2">
+                  <span class="mastery-badge mastery-{{ lo.top_score|lower }} px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ lo.top_score }}</span>
+                  <span class="mastery-badge mastery-{{ lo.second_score|lower }} px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ lo.second_score }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<style>
+.mastery-m { background: #dcfce7; color: #15803d; border-color: #86efac; }
+.mastery-r { background: #fef9c3; color: #a16207; border-color: #fde047; }
+.mastery-rq { background: #ffedd5; color: #c2410c; border-color: #fdba74; }
+.mastery-p { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
+.mastery-x { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
+.mastery-a { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+</style>
+{% endblock %}

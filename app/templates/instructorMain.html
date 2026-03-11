@@ -1,0 +1,946 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Fall 2025 - Section 1 Class 1 - Project Clarity</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial;
+            background-color: #e8dcc1;
+            color: #1f2937;
+        }
+
+        header {
+            background-color: #f5ecd8;
+            padding: 1.5rem 2rem;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+        }
+
+        .logo {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .logo-img {
+            height: 45px;
+            width: 45px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+
+        .logo h1 {
+            font-size: 1.5rem;
+            font-weight: 700;
+            color: #1f2937;
+        }
+
+        .header-icons {
+            margin-left: auto;
+            display: flex;
+            gap: 1.5rem;
+            align-items: center;
+        }
+
+        .icon {
+            width: 24px;
+            height: 24px;
+            cursor: pointer;
+            opacity: 0.6;
+        }
+
+        .profile-img {
+            width: 45px;
+            height: 45px;
+            border-radius: 50%;
+            background: #d1d5db;
+            cursor: pointer;
+        }
+
+        main {
+            max-width: 1200px;
+            margin: 2rem auto;
+            padding: 0 2rem;
+        }
+
+        .back-link {
+            color: #9ca3af;
+            text-decoration: none;
+            font-size: 1.125rem;
+            display: inline-block;
+            margin-bottom: 1.5rem;
+        }
+
+        .page-title {
+            font-size: 2.5rem;
+            font-weight: 700;
+            color: #374151;
+            margin-bottom: 2rem;
+        }
+
+        .action-buttons {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 2.5rem;
+        }
+
+        .btn {
+            padding: 0.875rem 1.75rem;
+            border: none;
+            border-radius: 12px;
+            font-size: 1rem;
+            font-weight: 600;
+            cursor: pointer;
+            background: #9CF3D6;
+            color: #1f2937;
+            transition: all 0.2s;
+        }
+
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 8px rgba(156, 243, 214, 0.3);
+        }
+
+        .view-toggle {
+            display: flex;
+            gap: 2rem;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .radio-group {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            cursor: pointer;
+        }
+
+        .radio-group input[type="radio"] {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .search-box {
+            flex: 1;
+            max-width: 400px;
+            position: relative;
+        }
+
+        .search-box input {
+            width: 100%;
+            padding: 0.75rem 1rem 0.75rem 2.5rem;
+            border: 2px solid #d1d5db;
+            border-radius: 12px;
+            font-size: 0.95rem;
+            outline: none;
+            background: white;
+        }
+
+        .search-icon {
+            position: absolute;
+            left: 0.875rem;
+            top: 50%;
+            transform: translateY(-50%);
+            color: #9ca3af;
+        }
+
+        .content-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 1.5rem;
+        }
+
+        .content-title {
+            font-size: 2rem;
+            font-weight: 700;
+            color: #374151;
+        }
+
+        .expand-controls {
+            display: flex;
+            gap: 2rem;
+        }
+
+        .expand-controls button {
+            background: none;
+            border: none;
+            color: #9ca3af;
+            font-size: 1rem;
+            cursor: pointer;
+            text-decoration: underline;
+        }
+
+        .expand-controls button:hover {
+            color: #6b7280;
+        }
+
+        /* Student View Styles */
+        .student-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .student-item {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .student-header {
+            padding: 1.25rem 1.5rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 1.125rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .student-header:hover {
+            background: #f9fafb;
+        }
+
+        .chevron {
+            width: 8px;
+            height: 8px;
+            border-right: 2px solid #6b7280;
+            border-bottom: 2px solid #6b7280;
+            transform: rotate(45deg);
+            transition: transform 0.3s;
+        }
+
+        .student-item.expanded .chevron,
+        .lo-item.expanded .chevron {
+            transform: rotate(-135deg);
+        }
+
+        .learning-objectives-content {
+            display: none;
+            padding: 0 1.5rem 1.5rem 1.5rem;
+        }
+
+        .student-item.expanded .learning-objectives-content {
+            display: block;
+        }
+
+        .lo-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr;
+            padding: 1rem 0;
+            border-bottom: 1px solid #f3f4f6;
+            gap: 1rem;
+        }
+
+        .lo-row:last-child {
+            border-bottom: none;
+        }
+
+        .lo-name {
+            color: #374151;
+        }
+
+        .lo-score {
+            color: #6b7280;
+            font-size: 0.95rem;
+        }
+
+        /* Learning Objectives View Styles */
+        .lo-list {
+            display: flex;
+            flex-direction: column;
+            gap: 0.5rem;
+        }
+
+        .lo-item {
+            background: white;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .lo-header {
+            padding: 1.25rem 1.5rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 1.125rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+
+        .lo-header:hover {
+            background: #f9fafb;
+        }
+
+        .lo-content {
+            display: none;
+            padding: 0 1.5rem 1.5rem 1.5rem;
+        }
+
+        .lo-item.expanded .lo-content {
+            display: block;
+        }
+
+        .mastery-group {
+            margin-bottom: 1.5rem;
+        }
+
+        .mastery-group:last-child {
+            margin-bottom: 0;
+        }
+
+        .mastery-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-weight: 600;
+            color: #374151;
+            margin-bottom: 0.75rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 2px solid #e5e7eb;
+        }
+
+        .mastery-count {
+            color: #6b7280;
+            font-size: 0.95rem;
+        }
+
+        .student-row {
+            display: grid;
+            grid-template-columns: 2fr 1fr 1fr;
+            padding: 0.875rem 0;
+            border-bottom: 1px solid #f3f4f6;
+            gap: 1rem;
+            align-items: center;
+        }
+
+        .student-row:last-child {
+            border-bottom: none;
+        }
+
+        .student-name {
+            color: #374151;
+        }
+
+        .score-badge {
+            color: #6b7280;
+            font-size: 0.95rem;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+    </style>
+</head>
+<body>
+    <header>
+        <div class="logo">
+            <div class="logo-img"></div>
+            <h1>Project Clarity</h1>
+            <div class="header-icons">
+                <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
+                </svg>
+                <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path>
+                </svg>
+                <div class="profile-img"></div>
+            </div>
+        </div>
+    </header>
+
+    <main>
+        <a href="#" class="back-link">< Back</a>
+        
+        <h1 class="page-title">Fall 2025 - Section 1 Class 1</h1>
+
+        <div class="action-buttons">
+            <button class="btn">Create New LO</button>
+            <button class="btn">Update Grade</button>
+        </div>
+
+        <div class="view-toggle">
+            <label class="radio-group">
+                <input type="radio" name="view" value="students" checked onchange="switchView('students')">
+                <span>By Students</span>
+            </label>
+            <label class="radio-group">
+                <input type="radio" name="view" value="objectives" onchange="switchView('objectives')">
+                <span>By Learning Objectives</span>
+            </label>
+            <div class="search-box">
+                <svg class="search-icon" width="18" height="18" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+                </svg>
+                <input type="text" id="searchInput" placeholder="Search for Student" oninput="handleSearch()">
+            </div>
+        </div>
+
+        <!-- Students View -->
+        <div id="studentsView">
+            <div class="content-header">
+                <h2 class="content-title">Students</h2>
+                <div class="expand-controls">
+                    <button onclick="expandAllStudents()">Expand All</button>
+                    <button onclick="collapseAllStudents()">Collapse All</button>
+                </div>
+            </div>
+
+            <div class="student-list">
+                <div class="student-item">
+                    <div class="student-header" onclick="toggleStudent(this)">
+                        <span>Adams, John</span>
+                        <div class="chevron"></div>
+                    </div>
+                    <div class="learning-objectives-content">
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 1</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 2</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 3</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 4</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 5</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="student-item">
+                    <div class="student-header" onclick="toggleStudent(this)">
+                        <span>Basic, Anna</span>
+                        <div class="chevron"></div>
+                    </div>
+                    <div class="learning-objectives-content">
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 1</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 2</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 3</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 4</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 5</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="student-item">
+                    <div class="student-header" onclick="toggleStudent(this)">
+                        <span>Smith, George W.</span>
+                        <div class="chevron"></div>
+                    </div>
+                    <div class="learning-objectives-content">
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 1</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 2</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 3</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 4</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 5</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="student-item">
+                    <div class="student-header" onclick="toggleStudent(this)">
+                        <span>Tucker, Cameron</span>
+                        <div class="chevron"></div>
+                    </div>
+                    <div class="learning-objectives-content">
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 1</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 2</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 3</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 4</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                        <div class="lo-row">
+                            <div class="lo-name">Learning Objective 5</div>
+                            <div class="lo-score">Top Highest: M</div>
+                            <div class="lo-score">Second Highest: M</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Learning Objectives View -->
+        <div id="objectivesView" class="hidden">
+            <div class="content-header">
+                <h2 class="content-title">Learning Objectives</h2>
+                <div class="expand-controls">
+                    <button onclick="expandAllObjectives()">Expand All</button>
+                    <button onclick="collapseAllObjectives()">Collapse All</button>
+                </div>
+            </div>
+
+            <div class="lo-list">
+                <div class="lo-item">
+                    <div class="lo-header" onclick="toggleObjective(this)">
+                        <span>Learning Objective 1</span>
+                        <div class="chevron"></div>
+                    </div>
+                    <div class="lo-content">
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 2 M</span>
+                                <span class="mastery-count">27/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: M</div>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: M</div>
+                            </div>
+                        </div>
+
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 1 M</span>
+                                <span class="mastery-count">5/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: R</div>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: X</div>
+                            </div>
+                        </div>
+
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 0 M</span>
+                                <span class="mastery-count">8/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: R</div>
+                                <div class="score-badge">Second Highest: X</div>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: R</div>
+                                <div class="score-badge">Second Highest: X</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="lo-item">
+                    <div class="lo-header" onclick="toggleObjective(this)">
+                        <span>Learning Objective 2</span>
+                        <div class="chevron"></div>
+                    </div>
+                    <div class="lo-content">
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 2 M</span>
+                                <span class="mastery-count">27/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: M</div>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: M</div>
+                            </div>
+                        </div>
+
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 1 M</span>
+                                <span class="mastery-count">5/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: R</div>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: X</div>
+                            </div>
+                        </div>
+
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 0 M</span>
+                                <span class="mastery-count">8/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: R</div>
+                                <div class="score-badge">Second Highest: X</div>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: R</div>
+                                <div class="score-badge">Second Highest: X</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="lo-item">
+                    <div class="lo-header" onclick="toggleObjective(this)">
+                        <span>Learning Objective 3</span>
+                        <div class="chevron"></div>
+                    </div>
+                    <div class="lo-content">
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 2 M</span>
+                                <span class="mastery-count">27/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: M</div>
+                            </div>
+                        </div>
+
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 1 M</span>
+                                <span class="mastery-count">5/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: R</div>
+                            </div>
+                        </div>
+
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 0 M</span>
+                                <span class="mastery-count">8/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: R</div>
+                                <div class="score-badge">Second Highest: X</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="lo-item">
+                    <div class="lo-header" onclick="toggleObjective(this)">
+                        <span>Learning Objective 4</span>
+                        <div class="chevron"></div>
+                    </div>
+                    <div class="lo-content">
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 2 M</span>
+                                <span class="mastery-count">27/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: M</div>
+                            </div>
+                        </div>
+
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 1 M</span>
+                                <span class="mastery-count">5/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: R</div>
+                            </div>
+                        </div>
+
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 0 M</span>
+                                <span class="mastery-count">8/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: R</div>
+                                <div class="score-badge">Second Highest: X</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="lo-item">
+                    <div class="lo-header" onclick="toggleObjective(this)">
+                        <span>Learning Objective 5</span>
+                        <div class="chevron"></div>
+                    </div>
+                    <div class="lo-content">
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 2 M</span>
+                                <span class="mastery-count">27/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: M</div>
+                            </div>
+                        </div>
+
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 1 M</span>
+                                <span class="mastery-count">5/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: M</div>
+                                <div class="score-badge">Second Highest: R</div>
+                            </div>
+                        </div>
+
+                        <div class="mastery-group">
+                            <div class="mastery-header">
+                                <span>Students with 0 M</span>
+                                <span class="mastery-count">8/40</span>
+                            </div>
+                            <div class="student-row">
+                                <div class="student-name">Adams, John</div>
+                                <div class="score-badge">Top Highest: R</div>
+                                <div class="score-badge">Second Highest: X</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        // Toggle individual student
+        function toggleStudent(header) {
+            const item = header.parentElement;
+            item.classList.toggle('expanded');
+        }
+
+        // Toggle individual learning objective
+        function toggleObjective(header) {
+            const item = header.parentElement;
+            item.classList.toggle('expanded');
+        }
+
+        // Expand/Collapse all students
+        function expandAllStudents() {
+            document.querySelectorAll('.student-item').forEach(item => {
+                item.classList.add('expanded');
+            });
+        }
+
+        function collapseAllStudents() {
+            document.querySelectorAll('.student-item').forEach(item => {
+                item.classList.remove('expanded');
+            });
+        }
+
+        // Expand/Collapse all learning objectives
+        function expandAllObjectives() {
+            document.querySelectorAll('.lo-item').forEach(item => {
+                item.classList.add('expanded');
+            });
+        }
+
+        function collapseAllObjectives() {
+            document.querySelectorAll('.lo-item').forEach(item => {
+                item.classList.remove('expanded');
+            });
+        }
+
+        // Switch between views
+        function switchView(view) {
+            const studentsView = document.getElementById('studentsView');
+            const objectivesView = document.getElementById('objectivesView');
+            const searchInput = document.getElementById('searchInput');
+
+            if (view === 'students') {
+                studentsView.classList.remove('hidden');
+                objectivesView.classList.add('hidden');
+                searchInput.placeholder = 'Search for Student';
+            } else {
+                studentsView.classList.add('hidden');
+                objectivesView.classList.remove('hidden');
+                searchInput.placeholder = 'Search for Learning Objectives';
+            }
+            
+            // Clear search when switching views
+            searchInput.value = '';
+            handleSearch();
+        }
+
+        // Search functionality
+        function handleSearch() {
+            const searchTerm = document.getElementById('searchInput').value.toLowerCase().trim();
+            const studentsView = document.getElementById('studentsView');
+            const objectivesView = document.getElementById('objectivesView');
+
+            // Check which view is active
+            if (!studentsView.classList.contains('hidden')) {
+                // Search in Students View
+                const studentItems = document.querySelectorAll('.student-item');
+                
+                studentItems.forEach(item => {
+                    const studentName = item.querySelector('.student-header span').textContent.toLowerCase();
+                    
+                    if (studentName.includes(searchTerm)) {
+                        item.style.display = '';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            } else {
+                // Search in Learning Objectives View
+                const loItems = document.querySelectorAll('.lo-item');
+                
+                loItems.forEach(item => {
+                    const loName = item.querySelector('.lo-header span').textContent.toLowerCase();
+                    const studentRows = item.querySelectorAll('.student-row');
+                    let hasMatch = false;
+
+                    // Check if LO name matches
+                    if (loName.includes(searchTerm)) {
+                        item.style.display = '';
+                        // Show all student rows within this LO
+                        studentRows.forEach(row => {
+                            row.style.display = '';
+                        });
+                        return;
+                    }
+
+                    // Check if any student name within this LO matches
+                    studentRows.forEach(row => {
+                        const studentName = row.querySelector('.student-name').textContent.toLowerCase();
+                        
+                        if (studentName.includes(searchTerm)) {
+                            row.style.display = '';
+                            hasMatch = true;
+                        } else {
+                            row.style.display = 'none';
+                        }
+                    });
+
+                    // Show the LO item if any student matched, otherwise hide it
+                    if (hasMatch || searchTerm === '') {
+                        item.style.display = '';
+                        
+                        // Also check mastery groups - hide empty ones
+                        const masteryGroups = item.querySelectorAll('.mastery-group');
+                        masteryGroups.forEach(group => {
+                            const visibleRows = Array.from(group.querySelectorAll('.student-row'))
+                                .filter(row => row.style.display !== 'none');
+                            
+                            if (visibleRows.length === 0 && searchTerm !== '') {
+                                group.style.display = 'none';
+                            } else {
+                                group.style.display = '';
+                            }
+                        });
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            }
+        }
+    </script>
+</body>
+</html>>
+            
+
+                

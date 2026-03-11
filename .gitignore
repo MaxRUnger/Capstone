@@ -1,0 +1,30 @@
+# Environment variables
+.env
+
+# Virtual environment
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Mac + IDE junk
+.DS_Store
+.vscode/
+.idea/
+.qtcreator/
+
+# Debug/test artifacts
+debug_*
+test_grade*
+test_realistic*
+test_table_grade*
+
+# Installers and binaries
+*.exe
+*.msix
+
+# OS files
+Thumbs.db
