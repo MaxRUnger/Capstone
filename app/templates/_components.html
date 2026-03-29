@@ -1,0 +1,15 @@
+{# Reusable components: HomeworkPercentageBadge, ProgressBar #}
+{% macro homework_percentage_badge(mastered, total, size='default') %}
+{% set pct = (mastered / total * 100)|round|int if total > 0 else 0 %}
+<span class="homework-badge inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold {{ 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' if pct == 100 else 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300' }}">{{ pct }}%</span>
+{% endmacro %}
+
+{% macro progress_bar(mastered, total, show_label=false) %}
+{% set pct = (mastered / total * 100)|round|int if total > 0 else 0 %}
+<div class="progress-bar-wrapper">
+  {% if show_label %}<span class="text-sm text-slate-600 dark:text-slate-400 mb-1 block">{{ mastered }}/{{ total }}</span>{% endif %}
+  <div class="h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+    <div class="h-full bg-green-500 rounded-full transition-all" style="width: {{ pct }}%"></div>
+  </div>
+</div>
+{% endmacro %}

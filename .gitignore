@@ -1,0 +1,45 @@
+# Environment variables
+.env
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Mac + IDE junk
+.DS_Store
+.vscode/
+.idea/
+.qtcreator/
+*.swp
+*.swo
+
+# Debug/test artifacts
+debug_*
+test_grade*
+test_realistic*
+test_table_grade*
+
+# Installers and binaries
+*.exe
+*.msix
+
+# OS files
+Thumbs.db
+Desktop.ini
+
+# Tesseract source and binaries
+tesseract-5.5.2/
+tesseract-5.5.2.zip
+
+# Distribution / packaging
+dist/
+build/
+*.egg-info/
+*.egg

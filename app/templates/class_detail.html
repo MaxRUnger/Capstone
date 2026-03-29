@@ -1,0 +1,339 @@
+{% extends "app_base.html" %}
+{% from "_components.html" import homework_percentage_badge, progress_bar %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Dashboard</h1>
+      <p class="text-slate-500 dark:text-slate-400 mt-1">{{ class_name }}</p>
+    </div>
+
+  </div>
+
+  {% set total_students = students|length %}
+  {% set total_all_students = all_students|length %}
+  {% set total_los = learning_objectives|length %}
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <button type="button" onclick="document.getElementById('studentManagementModal').classList.remove('hidden')" class="text-left bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm hover:scale-[1.02] transition-transform">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Active Students</p>
+          <p class="text-3xl font-semibold text-slate-900 dark:text-white">{{ total_students }}</p>
+        </div>
+        <div class="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+        </div>
+      </div>
+    </button>
+    <button type="button" onclick="document.getElementById('overdueRevisionsModal').classList.remove('hidden')" class="text-left bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm hover:scale-[1.02] transition-transform">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Overdue Revisions</p>
+          <p class="text-3xl font-semibold text-orange-600 dark:text-orange-400">0</p>
+        </div>
+        <div class="p-2.5 rounded-lg bg-orange-50 dark:bg-orange-900 text-orange-600 dark:text-orange-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+        </div>
+      </div>
+    </button>
+    <div class="bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Learning Objectives</p>
+          <p class="text-3xl font-semibold text-slate-900 dark:text-white">{{ total_los }}</p>
+        </div>
+        <div class="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138z"></path></svg>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700">
+      <div class="flex items-center justify-between mb-4">
+        <div class="flex gap-2">
+          <button type="button" onclick="switchView('students')" id="btnStudents" class="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors">By Students</button>
+          <button type="button" onclick="switchView('assignments')" id="btnAssignments" class="px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">By Assignments</button>
+        </div>
+        <div class="flex gap-2">
+          <a href="{{ url_for('main.upload_grades', class_id=class_id) }}" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium">Upload Grades</a>
+          <a href="{{ url_for('main.class_assignments', class_id=class_id) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">Manage Assignments</a>
+        </div>
+      </div>
+      <div class="relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+        <input type="text" id="searchInput" placeholder="Search..." oninput="handleSearch()" class="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-900 dark:text-white dark:placeholder-slate-400">
+      </div>
+    </div>
+
+    <div id="studentsView" class="divide-y divide-slate-50 dark:divide-slate-700">
+      {% for student in students %}
+      {% set los = student.learning_objectives %}
+      {% set passed = los|selectattr('is_passed')|list|length %}
+      <div class="student-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-name="{{ student.name|lower }}">
+        <div class="flex items-center justify-between cursor-pointer" onclick="toggleStudent(this)">
+          <div class="flex items-center gap-3 min-w-0">
+            <span class="font-medium text-slate-900 dark:text-white">{{ student.name }}</span>
+            {{ homework_percentage_badge(passed, los|length) }}
+          </div>
+          <svg class="w-5 h-5 text-slate-400 chevron transition-transform flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+        </div>
+        <div class="learning-objectives-content mt-4 hidden">
+          <div class="mb-3 max-w-[240px]">{{ progress_bar(passed, los|length, show_label=true) }}</div>
+          {% for lo in student.learning_objectives %}
+          <div class="grid grid-cols-3 gap-4 py-2 text-sm">
+            <div class="text-slate-700 dark:text-slate-300">{{ lo.name }}</div>
+            <div class="text-slate-600 dark:text-slate-400">Top: {{ lo.top_score }}</div>
+            <div class="text-slate-600 dark:text-slate-400">Second: {{ lo.second_score }}</div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+
+    <div id="assignmentsView" class="hidden divide-y divide-slate-50 dark:divide-slate-700">
+      {% for assignment in assignments %}
+      <div class="assignment-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-assignment-name="{{ assignment.name|lower }}">
+        <div class="flex items-center justify-between cursor-pointer" onclick="toggleAssignment(this)">
+          <span class="font-medium text-slate-900 dark:text-white">{{ assignment.name }}</span>
+          <svg class="w-5 h-5 text-slate-400 chevron transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+        </div>
+        <div class="assignment-content mt-4 hidden">
+          <div class="space-y-4">
+            <div class="text-sm text-slate-600 dark:text-slate-400">
+              <strong>Homework Group:</strong> {{ assignment.homework_group }}<br>
+              {% if assignment.date_returned %}<strong>Date Returned:</strong> {{ assignment.date_returned }}<br>{% endif %}
+              {% if assignment.revision_due %}<strong>Revision Due:</strong> {{ assignment.revision_due }}<br>{% endif %}
+            </div>
+            {% if assignment.assignment_objectives %}
+            <div>
+              <strong class="text-sm text-slate-600 dark:text-slate-400">Linked Learning Objectives:</strong>
+              <div class="mt-2 flex flex-wrap gap-2">
+                {% for ao in assignment.assignment_objectives %}
+                <span class="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs rounded-full">
+                  {{ ao.learning_objectives.vendor_code or ao.learning_objectives.name }}
+                </span>
+                {% endfor %}
+              </div>
+            </div>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      {% else %}
+      <div class="p-12 text-center text-slate-400 dark:text-slate-500 text-sm">
+        No assignments yet.<br>
+        <span class="mt-1 inline-block">Go to <a href="{{ url_for('main.class_assignments', class_id=class_id) }}" class="text-blue-600 dark:text-blue-400 underline">Manage Assignments</a> to create one.</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<div id="overdueRevisionsModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-8">
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900 dark:text-white">Overdue Revisions Report</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Students with revisions past due date</p>
+      </div>
+      <button type="button" onclick="document.getElementById('overdueRevisionsModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-6">
+      <p class="text-slate-500 dark:text-slate-400 text-center py-8">No overdue revisions. This feature tracks R grades past their revision due date.</p>
+    </div>
+  </div>
+</div>
+
+<div id="studentManagementModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-8">
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-4xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900 dark:text-white">Manage Students</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ students|length }} active students ({{ all_students|length }} total)</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <button type="button" onclick="document.getElementById('addStudentModal').classList.remove('hidden')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
+          Add Student
+        </button>
+        <button type="button" onclick="document.getElementById('studentManagementModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+          <svg class="w-5 h-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+    </div>
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700">
+      <div class="relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+        <input type="text" id="modalSearchInput" placeholder="Search students..." oninput="filterModalStudents()" class="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-900 dark:text-white dark:placeholder-slate-400">
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto p-6 space-y-2" id="modalStudentList">
+      {% for student in all_students %}
+      <div class="modal-student flex items-center justify-between p-4 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 gap-4{% if student.muted %} opacity-60{% endif %}" data-name="{{ student.name|lower }}" data-student-id="{{ student.id }}">
+        <p class="font-medium text-slate-900 dark:text-white flex-1 min-w-0{% if student.muted %} line-through{% endif %}">{{ student.name }}</p>
+        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 cursor-pointer shrink-0">
+          <input type="checkbox" class="mute-toggle rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" data-student-id="{{ student.id }}" onchange="toggleMute(this)"{% if student.muted %} checked{% endif %}>
+          <span>Mute</span>
+        </label>
+        <a href="{{ url_for('main.class_student_detail', class_id=class_id, student_id=student.id) }}" class="text-sm text-blue-600 dark:text-blue-400 hover:underline shrink-0">View progress →</a>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm text-slate-600 dark:text-slate-400">
+      Muted students are hidden from all grading views, reports, and student lists.
+    </div>
+  </div>
+</div>
+
+<div id="addStudentModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onclick="if(event.target===this) this.classList.add('hidden')">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full" onclick="event.stopPropagation()">
+    <div class="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+      <h2 class="font-semibold text-slate-900 dark:text-white">Add Student</h2>
+      <button type="button" onclick="document.getElementById('addStudentModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <form id="addStudentForm" onsubmit="addStudent(event)" class="p-6 space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Student Email</label>
+        <input type="email" id="studentEmail" required placeholder="student@university.edu" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
+        <input type="text" id="studentName" required placeholder="John Doe" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button type="button" onclick="document.getElementById('addStudentModal').classList.add('hidden')" class="flex-1 px-4 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-colors">
+          Cancel
+        </button>
+        <button type="submit" class="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm shadow-blue-500/20">
+          Add Student
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+
+
+<script>
+function filterModalStudents() {
+  const q = document.getElementById('modalSearchInput')?.value.toLowerCase() || '';
+  document.querySelectorAll('.modal-student').forEach(el => {
+    el.style.display = (!q || el.dataset.name.includes(q)) ? '' : 'none';
+  });
+}
+function toggleMute(checkbox) {
+  const row = checkbox.closest('.modal-student');
+  const studentId = checkbox.dataset.studentId;
+  const muted = checkbox.checked;
+  row.classList.toggle('opacity-60', muted);
+  row.querySelector('p').classList.toggle('line-through', muted);
+  fetch(`/api/class/{{ class_id }}/toggle_mute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ student_id: studentId, muted: muted })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.success) {
+      alert('Error toggling mute: ' + (data.error || 'Unknown error'));
+      checkbox.checked = !muted;
+      row.classList.toggle('opacity-60', !muted);
+      row.querySelector('p').classList.toggle('line-through', !muted);
+    }
+  })
+  .catch(() => {
+    alert('Error toggling mute.');
+    checkbox.checked = !muted;
+    row.classList.toggle('opacity-60', !muted);
+    row.querySelector('p').classList.toggle('line-through', !muted);
+  });
+}
+</script>
+
+<script>
+function switchView(view) {
+  const studentsView = document.getElementById('studentsView');
+  const assignmentsView = document.getElementById('assignmentsView');
+  const btnStudents = document.getElementById('btnStudents');
+  const btnAssignments = document.getElementById('btnAssignments');
+  if (view === 'students') {
+    studentsView.classList.remove('hidden');
+    assignmentsView.classList.add('hidden');
+    btnStudents.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors';
+    btnAssignments.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+  } else {
+    studentsView.classList.add('hidden');
+    assignmentsView.classList.remove('hidden');
+    btnAssignments.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors';
+    btnStudents.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+  }
+}
+function toggleStudent(el) {
+  const content = el.nextElementSibling;
+  const chevron = el.querySelector('.chevron');
+  content.classList.toggle('hidden');
+  chevron.classList.toggle('rotate-180');
+}
+function toggleObjective(el) {
+  const content = el.nextElementSibling;
+  const chevron = el.querySelector('.chevron');
+  content.classList.toggle('hidden');
+  chevron.classList.toggle('rotate-180');
+}
+function toggleAssignment(el) {
+  const content = el.nextElementSibling;
+  const chevron = el.querySelector('.chevron');
+  content.classList.toggle('hidden');
+  chevron.classList.toggle('rotate-180');
+}
+function handleSearch() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  document.querySelectorAll('.student-item').forEach(item => {
+    const name = item.dataset.name || '';
+    item.style.display = (!q || name.includes(q)) ? '' : 'none';
+  });
+  document.querySelectorAll('.assignment-item').forEach(item => {
+    const name = item.dataset.assignmentName || '';
+    item.style.display = (!q || name.includes(q)) ? '' : 'none';
+  });
+}
+
+function addStudent(event) {
+  event.preventDefault();
+  
+  const email = document.getElementById('studentEmail').value;
+  const name = document.getElementById('studentName').value;
+  
+  fetch(`/class/{{ class_id }}/add_student`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email: email,
+      name: name
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      document.getElementById('addStudentModal').classList.add('hidden');
+      document.getElementById('addStudentForm').reset();
+      location.reload(); // Refresh to show the new student
+    } else {
+      alert('Error adding student: ' + data.error);
+    }
+  })
+  .catch(error => {
+    alert('Error: ' + error);
+  });
+}
+</script>
+{% endblock %}
