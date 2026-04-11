@@ -4,9 +4,9 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-url: str = os.getenv("SUPABASE_URL")
-key: str = os.getenv("SUPABASE_KEY")
-service_key: str = os.getenv("SUPABASE_SERVICE_KEY")
+url = os.environ["SUPABASE_URL"]
+key = os.environ["SUPABASE_KEY"]
+service_key = os.environ["SUPABASE_SERVICE_KEY"]
 
 # Anon client for auth (login/signup)
 supabase: Client = create_client(url, key)

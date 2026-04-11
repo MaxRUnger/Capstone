@@ -231,11 +231,16 @@
 }
 </style>
 
+<script id="studentsJson" type="application/json">{{ students | tojson }}</script>
+<script id="assignmentsJson" type="application/json">{{ assignments | tojson }}</script>
+<script id="losJson" type="application/json">{{ learning_objectives | tojson }}</script>
+<script id="classIdJson" type="application/json">{{ class_id | tojson }}</script>
+
 <script>
-const studentsData = {{ students | tojson }};
-const assignmentsData = {{ assignments | tojson }};
-const learningObjectivesData = {{ learning_objectives | tojson }};
-const classId = {{ class_id | tojson }};
+const studentsData = JSON.parse(document.getElementById('studentsJson').textContent);
+const assignmentsData = JSON.parse(document.getElementById('assignmentsJson').textContent);
+const learningObjectivesData = JSON.parse(document.getElementById('losJson').textContent);
+const classId = JSON.parse(document.getElementById('classIdJson').textContent);
 
 function fetchHwScoresForAssignment(assignmentId) {
   // Reset all HW displays to dash
