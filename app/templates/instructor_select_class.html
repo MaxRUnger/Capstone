@@ -10,6 +10,16 @@
           <p class="text-slate-500 dark:text-slate-400 mt-1">Choose a class to manage or create a new one</p>
         </div>
         <div class="flex items-center gap-3">
+          <div class="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600" id="modeToggle">
+            <button type="button" onclick="setMode('mark')" id="modeMark"
+              class="px-4 py-2 text-sm font-medium transition-colors">
+              Mark
+            </button>
+            <button type="button" onclick="setMode('shelbi')" id="modeShelbi"
+              class="px-4 py-2 text-sm font-medium transition-colors">
+              Shelbi
+            </button>
+          </div>
           <button type="button" onclick="document.getElementById('createClassForm').classList.remove('hidden'); document.getElementById('classList').classList.add('hidden'); document.getElementById('selectHeader').classList.add('hidden'); document.getElementById('selectClassHeader').classList.add('hidden');" class="px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center gap-2">
             <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
             New Class
@@ -96,13 +106,6 @@
               <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Constant for the semester</p>
             </div>
             <div>
-              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Minimum Masteries</label>
-              <input name="min_masteries" type="number" min="1" max="10" value="2" required class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white" />
-              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Modifiable mid-semester (default: 2)</p>
-            </div>
-          </div>
-          <div class="grid grid-cols-2 gap-4">
-            <div>
               <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Class Days</label>
               <select name="days" class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white">
                 <option value="MW">MW</option>
@@ -112,7 +115,7 @@
               </select>
             </div>
           </div>
-          <div class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg">
+          <div class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg mark-only">
             <label class="flex items-start gap-3 cursor-pointer">
               <input type="checkbox" name="auto_convert_m" value="1" checked class="mt-1 w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
               <div>
@@ -130,4 +133,37 @@
     </div>
   </div>
 </div>
+<script>
+const CURRENT_MODE = '{{ session.get("instructor_mode", "mark") }}';
+
+function applyMode(mode) {
+  const markBtn = document.getElementById('modeMark');
+  const shelbiBtn = document.getElementById('modeShelbi');
+  const activeClass = 'bg-blue-600 text-white';
+  const inactiveClass = 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600';
+
+  markBtn.className = `px-4 py-2 text-sm font-medium transition-colors ${mode === 'mark' ? activeClass : inactiveClass}`;
+  shelbiBtn.className = `px-4 py-2 text-sm font-medium transition-colors ${mode === 'shelbi' ? activeClass : inactiveClass}`;
+
+  document.querySelectorAll('.mark-only').forEach(el => {
+    el.style.display = mode === 'shelbi' ? 'none' : '';
+  });
+}
+
+async function setMode(mode) {
+  try {
+    const res = await fetch('/api/set-instructor-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode })
+    });
+    if (!res.ok) throw new Error('Failed');
+    applyMode(mode);
+  } catch (e) {
+    alert('Error setting mode: ' + e.message);
+  }
+}
+
+applyMode(CURRENT_MODE);
+</script>
 {% endblock %}

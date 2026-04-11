@@ -1,4 +1,12 @@
+import logging
+
 from app.authentication import supabase, supabase_admin
+
+logger = logging.getLogger(__name__)
+
+# Valid mastery grade codes used throughout the grading system
+MASTERY_GRADES = ('M', 'R', 'RQ', 'P', 'X', 'A')
+
 
 class Profile:
     @staticmethod
@@ -6,6 +14,7 @@ class Profile:
         """Fetches a single user profile by their UUID."""
         response = supabase_admin.table("profiles").select("*").eq("id", user_id).single().execute()
         return response.data
+
 
 class Course:
     @staticmethod
@@ -15,10 +24,24 @@ class Course:
         return response.data
 
     @staticmethod
+    def get_lo_ids_for_class(class_id):
+        """Return a list of learning-objective IDs belonging to this class."""
+        resp = supabase_admin.table("learning_objectives").select("id").eq("class_id", class_id).execute()
+        return [lo['id'] for lo in (resp.data or []) if lo.get('id')]
+
+    @staticmethod
+    def get_learning_objectives(class_id):
+        """Return learning objectives (id, name, vendor_code) for a class."""
+        resp = supabase_admin.table("learning_objectives") \
+            .select("id, name, vendor_code") \
+            .eq("class_id", class_id) \
+            .execute()
+        return resp.data or []
+
+    @staticmethod
     def get_full_class_data(class_id):
         """Fetches a class, its learning objectives, and all enrolled students with their grades."""
         try:
-            # Query class with basic data
             response = supabase_admin.table("classes").select(
                 "id, name, semester, learning_objectives(id, name, vendor_code, required_ms)"
             ).eq("id", class_id).execute()
@@ -28,69 +51,66 @@ class Course:
 
             class_data = response.data[0]
 
-            # Fetch auto-convert and mastery settings separately so a missing
-            # column doesn't break the entire class load.
+            # Fetch optional class-level settings in a single query.
+            # If any column doesn't exist yet, fall back to defaults.
             try:
-                ac_resp = supabase_admin.table("classes").select(
-                    "auto_convert_m, min_masteries, num_learning_objectives"
+                settings_resp = supabase_admin.table("classes").select(
+                    "auto_convert_m, min_masteries, num_learning_objectives, "
+                    "hw_passes_enabled, hw_passes_allowed"
                 ).eq("id", class_id).execute()
-                if ac_resp.data:
-                    class_data.update(ac_resp.data[0])
+                if settings_resp.data:
+                    class_data.update(settings_resp.data[0])
             except Exception:
                 class_data.setdefault('auto_convert_m', False)
                 class_data.setdefault('min_masteries', 2)
                 class_data.setdefault('num_learning_objectives', 0)
-
-            # Fetch hw_passes fields separately so a missing column doesn't
-            # break the entire class load.
-            try:
-                hp_resp = supabase_admin.table("classes").select(
-                    "hw_passes_enabled, hw_passes_allowed"
-                ).eq("id", class_id).execute()
-                if hp_resp.data:
-                    class_data.update(hp_resp.data[0])
-            except Exception:
                 class_data.setdefault('hw_passes_enabled', False)
                 class_data.setdefault('hw_passes_allowed', 2)
 
-            # Fetch enrollments with profiles separately
+            # Fetch enrollments with profiles
             try:
                 enrollments_resp = supabase_admin.table("enrollments").select(
                     "id, class_id, student_id, muted, profiles(id, full_name, role)"
                 ).eq("class_id", class_id).execute()
                 enrollments = enrollments_resp.data or []
             except Exception:
-                # Fallback if 'muted' column doesn't exist yet
                 enrollments_resp = supabase_admin.table("enrollments").select(
                     "id, class_id, student_id, profiles(id, full_name, role)"
                 ).eq("class_id", class_id).execute()
                 enrollments = enrollments_resp.data or []
                 for e in enrollments:
                     e['muted'] = False
-            
-            # For each enrollment, fetch the student's grades
+
+            # Batch-fetch grades for ALL enrolled students in one query (fixes N+1)
+            student_ids = [
+                e['profiles']['id']
+                for e in enrollments
+                if isinstance(e.get('profiles'), dict) and e['profiles'].get('id')
+            ]
+            grades_by_student = {}
+            if student_ids:
+                try:
+                    grades_resp = supabase_admin.table("grades").select(
+                        "student_id, learning_objective_id, top_score, second_score, "
+                        "learning_objectives(id, name, required_ms)"
+                    ).in_("student_id", student_ids).execute()
+                    for g in (grades_resp.data or []):
+                        grades_by_student.setdefault(g['student_id'], []).append(g)
+                except Exception as e:
+                    logger.error("Error batch-loading grades: %s", e)
+
             for enrollment in enrollments:
                 profile = enrollment.get('profiles')
-                if profile:
-                    student_id = profile.get('id')
-                    if student_id:
-                        try:
-                            grades_resp = supabase_admin.table("grades").select(
-                                "learning_objective_id, top_score, second_score, learning_objectives(id, name, required_ms)"
-                            ).eq("student_id", student_id).execute()
-                            profile['grades'] = grades_resp.data or []
-                        except Exception as e:
-                            print(f"Error loading grades for student {student_id}: {e}")
-                            profile['grades'] = []
-            
+                if isinstance(profile, dict) and profile.get('id'):
+                    profile['grades'] = grades_by_student.get(profile['id'], [])
+
             class_data['enrollments'] = enrollments
             return class_data
-            
+
         except Exception as e:
-            import traceback
-            print(f"Database error in get_full_class_data: {e}")
-            traceback.print_exc()
+            logger.error("Database error in get_full_class_data: %s", e, exc_info=True)
             return None
+
 
 class Grade:
     @staticmethod
@@ -135,8 +155,8 @@ class Grade:
         return None
 
     @staticmethod
-    def update_score(student_id, lo_id, top_score, second_score=None):
-        """Upserts a grade for a student and a specific learning objective.
+    def update_score(student_id, lo_id, top_score, second_score=None, assignment_id=None):
+        """Upserts a grade for a student, learning objective, and assignment.
 
         The database enforces that scores are one of the mastery codes (e.g. M, R, P, X).
         When we receive numeric scores (e.g. from OCR), we map them to a mastery code
@@ -153,10 +173,12 @@ class Grade:
         }
         if normalized_second is not None:
             data["second_score"] = normalized_second
+        if assignment_id is not None:
+            data["assignment_id"] = assignment_id
 
         # Ensure `upsert` updates existing grades instead of throwing on duplicates.
         # Supabase requires specifying the conflict target for proper behavior.
-        return supabase_admin.table("grades").upsert(data, on_conflict="student_id,learning_objective_id").execute()
+        return supabase_admin.table("grades").upsert(data, on_conflict="student_id,learning_objective_id,assignment_id").execute()
 
 class Student:
     @staticmethod

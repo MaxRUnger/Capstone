@@ -104,9 +104,9 @@
         <div class="assignment-content mt-4 hidden">
           <div class="space-y-4">
             <div class="text-sm text-slate-600 dark:text-slate-400">
-              <strong>Homework Group:</strong> {{ assignment.homework_group }}<br>
-              {% if assignment.date_returned %}<strong>Date Returned:</strong> {{ assignment.date_returned }}<br>{% endif %}
-              {% if assignment.revision_due %}<strong>Revision Due:</strong> {{ assignment.revision_due }}<br>{% endif %}
+              <span class="mark-only"><strong>Homework Group:</strong> {{ assignment.homework_group }}<br></span>
+              <span class="mark-only">{% if assignment.date_returned %}<strong>Date Returned:</strong> {{ assignment.date_returned }}<br>{% endif %}</span>
+              <span class="mark-only">{% if assignment.revision_due %}<strong>Revision Due:</strong> {{ assignment.revision_due }}<br>{% endif %}</span>
             </div>
             {% if assignment.assignment_objectives %}
             <div>
@@ -335,5 +335,10 @@ function addStudent(event) {
     alert('Error: ' + error);
   });
 }
+</script>
+<script>
+document.querySelectorAll('.mark-only').forEach(el => {
+  if ('{{ instructor_mode }}' === 'shelbi') el.style.display = 'none';
+});
 </script>
 {% endblock %}

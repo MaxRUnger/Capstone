@@ -1,10 +1,50 @@
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session # type: ignore
+import logging
+from functools import wraps
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session  # type: ignore
 from app.authentication import supabase, supabase_admin
-from app.models import Course, Grade, Student, Profile, Homework
+from app.models import Course, Grade, Student
 from app.dao.ocr_analyzer import get_ocr_analyzer
 from uuid import uuid4
 
+logger = logging.getLogger(__name__)
+
 main_bp = Blueprint('main', __name__, template_folder='templates')
+
+DEFAULT_REQUIRED_MS = 2
+
+# ============================================================================
+# AUTH DECORATORS
+# ============================================================================
+
+def login_required(f):
+    """Redirect to login page if the user has no active session."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user_id' not in session:
+            return redirect(url_for('main.login_page'))
+        return f(*args, **kwargs)
+    return decorated
+
+
+def api_login_required(f):
+    """Return 401 JSON if the user has no active session (for API routes)."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user_id' not in session:
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+
+def api_instructor_required(f):
+    """Return 401 JSON if the user is not a logged-in instructor."""
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if 'user_id' not in session or session.get('role') != 'instructor':
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
 
 # ============================================================================
 # HELPER FUNCTIONS
@@ -59,7 +99,7 @@ def ensure_profile_exists(user_id, full_name=None, role='instructor'):
     try:
         supabase_admin.table("profiles").upsert(data, on_conflict="id").execute()
     except Exception:
-        pass  # Silently continue if upsert fails — profile may already exist
+        logger.debug("Profile upsert skipped for %s — may already exist", user_id)
 
 
 def normalize_profile(enrollment):
@@ -82,20 +122,34 @@ def get_free_passes_remaining(student_id, class_id, passes_allowed):
         return passes_allowed
 
 
+def _batch_get_free_passes(student_ids, class_id):
+    """Batch-fetch passes_used for a list of students. Returns {student_id: passes_used}."""
+    if not student_ids:
+        return {}
+    try:
+        resp = supabase_admin.table("free_passes") \
+            .select("student_id, passes_used") \
+            .eq("class_id", class_id) \
+            .in_("student_id", student_ids) \
+            .execute()
+        return {r['student_id']: r['passes_used'] for r in (resp.data or [])}
+    except Exception:
+        return {}
+
+
 def _load_students_from_grades(class_id):
     """Return a list of students (with grades) by scanning grades for this class."""
     try:
-        # Filter grades by the class via the related learning objective.
-        # This reduces payload size and avoids server disconnects when grades are large.
         grades_result = supabase_admin.table("grades") \
             .select("student_id, learning_objective_id, top_score, second_score, learning_objectives(id, name, vendor_code, class_id, required_ms)") \
             .eq("learning_objectives.class_id", class_id) \
             .execute()
         grades = grades_result.data or []
     except Exception as e:
-        print(f"Error loading grades for class {class_id}: {e}")
+        logger.error("Error loading grades for class %s: %s", class_id, e)
         grades = []
 
+    # Collect unique student IDs from grade rows
     students_by_id = {}
     for g in grades:
         lo = g.get('learning_objectives') or {}
@@ -104,34 +158,122 @@ def _load_students_from_grades(class_id):
         student_id = g.get('student_id')
         if not student_id:
             continue
-
         if student_id not in students_by_id:
-            # Ensure profile exists so the student shows up everywhere
-            ensure_profile_exists(student_id, full_name=student_id, role='student')
-            # Attempt to fetch a nicer name if it exists
-            try:
-                prof_res = supabase_admin.table("profiles").select("full_name").eq("id", student_id).single().execute()
-                name = (prof_res.data or {}).get('full_name') or student_id
-            except Exception:
-                name = student_id
-            students_by_id[student_id] = {
-                'id': student_id,
-                'name': name,
-                'learning_objectives': []
-            }
+            students_by_id[student_id] = {'id': student_id, 'name': student_id, 'raw_grades': []}
+        students_by_id[student_id]['raw_grades'].append(g)
 
-        students_by_id[student_id]['learning_objectives'].append({
-            'learning_objective_id': str(g.get('learning_objective_id')) if g.get('learning_objective_id') is not None else None,
-            'name': lo.get('name'),
-            'vendor_code': lo.get('vendor_code'),
-            'top_score': g.get('top_score'),
-            'second_score': g.get('second_score'),
-            'm_count': (1 if g.get('top_score') == 'M' else 0) + (1 if g.get('second_score') == 'M' else 0),
-            'required_ms': lo.get('required_ms') or 2,
-            'is_passed': ((1 if g.get('top_score') == 'M' else 0) + (1 if g.get('second_score') == 'M' else 0)) >= (lo.get('required_ms') or 2)
-        })
+    # Batch-fetch profile names for all students in one query (fixes N+1)
+    if students_by_id:
+        unique_ids = list(students_by_id.keys())
+        for sid in unique_ids:
+            ensure_profile_exists(sid, full_name=sid, role='student')
+        try:
+            profiles_resp = supabase_admin.table("profiles") \
+                .select("id, full_name").in_("id", unique_ids).execute()
+            for p in (profiles_resp.data or []):
+                pid = p.get('id')
+                if pid in students_by_id:
+                    students_by_id[pid]['name'] = p.get('full_name') or pid
+        except Exception:
+            pass  # Names fall back to student_id
+
+    # Build lo_lookup from the LO data embedded in the grade rows
+    lo_lookup = {}
+    for g in grades:
+        lo = g.get('learning_objectives') or {}
+        lo_id = str(lo.get('id')) if lo.get('id') else None
+        if lo_id and lo_id not in lo_lookup:
+            lo_lookup[lo_id] = lo
+
+    # Aggregate per-LO across assignments for each student
+    for student in students_by_id.values():
+        student['learning_objectives'] = _aggregate_lo_grades(student.pop('raw_grades'), lo_lookup)
 
     return list(students_by_id.values())
+
+
+def _aggregate_lo_grades(raw_grades, lo_lookup):
+    """Aggregate grades per LO across assignments.
+
+    With per-assignment grading, a student may have multiple grade rows for the
+    same LO (one per assignment).  This helper groups them and counts total M's
+    so the student detail page can show e.g. "2 / 2 Ms".
+    """
+    lo_grades = {}
+    for g in (raw_grades or []):
+        lo_id = str(g.get('learning_objective_id')) if g.get('learning_objective_id') else None
+        if not lo_id:
+            continue
+        if lo_id not in lo_grades:
+            lo_info = lo_lookup.get(lo_id, {})
+            lo_grades[lo_id] = {
+                'learning_objective_id': lo_id,
+                'name': lo_info.get('name', 'Unknown LO'),
+                'vendor_code': lo_info.get('vendor_code', ''),
+                'required_ms': lo_info.get('required_ms') or DEFAULT_REQUIRED_MS,
+                'm_count': 0,
+                'grades_list': [],
+            }
+        top = g.get('top_score')
+        if top == 'M':
+            lo_grades[lo_id]['m_count'] += 1
+        lo_grades[lo_id]['grades_list'].append(top)
+
+    results = []
+    for lo in lo_grades.values():
+        lo['is_passed'] = lo['m_count'] >= lo['required_ms']
+        lo['top_score'] = lo['grades_list'][0] if lo['grades_list'] else None
+        lo['second_score'] = lo['grades_list'][1] if len(lo['grades_list']) > 1 else None
+        results.append(lo)
+    return results
+
+
+def _process_enrollments(class_data):
+    """Extract students from enrollment data, aggregating grades per LO.
+
+    Returns:
+        (active_students, all_students, lo_lookup)
+        - active_students: non-muted students with aggregated grades
+        - all_students: all students (including muted) with aggregated grades
+        - lo_lookup: {str(lo_id): lo_dict}
+    """
+    lo_lookup = {str(lo.get('id')): lo for lo in class_data.get('learning_objectives', [])}
+    active_students = []
+    all_students = []
+    for e in class_data.get('enrollments', []):
+        prof = e.get('profiles', {})
+        if not prof or not isinstance(prof, dict):
+            continue
+        prof['learning_objectives'] = _aggregate_lo_grades(
+            prof.get('grades', []) or [], lo_lookup
+        )
+        if 'name' not in prof:
+            prof['name'] = prof.get('full_name', 'Unnamed Student')
+        prof['muted'] = e.get('muted', False)
+        all_students.append(prof)
+        if not prof['muted']:
+            active_students.append(prof)
+    return active_students, all_students, lo_lookup
+
+
+def load_assignments_for_class(class_id, desc=False):
+    """Load assignments with linked LOs for a class.
+
+    Centralizes the repeated assignment query used by multiple route handlers.
+
+    Returns:
+        list of assignment dicts (empty list on error).
+    """
+    try:
+        assignments_result = supabase_admin.table("assignments") \
+            .select("*, assignment_objectives(learning_objective_id, learning_objectives(id, name, vendor_code))") \
+            .eq("class_id", class_id) \
+            .order("created_at", desc=desc) \
+            .execute()
+        return assignments_result.data or []
+    except Exception as e:
+        logger.error("Error loading assignments for class %s: %s", class_id, e)
+        return []
 
 
 # ============================================================================
@@ -151,6 +293,16 @@ def signup_page():
 def logout():
     session.clear()
     return redirect(url_for('main.login_page'))
+
+@main_bp.route("/api/set-instructor-mode", methods=["POST"])
+@api_login_required
+def set_instructor_mode():
+    data = request.get_json() or {}
+    mode = data.get('mode')
+    if mode not in ('mark', 'shelbi'):
+        return jsonify({"success": False, "error": "Invalid mode"}), 400
+    session['instructor_mode'] = mode
+    return jsonify({"success": True, "mode": mode})
 
 @main_bp.route("/api/login", methods=["POST"])
 def login():
@@ -221,31 +373,22 @@ def signup():
 # ============================================================================
 
 @main_bp.route("/student/dashboard")
+@login_required
 def student_dashboard():
-    if 'user_id' not in session: 
-        return redirect(url_for('main.login_page'))
-    
     data = Student.get_dashboard_data(session['user_id'])
     
     auto_convert_m = False
     class_name = None
     if data:
-        cleaned_grades = []
-        for g in data.get('grades', []):
-            lo_data = g.get('learning_objectives', {})
-            top = g.get('top_score')
-            second = g.get('second_score')
-            m_count = (1 if top == 'M' else 0) + (1 if second == 'M' else 0)
-            required = lo_data.get('required_ms', 2) or 2
-            cleaned_grades.append({
-                'name': lo_data.get('name', 'Unknown LO'),
-                'top_score': top,
-                'second_score': second,
-                'm_count': m_count,
-                'required_ms': required,
-                'is_passed': m_count >= required
-            })
-        data['learning_objectives'] = cleaned_grades
+        # Build lo_lookup from embedded learning_objectives on each grade
+        raw_grades = data.get('grades', []) or []
+        lo_lookup = {}
+        for g in raw_grades:
+            lo = g.get('learning_objectives') or {}
+            lo_id = str(lo.get('id')) if lo.get('id') else None
+            if lo_id and lo_id not in lo_lookup:
+                lo_lookup[lo_id] = lo
+        data['learning_objectives'] = _aggregate_lo_grades(raw_grades, lo_lookup)
 
         # Get class settings for auto-convert
         enrollments = data.get('enrollments', [])
@@ -258,8 +401,9 @@ def student_dashboard():
     return render_template("student_view.html", student=data, auto_convert_m=auto_convert_m, class_name=class_name)
 
 @main_bp.route("/instructor/dashboard")
+@login_required
 def instructor_dashboard():
-    if 'user_id' not in session or session.get('role') != 'instructor':
+    if session.get('role') != 'instructor':
         return redirect(url_for('main.login_page'))
     db_classes = Course.get_all_for_instructor(session['user_id'])
     return render_template("instructor_select_class.html", classes=db_classes)
@@ -269,65 +413,16 @@ def instructor_dashboard():
 # ============================================================================
 
 @main_bp.route("/class/<class_id>")
+@login_required
 def class_detail(class_id):
-    if 'user_id' not in session: 
-        return redirect(url_for('main.login_page'))
-    
     class_data = Course.get_full_class_data(class_id)
     if not class_data:
-        print(f"[ERROR] class_detail: get_full_class_data returned None for class_id={class_id}")
+        logger.error("class_detail: get_full_class_data returned None for class_id=%s", class_id)
         return redirect(url_for('main.instructor_dashboard'))
 
-    raw_enrollments = class_data.get('enrollments', [])
-    all_students_for_modal = []
-    students_for_template = []
-    
-    for enrollment in raw_enrollments:
-        # profiles is now the expanded profile object
-        student_profile = enrollment.get('profiles', {})
-        if not student_profile:
-            continue
-            
-        # Ensure student_profile is a dict, not just an ID
-        if not isinstance(student_profile, dict):
-            continue
-            
-        student_profile['learning_objectives'] = []
-        for g in student_profile.get('grades', []):
-            lo_data = g.get('learning_objectives', {})
-            top = g.get('top_score')
-            second = g.get('second_score')
-            m_count = (1 if top == 'M' else 0) + (1 if second == 'M' else 0)
-            required = (lo_data.get('required_ms') or 2)
-            student_profile['learning_objectives'].append({
-                'learning_objective_id': str(g.get('learning_objective_id')) if g.get('learning_objective_id') is not None else None,
-                'name': lo_data.get('name', 'Unknown LO'),
-                'top_score': top,
-                'second_score': second,
-                'm_count': m_count,
-                'required_ms': required,
-                'is_passed': m_count >= required
-            })
-        if 'name' not in student_profile:
-            student_profile['name'] = student_profile.get('full_name', 'Unnamed Student')
-        student_profile['muted'] = enrollment.get('muted', False)
-        all_students_for_modal.append(student_profile)
-        if not student_profile['muted']:
-            students_for_template.append(student_profile)
-
+    students_for_template, all_students_for_modal, _ = _process_enrollments(class_data)
     summary = organize_by_learning_objectives(students_for_template, class_data.get('learning_objectives', []))
-    
-    # Load assignments for the assignments view
-    try:
-        assignments_result = supabase_admin.table("assignments") \
-            .select("*, assignment_objectives(learning_objective_id, learning_objectives(id, name, vendor_code))") \
-            .eq("class_id", class_id) \
-            .order("created_at") \
-            .execute()
-        assignments = assignments_result.data or []
-    except Exception as e:
-        print(f"Error loading assignments for class detail: {e}")
-        assignments = []
+    assignments = load_assignments_for_class(class_id)
     
     return render_template('class_detail.html', 
                             class_id=class_id, 
@@ -340,10 +435,8 @@ def class_detail(class_id):
                             min_masteries=class_data.get('min_masteries', 2))
 
 @main_bp.route("/class/<class_id>/add_student", methods=["POST"])
+@api_instructor_required
 def add_student(class_id):
-    if 'user_id' not in session or session.get('role') != 'instructor':
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
-    
     data = request.get_json()
     email = data.get('email', '').strip()
     name = data.get('name', '').strip()
@@ -378,60 +471,35 @@ def add_student(class_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 @main_bp.route("/class/<class_id>/students/<student_id>/delete", methods=["POST"])
+@api_instructor_required
 def delete_student_from_class(class_id, student_id):
-    if 'user_id' not in session or session.get('role') != 'instructor':
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
-
     try:
-        # Remove enrollment
+        # Remove enrollment for this class only
         supabase_admin.table("enrollments").delete().eq("class_id", class_id).eq("student_id", student_id).execute()
 
-        # Remove all grades for this student
-        supabase_admin.table("grades").delete().eq("student_id", student_id).execute()
+        # Remove grades scoped to this class
+        lo_ids = Course.get_lo_ids_for_class(class_id)
+        if lo_ids:
+            supabase_admin.table("grades").delete().eq("student_id", student_id).in_("learning_objective_id", lo_ids).execute()
 
-        # Remove the profile itself
-        supabase_admin.table("profiles").delete().eq("id", student_id).execute()
+        # Remove homework scores for this class
+        supabase_admin.table("homework_scores").delete().eq("student_id", student_id).eq("class_id", class_id).execute()
 
         return jsonify({"success": True})
     except Exception as e:
-        print(f"Error deleting student {student_id} from class {class_id}: {e}")
+        logger.error("Error deleting student %s from class %s: %s", student_id, class_id, e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 @main_bp.route("/class/<class_id>/students")
+@login_required
 def class_students(class_id):
-    if 'user_id' not in session: return redirect(url_for('main.login_page'))
     class_data = Course.get_full_class_data(class_id)
     
     if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
 
-    students = []
-    for e in class_data.get('enrollments', []):
-        prof = e.get('profiles', {})
-        # Compute per-LO pass status based on required_ms
-        cleaned_los = []
-        for g in prof.get('grades', []):
-            lo_data = g.get('learning_objectives', {})
-            top = g.get('top_score')
-            second = g.get('second_score')
-            m_count = (1 if top == 'M' else 0) + (1 if second == 'M' else 0)
-            required = (lo_data.get('required_ms') or 2)
-            cleaned_los.append({
-                'name': lo_data.get('name', 'Unknown LO'),
-                'top_score': top,
-                'second_score': second,
-                'm_count': m_count,
-                'required_ms': required,
-                'is_passed': m_count >= required
-            })
-        prof['learning_objectives'] = cleaned_los
-        if 'name' not in prof:
-            prof['name'] = prof.get('full_name', 'Unnamed Student')
-        if not e.get('muted', False):
-            students.append(prof)
+    students, _, _ = _process_enrollments(class_data)
 
-    # If the teacher hasn't enrolled students yet, fall back to grades data
-    # (useful when grades are imported before enrollments exist).
     if not students:
         students = _load_students_from_grades(class_id)
 
@@ -441,14 +509,10 @@ def class_students(class_id):
                             students=students)
 
 @main_bp.route("/class/<class_id>/delete", methods=["POST"])
+@api_instructor_required
 def delete_class(class_id):
-    if 'user_id' not in session or session.get('role') != 'instructor':
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
-
     try:
-        # Remove associated learning objectives and their related data
-        lo_result = supabase_admin.table("learning_objectives").select("id").eq("class_id", class_id).execute()
-        lo_ids = [lo.get('id') for lo in (lo_result.data or []) if lo.get('id')]
+        lo_ids = Course.get_lo_ids_for_class(class_id)
 
         if lo_ids:
             supabase_admin.table("assignment_objectives").delete().in_("learning_objective_id", lo_ids).execute()
@@ -462,17 +526,17 @@ def delete_class(class_id):
 
         return redirect(url_for('main.instructor_dashboard'))
     except Exception as e:
-        print(f"Error deleting class {class_id}: {e}")
+        logger.error("Error deleting class %s: %s", class_id, e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 @main_bp.route("/class/<class_id>/students/<student_id>")
+@login_required
 def class_student_detail(class_id, student_id):
-    if 'user_id' not in session:
-        return redirect(url_for('main.login_page'))
-
     class_data = Course.get_full_class_data(class_id)
     if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
+
+    lo_lookup = {str(lo.get('id')): lo for lo in class_data.get('learning_objectives', [])}
 
     student = None
     for e in class_data.get('enrollments', []):
@@ -480,30 +544,14 @@ def class_student_detail(class_id, student_id):
             continue
         prof = e.get('profiles', {})
         if prof.get('id') == student_id:
-            # Compute per-LO pass status based on required_ms
-            cleaned_los = []
-            for g in prof.get('grades', []):
-                lo_data = g.get('learning_objectives', {})
-                top = g.get('top_score')
-                second = g.get('second_score')
-                m_count = (1 if top == 'M' else 0) + (1 if second == 'M' else 0)
-                required = (lo_data.get('required_ms') or 2)
-                cleaned_los.append({
-                    'name': lo_data.get('name', 'Unknown LO'),
-                    'top_score': top,
-                    'second_score': second,
-                    'm_count': m_count,
-                    'required_ms': required,
-                    'is_passed': m_count >= required
-                })
-            prof['learning_objectives'] = cleaned_los
+            # Aggregate grades per LO across assignments
+            prof['learning_objectives'] = _aggregate_lo_grades(prof.get('grades', []), lo_lookup)
             if 'name' not in prof:
                 prof['name'] = prof.get('full_name', 'Unnamed Student')
             student = prof
             break
 
     if not student:
-        # Fallback to grades data when there is no enrollment
         for s in _load_students_from_grades(class_id):
             if s.get('id') == student_id:
                 student = s
@@ -515,34 +563,19 @@ def class_student_detail(class_id, student_id):
     return render_template("class_student_detail.html", class_id=class_id, class_name=class_data.get('name'), student=student)
 
 @main_bp.route("/class/<class_id>/assignments")
+@login_required
 def class_assignments(class_id):
-    if 'user_id' not in session: return redirect(url_for('main.login_page'))
     class_data = Course.get_full_class_data(class_id)
     
     if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
 
-    # Load assignments with their linked LOs
-    try:
-        assignments_result = supabase_admin.table("assignments") \
-            .select("*, assignment_objectives(learning_objective_id, learning_objectives(id, name, vendor_code))") \
-            .eq("class_id", class_id) \
-            .order("created_at") \
-            .execute()
-        assignments = assignments_result.data or []
-    except Exception as e:
-        print(f"Error loading assignments: {e}")
-        assignments = []
+    assignments = load_assignments_for_class(class_id)
 
-    # Load all LOs for the class (for assignment)
     try:
-        los_result = supabase_admin.table("learning_objectives") \
-            .select("id, name, vendor_code") \
-            .eq("class_id", class_id) \
-            .execute()
-        all_los = los_result.data or []
+        all_los = Course.get_learning_objectives(class_id)
     except Exception as e:
-        print(f"Error loading LOs: {e}")
+        logger.error("Error loading LOs for class %s: %s", class_id, e)
         all_los = []
 
     return render_template("class_assignments.html", 
@@ -551,27 +584,12 @@ def class_assignments(class_id):
                             assignments=assignments,
                             all_los=all_los)
 
-@main_bp.route("/class/<class_id>/assignments/<assignment_id>/delete", methods=["POST"])
-def delete_assignment(class_id, assignment_id):
-    if 'user_id' not in session or session.get('role') != 'instructor':
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
-    
-    try:
-        # Delete assignment_objectives first
-        supabase_admin.table("assignment_objectives").delete().eq("assignment_id", assignment_id).execute()
-        # Delete assignment
-        supabase_admin.table("assignments").delete().eq("id", assignment_id).eq("class_id", class_id).execute()
-        return jsonify({"success": True})
-    except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
-
 @main_bp.route("/class/<class_id>/create_assignment", methods=["POST"])
+@api_instructor_required
 def create_assignment(class_id):
-    if 'user_id' not in session or session.get('role') != 'instructor':
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
     
     data = request.get_json() or {}
-    print(f"[DEBUG] create_assignment payload: {data}")
+    logger.debug("create_assignment payload: %s", data)
 
     # Validate required fields
     name = (data.get('name') or '').strip()
@@ -590,24 +608,22 @@ def create_assignment(class_id):
             "revision_due": data.get('revision_due')
         }).execute()
         
-        # Link selected LOs to this assignment
+        # Link selected LOs to this assignment (batch insert)
         if result.data:
             assignment_id = result.data[0]['id']
-            for lo_id in data.get('selected_los', []):
-                supabase_admin.table("assignment_objectives").insert({
-                    "assignment_id": assignment_id,
-                    "learning_objective_id": lo_id
-                }).execute()
+            ao_rows = [{"assignment_id": assignment_id, "learning_objective_id": lo_id}
+                       for lo_id in data.get('selected_los', []) if lo_id]
+            if ao_rows:
+                supabase_admin.table("assignment_objectives").insert(ao_rows).execute()
         
         return jsonify({"success": True})
     except Exception as e:
-        print(f"[ERROR] create_assignment failed: {e}")
+        logger.error("create_assignment failed: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 @main_bp.route("/class/<class_id>/assignments/<assignment_id>/update", methods=["POST", "PUT"])
+@api_instructor_required
 def update_assignment(class_id, assignment_id):
-    if 'user_id' not in session or session.get('role') != 'instructor':
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
     
     data = request.get_json()
     try:
@@ -619,24 +635,20 @@ def update_assignment(class_id, assignment_id):
             "revision_due": data.get('revision_due')
         }).eq("id", assignment_id).eq("class_id", class_id).execute()
         
-        # Update linked LOs
-        # First delete existing
+        # Update linked LOs — delete existing, batch insert new
         supabase_admin.table("assignment_objectives").delete().eq("assignment_id", assignment_id).execute()
-        # Then insert new
-        for lo_id in data.get('selected_los', []):
-            supabase_admin.table("assignment_objectives").insert({
-                "assignment_id": assignment_id,
-                "learning_objective_id": lo_id
-            }).execute()
+        ao_rows = [{"assignment_id": assignment_id, "learning_objective_id": lo_id}
+                   for lo_id in data.get('selected_los', []) if lo_id]
+        if ao_rows:
+            supabase_admin.table("assignment_objectives").insert(ao_rows).execute()
         
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
-@main_bp.route("/class/<class_id>/delete_assignment/<assignment_id>", methods=["POST"], endpoint='delete_assignment_alt')
-def delete_assignment_alt(class_id, assignment_id):
-    if 'user_id' not in session or session.get('role') != 'instructor':
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
+@main_bp.route("/class/<class_id>/delete_assignment/<assignment_id>", methods=["POST"])
+@api_instructor_required
+def delete_assignment(class_id, assignment_id):
     
     try:
         # First delete assignment_objectives links
@@ -648,9 +660,8 @@ def delete_assignment_alt(class_id, assignment_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 @main_bp.route("/class/<class_id>/delete_lo/<lo_id>", methods=["POST"])
+@api_instructor_required
 def delete_lo(class_id, lo_id):
-    if 'user_id' not in session or session.get('role') != 'instructor':
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
     
     try:
         # First delete assignment_objectives links
@@ -665,59 +676,21 @@ def delete_lo(class_id, lo_id):
 
 
 @main_bp.route("/class/<class_id>/reports")
+@login_required
 def class_reports(class_id):
-    if 'user_id' not in session: 
-        return redirect(url_for('main.login_page'))
     class_data = Course.get_full_class_data(class_id)
     
     if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
 
-    students = []
+    students, _, _ = _process_enrollments(class_data)
     learning_objectives = class_data.get('learning_objectives', [])
-    lo_lookup = {str(lo.get('id')): lo for lo in learning_objectives}
-
-    for e in class_data.get('enrollments', []):
-        prof = e.get('profiles', {})
-        enriched_los = []
-        for grade in prof.get('grades', []) or []:
-            lo_id = str(grade.get('learning_objective_id')) if grade.get('learning_objective_id') is not None else None
-            lo_info = lo_lookup.get(lo_id) if lo_id is not None else None
-            top = grade.get('top_score')
-            second = grade.get('second_score')
-            m_count = (1 if top == 'M' else 0) + (1 if second == 'M' else 0)
-            required = (lo_info.get('required_ms') or 2) if lo_info else 2
-            enriched = {
-                'learning_objective_id': lo_id,
-                'top_score': top,
-                'second_score': second,
-                'name': lo_info.get('name') if lo_info else None,
-                'm_count': m_count,
-                'required_ms': required,
-                'is_passed': m_count >= required
-            }
-            enriched_los.append(enriched)
-
-        prof['learning_objectives'] = enriched_los
-        if 'name' not in prof:
-            prof['name'] = prof.get('full_name', 'Unnamed Student')
-        if not e.get('muted', False):
-            students.append(prof)
 
     if not students:
         students = _load_students_from_grades(class_id)
 
     # Load assignments with their linked LOs and dates
-    try:
-        assignments_result = supabase_admin.table("assignments") \
-            .select("*, assignment_objectives(learning_objective_id, learning_objectives(id, name, vendor_code))") \
-            .eq("class_id", class_id) \
-            .order("created_at", desc=True) \
-            .execute()
-        assignments = assignments_result.data or []
-    except Exception as e:
-        print(f"Error loading assignments for reports: {e}")
-        assignments = []
+    assignments = load_assignments_for_class(class_id, desc=True)
 
     return render_template("class_reports.html", 
                             class_id=class_id, 
@@ -727,10 +700,8 @@ def class_reports(class_id):
                             assignments=assignments)
 
 @main_bp.route("/class/<class_id>/student/<student_id>/history")
+@login_required
 def student_history(class_id, student_id):
-    if 'user_id' not in session:
-        return redirect(url_for('main.login_page'))
-    
     class_data = Course.get_full_class_data(class_id)
     if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
@@ -742,7 +713,7 @@ def student_history(class_id, student_id):
         ).eq("class_id", class_id).eq("student_id", student_id).single().execute()
         enrollment_data = enrollment.data
     except Exception as e:
-        print(f"Error loading student enrollment: {e}")
+        logger.error("Error loading student enrollment: %s", e)
         return redirect(url_for('main.class_reports', class_id=class_id))
 
     if not enrollment_data:
@@ -752,14 +723,14 @@ def student_history(class_id, student_id):
     student_name = profile.get('full_name', 'Unknown Student')
     profile_id = profile.get('id')
 
-    # Get all grades for this student (they're linked by profile/student_id)
+    # Get all grades for this student with assignment names
     try:
         grades_resp = supabase_admin.table("grades").select(
-            "*"
+            "*, assignments(name)"
         ).eq("student_id", profile_id).execute()
         all_grades = grades_resp.data or []
     except Exception as e:
-        print(f"Error loading grades: {e}")
+        logger.error("Error loading grades: %s", e)
         all_grades = []
     
     # Get all learning objectives for the class
@@ -795,28 +766,17 @@ def student_history(class_id, student_id):
                           learning_objectives=lo_grade_data)
 
 @main_bp.route("/class/<class_id>/speed_grader", endpoint='class_speed_grader')
+@login_required
 def class_speed_grader(class_id):
-    if 'user_id' not in session:
-        return redirect(url_for('main.login_page'))
     class_data = Course.get_full_class_data(class_id)
 
     if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
 
-    hw_passes_enabled = class_data.get('hw_passes_enabled', False)
-    hw_passes_allowed = class_data.get('hw_passes_allowed', 2)
+    hw_passes_allowed = 2
 
     # Load assignments with their linked LOs
-    try:
-        assignments_result = supabase_admin.table("assignments") \
-            .select("*, assignment_objectives(learning_objective_id, learning_objectives(id, name, vendor_code))") \
-            .eq("class_id", class_id) \
-            .order("created_at") \
-            .execute()
-        assignments = assignments_result.data or []
-    except Exception as e:
-        print(f"Error loading assignments: {e}")
-        assignments = []
+    assignments = load_assignments_for_class(class_id)
 
     raw_enrollments = class_data.get('enrollments', [])
     lo_lookup = {str(lo.get('id')): lo for lo in class_data.get('learning_objectives', [])}
@@ -825,57 +785,27 @@ def class_speed_grader(class_id):
         prof = normalize_profile(enrollment)
         if not prof:
             continue
-        # Enrich grades with top-level name so Jinja selectattr works
-        enriched_los = []
-        for g in prof.get('grades', []) or []:
-            lo_nested = g.get('learning_objectives') or {}
-            lo_id = str(g.get('learning_objective_id')) if g.get('learning_objective_id') is not None else None
-            lo_info = lo_lookup.get(lo_id) if lo_id else None
-            top = g.get('top_score')
-            second = g.get('second_score')
-            m_count = (1 if top == 'M' else 0) + (1 if second == 'M' else 0)
-            required = (lo_info.get('required_ms') or 2) if lo_info else 2
-            enriched_los.append({
-                'learning_objective_id': lo_id,
-                'top_score': top,
-                'second_score': second,
-                'name': lo_nested.get('name') or (lo_info.get('name') if lo_info else None),
-                'm_count': m_count,
-                'required_ms': required,
-                'is_passed': m_count >= required,
-            })
-        prof['learning_objectives'] = enriched_los
         if 'name' not in prof:
             prof['name'] = prof.get('full_name', 'Unnamed Student')
         if enrollment.get('muted', False):
             continue
-        if hw_passes_enabled:
-            prof['passes_remaining'] = get_free_passes_remaining(
-                prof['id'], class_id, hw_passes_allowed
-            )
-        else:
-            prof['passes_remaining'] = None
         students.append(prof)
 
     if not students:
         students = _load_students_from_grades(class_id)
+
+    # Batch-fetch free passes for all students in one query (fixes N+1)
+    if students:
+        student_ids = [s['id'] for s in students if s.get('id')]
+        passes_map = _batch_get_free_passes(student_ids, class_id)
         for prof in students:
-            if hw_passes_enabled:
-                prof['passes_remaining'] = get_free_passes_remaining(
-                    prof['id'], class_id, hw_passes_allowed
-                )
-            else:
-                prof['passes_remaining'] = None
+            prof['passes_remaining'] = max(0, hw_passes_allowed - passes_map.get(prof['id'], 0))
 
     lo_names = []
     try:
-        los_result = supabase_admin.table("learning_objectives") \
-            .select("id, name, vendor_code") \
-            .eq("class_id", class_id) \
-            .execute()
-        lo_names = los_result.data or []
+        lo_names = Course.get_learning_objectives(class_id)
     except Exception as e:
-        print(f"Error loading LOs: {e}")
+        logger.error("Error loading LOs: %s", e)
 
     return render_template("class_speed_grader.html",
                            class_id=class_id,
@@ -883,16 +813,13 @@ def class_speed_grader(class_id):
                            assignments=assignments,
                            students=students,
                            lo_names=lo_names,
-                           hw_passes_enabled=hw_passes_enabled,
                            hw_passes_allowed=hw_passes_allowed,
                            auto_convert_m=class_data.get('auto_convert_m', False),
                            min_masteries=class_data.get('min_masteries', 2))
 
 @main_bp.route("/class/<class_id>/update_grade", methods=["GET", "POST"], endpoint='upload_grades')
+@login_required
 def update_grade_handler(class_id):
-    if 'user_id' not in session: 
-        return redirect(url_for('main.login_page'))
-    
     class_data = Course.get_full_class_data(class_id)
 
     if not class_data:
@@ -914,31 +841,19 @@ def update_grade_handler(class_id):
         if not file or file.filename == '':
             return "No file selected", 400
 
-        print(f"File uploaded for class {class_id}: {file.filename}, assignment_id={assignment_id}")
+        logger.info("File uploaded for class %s: %s, assignment_id=%s", class_id, file.filename, assignment_id)
 
         # TODO: Parse and import grades from the uploaded file.
         # Currently we just redirect back to the class detail page.
         return redirect(url_for('main.class_detail', class_id=class_id))
 
-    # Load assignments for this class WITH their linked learning objectives
-    assignments = []
-    try:
-        assignments_result = supabase_admin.table("assignments") \
-            .select("id,name,assignment_objectives(learning_objective_id,learning_objectives(id,name,vendor_code))") \
-            .eq("class_id", class_id) \
-            .order("created_at") \
-            .execute()
-        assignments = assignments_result.data or []
-    except Exception as e:
-        print(f"Error loading assignments for upload page: {e}")
+    assignments = load_assignments_for_class(class_id)
 
     return render_template("update_grade.html", class_id=class_id, class_name=class_data.get('name'), assignments=assignments)
 
 @main_bp.route("/class/<class_id>/create_learning_objective", methods=["GET", "POST"], endpoint='create_learning_objective')
+@login_required
 def create_lo_handler(class_id):
-    if 'user_id' not in session:
-        return redirect(url_for('main.login_page'))
-
     class_data = Course.get_full_class_data(class_id)
     if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
@@ -966,14 +881,12 @@ def create_lo_handler(class_id):
                             "revision_due": revision_due
                         }).eq("id", assignment_id).execute()
                         
-                        # Delete existing links and re-insert
+                        # Delete existing links and batch re-insert
                         supabase_admin.table("assignment_objectives").delete().eq("assignment_id", assignment_id).execute()
-                        for lo_id in selected_lo_ids:
-                            if lo_id.strip():
-                                supabase_admin.table("assignment_objectives").insert({
-                                    "assignment_id": assignment_id,
-                                    "learning_objective_id": lo_id
-                                }).execute()
+                        ao_rows = [{"assignment_id": assignment_id, "learning_objective_id": lo_id}
+                                   for lo_id in selected_lo_ids if lo_id.strip()]
+                        if ao_rows:
+                            supabase_admin.table("assignment_objectives").insert(ao_rows).execute()
                     else:
                         # Create new assignment
                         result = supabase_admin.table("assignments").insert({
@@ -984,17 +897,15 @@ def create_lo_handler(class_id):
                             "revision_due": revision_due
                         }).execute()
 
-                        # Link selected LOs to this assignment
+                        # Batch link selected LOs to this assignment
                         if result.data:
                             assignment_id = result.data[0]['id']
-                            for lo_id in selected_lo_ids:
-                                if lo_id.strip():
-                                    supabase_admin.table("assignment_objectives").insert({
-                                        "assignment_id": assignment_id,
-                                        "learning_objective_id": lo_id
-                                    }).execute()
+                            ao_rows = [{"assignment_id": assignment_id, "learning_objective_id": lo_id}
+                                       for lo_id in selected_lo_ids if lo_id.strip()]
+                            if ao_rows:
+                                supabase_admin.table("assignment_objectives").insert(ao_rows).execute()
                 except Exception as e:
-                    print(f"Error saving assignment: {e}")
+                    logger.error("Error saving assignment: %s", e)
 
             return redirect(url_for('main.class_assignments', class_id=class_id))
 
@@ -1015,7 +926,7 @@ def create_lo_handler(class_id):
                         "required_ms": int(lo_required_ms)
                     }).execute()
                 except Exception as e:
-                    print(f"Error creating LO: {e}")
+                    logger.error("Error creating LO: %s", e)
 
             return redirect(url_for('main.class_assignments', class_id=class_id))
 
@@ -1031,9 +942,8 @@ def support():
 # ============================================================================
 
 @main_bp.route("/add_class", methods=["POST"])
+@login_required
 def add_class():
-    if 'user_id' not in session:
-        return redirect(url_for('main.login_page'))
 
     if not request.form.get("name"):
         return "Class name is required.", 400
@@ -1083,21 +993,21 @@ def add_class():
 
 
 @main_bp.route("/api/update_grade", methods=["POST"], endpoint='api_update_grade')
+@api_login_required
 def api_update_grade():
-    if 'user_id' not in session: return jsonify({"success": False, "error": "Unauthorized"}), 401
     data = request.get_json()
     try:
         Grade.update_score(student_id=data['student_id'], lo_id=data['lo_id'], 
-                            top_score=data['top_score'], second_score=data.get('second_score'))
+                            top_score=data['top_score'], second_score=data.get('second_score'),
+                            assignment_id=data.get('assignment_id'))
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
 
 @main_bp.route("/api/class/<class_id>/assignments")
+@api_login_required
 def api_class_assignments(class_id):
-    if 'user_id' not in session:
-        return jsonify({"success": False, "error": "unauthorized"}), 401
     try:
         result = supabase_admin.table("assignments") \
             .select("*") \
@@ -1110,40 +1020,96 @@ def api_class_assignments(class_id):
 
 
 @main_bp.route("/api/class/<class_id>/save-grades", methods=["POST"])
+@api_login_required
 def save_grades(class_id):
-    if 'user_id' not in session:
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
     try:
         data = request.get_json()
         grades_dict = data.get('grades', {})
+        assignment_id = data.get('assignment_id')
+        # Build batch of grade rows and upsert in one call
+        grade_rows = []
         for key, grade_value in grades_dict.items():
             parts = key.split('|')
             if len(parts) == 2:
                 student_id, lo_id = parts
                 if lo_id and grade_value:
-                    Grade.update_score(student_id=student_id, lo_id=lo_id, top_score=grade_value)
+                    normalized = Grade.normalize_score(grade_value)
+                    if normalized:
+                        row = {"student_id": student_id, "learning_objective_id": lo_id, "top_score": normalized}
+                        if assignment_id:
+                            row["assignment_id"] = assignment_id
+                        grade_rows.append(row)
+        if grade_rows:
+            supabase_admin.table("grades").upsert(
+                grade_rows, on_conflict="student_id,learning_objective_id,assignment_id"
+            ).execute()
         return jsonify({"success": True})
     except Exception as e:
-        print(f"saving grades failed: {e}")
+        logger.error("saving grades failed: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@main_bp.route("/api/class/<class_id>/assignment/<assignment_id>/grades")
+@api_login_required
+def api_assignment_grades(class_id, assignment_id):
+    """Return grades for a specific assignment, keyed by student_id|lo_id."""
+    try:
+        result = supabase_admin.table("grades") \
+            .select("student_id, learning_objective_id, top_score") \
+            .eq("assignment_id", assignment_id) \
+            .execute()
+        grades_map = {}
+        for g in (result.data or []):
+            key = f"{g['student_id']}|{g['learning_objective_id']}"
+            grades_map[key] = g['top_score']
+
+        # Also fetch HW% scores for this assignment (homework_group = assignment_id)
+        hw_resp = supabase_admin.table("homework_scores") \
+            .select("student_id, score_pct") \
+            .eq("class_id", class_id) \
+            .eq("homework_group", assignment_id) \
+            .execute()
+        hw_map = {r['student_id']: r['score_pct'] for r in (hw_resp.data or [])}
+
+        return jsonify({"success": True, "grades": grades_map, "hw_scores": hw_map})
+    except Exception as e:
+        logger.error("fetching assignment grades failed: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@main_bp.route("/api/class/<class_id>/save-hw-percentage", methods=["POST"])
+@api_login_required
+def save_hw_percentage(class_id):
+    try:
+        data = request.get_json()
+        student_id = data.get('student_id')
+        score = data.get('score')
+        assignment_id = data.get('assignment_id')
+        if student_id is None or score is None or not assignment_id:
+            return jsonify({"success": False, "error": "student_id, score, and assignment_id required"}), 400
+        score = int(score)
+        if score != -1:
+            score = max(0, min(100, score))
+        supabase_admin.table("homework_scores").upsert(
+            {"student_id": student_id, "class_id": class_id, "homework_group": assignment_id, "score_pct": score},
+            on_conflict="student_id,class_id,homework_group"
+        ).execute()
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.error("saving hw percentage failed: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
 @main_bp.route("/api/class/<class_id>/use_pass", methods=["POST"])
+@api_login_required
 def use_free_pass(class_id):
-    if 'user_id' not in session:
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
     try:
         data = request.get_json()
         student_id = data.get('student_id')
         if not student_id:
             return jsonify({"success": False, "error": "student_id required"}), 400
 
-        class_result = supabase_admin.table("classes") \
-            .select("hw_passes_allowed") \
-            .eq("id", class_id) \
-            .single() \
-            .execute()
-        passes_allowed = (class_result.data or {}).get('hw_passes_allowed', 2)
+        passes_allowed = 2
 
         existing = supabase_admin.table("free_passes") \
             .select("id, passes_used") \
@@ -1170,14 +1136,13 @@ def use_free_pass(class_id):
 
         return jsonify({"success": True, "passes_remaining": remaining})
     except Exception as e:
-        print(f"use pass failed: {e}")
+        logger.error("use pass failed: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
 @main_bp.route("/api/class/<class_id>/available_students", methods=["GET"])
+@api_login_required
 def get_available_students(class_id):
-    if 'user_id' not in session:
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
     try:
         all_students = supabase_admin.table("profiles").select("id, full_name") \
             .eq("role", "student").execute().data or []
@@ -1192,9 +1157,8 @@ def get_available_students(class_id):
 
 
 @main_bp.route("/api/class/<class_id>/add_student", methods=["POST"])
+@api_login_required
 def api_add_student_to_class(class_id):
-    if 'user_id' not in session:
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
     try:
         data = request.get_json()
         student_name = data.get('student_name', '').strip()
@@ -1213,9 +1177,8 @@ def api_add_student_to_class(class_id):
 
 
 @main_bp.route("/api/class/<class_id>/toggle_mute", methods=["POST"])
+@api_instructor_required
 def api_toggle_mute(class_id):
-    if 'user_id' not in session or session.get('role') != 'instructor':
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
     try:
         data = request.get_json()
         student_id = data.get('student_id')
@@ -1230,9 +1193,8 @@ def api_toggle_mute(class_id):
 
 
 @main_bp.route("/api/class/<class_id>/remove_student", methods=["POST"])
+@api_login_required
 def api_remove_student_from_class(class_id):
-    if 'user_id' not in session:
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
     try:
         data = request.get_json()
         student_id = data.get('student_id')
@@ -1242,9 +1204,7 @@ def api_remove_student_from_class(class_id):
             .eq("class_id", class_id).eq("student_id", student_id).execute()
 
         # Also delete the student's grades for LOs belonging to this class
-        lo_res = supabase_admin.table("learning_objectives") \
-            .select("id").eq("class_id", class_id).execute()
-        lo_ids = [lo["id"] for lo in (lo_res.data or [])]
+        lo_ids = Course.get_lo_ids_for_class(class_id)
         if lo_ids:
             supabase_admin.table("grades").delete() \
                 .eq("student_id", student_id) \
@@ -1256,9 +1216,8 @@ def api_remove_student_from_class(class_id):
 
 
 @main_bp.route("/api/import-grades", methods=["POST"])
+@api_login_required
 def api_import_grades():
-    if 'user_id' not in session:
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
 
     data = request.get_json() or {}
     class_id = data.get('class_id')
@@ -1299,7 +1258,7 @@ def api_import_grades():
             if res.data:
                 lo_map[key] = res.data[0]['id']
         except Exception as e:
-            print(f"Error creating LO '{lo_name}': {e}")
+            logger.error("Error creating LO '%s': %s", lo_name, e)
 
     imported = 0
     grade_rows = []
@@ -1313,25 +1272,25 @@ def api_import_grades():
                 .execute()
             already_linked = set(r["learning_objective_id"] for r in (existing_links_resp.data or []))
 
+            new_links = []
             for lo_name in extracted_los:
                 if not lo_name:
                     continue
                 lo_id = lo_map.get(lo_name.strip().lower())
                 if lo_id and lo_id not in already_linked:
-                    supabase_admin.table("assignment_objectives").insert({
-                        "assignment_id": assignment_id,
-                        "learning_objective_id": lo_id
-                    }).execute()
+                    new_links.append({"assignment_id": assignment_id, "learning_objective_id": lo_id})
                     already_linked.add(lo_id)
-                    print(f"[IMPORT] Linked LO '{lo_name}' (id={lo_id}) to assignment {assignment_id}")
+            if new_links:
+                supabase_admin.table("assignment_objectives").insert(new_links).execute()
+                logger.info("Batch-linked %d LOs to assignment %s", len(new_links), assignment_id)
         except Exception as e:
-            print(f"[IMPORT] Error linking LOs to assignment: {e}")
+            logger.error("Error linking LOs to assignment: %s", e)
 
     for student in students:
         full_name = (student.get('name') or student.get('full_name') or '').strip()
-        print(f"[IMPORT] Processing student: name='{student.get('name')}', full_name='{student.get('full_name')}', extracted='{full_name}'")
+        logger.debug("Processing student: name='%s', full_name='%s', extracted='%s'", student.get('name'), student.get('full_name'), full_name)
         if not full_name:
-            print(f"[IMPORT] Skipping student - no name found")
+            logger.debug("Skipping student - no name found")
             continue
 
         # Try to find existing profile by name (avoid single() throwing when no rows)
@@ -1340,9 +1299,9 @@ def api_import_grades():
             profile_resp = supabase_admin.table("profiles").select("id").eq("full_name", full_name).limit(1).execute()
             if profile_resp.data and len(profile_resp.data) > 0:
                 profile_id = profile_resp.data[0]['id']
-                print(f"[IMPORT] Found existing profile for '{full_name}': {profile_id}")
+                logger.debug("Found existing profile for '%s': %s", full_name, profile_id)
         except Exception as e:
-            print(f"[IMPORT] Error searching for profile for '{full_name}': {e}")
+            logger.error("Error searching for profile for '%s': %s", full_name, e)
             profile_id = None
 
         if not profile_id:
@@ -1353,9 +1312,9 @@ def api_import_grades():
                     "full_name": full_name,
                     "role": "student"
                 }).execute()
-                print(f"[IMPORT] Created new profile for '{full_name}': {profile_id}")
+                logger.debug("Created new profile for '%s': %s", full_name, profile_id)
             except Exception as e:
-                print(f"[IMPORT] Error creating profile for '{full_name}': {e}")
+                logger.error("Error creating profile for '%s': %s", full_name, e)
                 continue
 
         # Enroll student in class if not already enrolled
@@ -1367,7 +1326,7 @@ def api_import_grades():
                     "student_id": profile_id
                 }).execute()
         except Exception as e:
-            print(f"Error enrolling {full_name}: {e}")
+            logger.error("Error enrolling %s: %s", full_name, e)
 
         # Build grade rows to batch-upsert later
         grades = student.get('grades', {}) or {}
@@ -1386,12 +1345,13 @@ def api_import_grades():
             grade_rows.append({
                 "student_id": profile_id,
                 "learning_objective_id": lo_id,
-                "top_score": normalized
+                "top_score": normalized,
+                "assignment_id": assignment_id
             })
 
         imported += 1
 
-    # Batch upsert grades — overwrites existing scores for the same student+LO
+    # Batch upsert grades — overwrites existing scores for the same student+LO+assignment
     try:
         chunk_size = 150
         for i in range(0, len(grade_rows), chunk_size):
@@ -1401,18 +1361,19 @@ def api_import_grades():
                 row["updated_at"] = "now()"
             try:
                 supabase_admin.table("grades").upsert(
-                    chunk, on_conflict="student_id,learning_objective_id"
+                    chunk, on_conflict="student_id,learning_objective_id,assignment_id"
                 ).execute()
-                print(f"[IMPORT] Upserted {len(chunk)} grades")
+                logger.info("Upserted %d grades", len(chunk))
             except Exception as upsert_err:
-                print(f"[IMPORT] Grade upsert error: {upsert_err}")
+                logger.error("Grade upsert error: %s", upsert_err)
     except Exception as e:
-        print(f"Error processing grades in bulk: {e}")
+        logger.error("Error processing grades in bulk: %s", e)
 
     return jsonify({"success": True, "imported_students": imported, "imported_grades": len(grade_rows)}), 200
 
 
 @main_bp.route("/api/analyze-grade-pdf", methods=["POST"])
+@api_login_required
 def analyze_grade_pdf():
     """
     Analyze a grade sheet (PDF or JPG) using OCR.
@@ -1425,9 +1386,6 @@ def analyze_grade_pdf():
         - data: {students, learning_objectives, raw_text}
         - error: str (if failed)
     """
-    if 'user_id' not in session:
-        return jsonify({"success": False, "error": "Unauthorized"}), 401
-    
     try:
         # Check if file is in request
         if 'pdf' not in request.files:
@@ -1453,9 +1411,9 @@ def analyze_grade_pdf():
             }), 400
         
         # Initialize OCR Analyzer
-        print("[ROUTE] Getting OCR analyzer...")
+        logger.info("Getting OCR analyzer...")
         analyzer = get_ocr_analyzer()
-        print(f"[ROUTE] Analyzer ready: {analyzer is not None}")
+        logger.info("Analyzer ready: %s", analyzer is not None)
         
         if analyzer is None:
             return jsonify({
@@ -1479,7 +1437,7 @@ def analyze_grade_pdf():
         }), 200
         
     except Exception as e:
-        print(f"Error analyzing PDF: {str(e)}")
+        logger.error("Error analyzing PDF: %s", e)
         return jsonify({
             "success": False,
             "error": f"Failed to analyze PDF: {str(e)}"

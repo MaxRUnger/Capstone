@@ -1,5 +1,5 @@
 {% extends "app_base.html" %}
-{% from "_components.html" import homework_percentage_badge, progress_bar %}
+{% from "_components.html" import progress_bar %}
 
 {% block content %}
 <div class="space-y-6">
@@ -16,16 +16,12 @@
   {% set los = student.learning_objectives %}
   {% set passed = los|selectattr('is_passed')|list|length %}
   <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6">
-    <div class="grid grid-cols-2 md:grid-cols-4 gap-6">
+    <div class="grid grid-cols-2 gap-6">
       <div>
         <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Passed</p>
         <p class="text-2xl font-semibold text-slate-900 dark:text-white">{{ passed }} / {{ los|length }}</p>
       </div>
       <div>
-        <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Homework %</p>
-        {{ homework_percentage_badge(passed, los|length) }}
-      </div>
-      <div class="col-span-2">
         <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Progress</p>
         {{ progress_bar(passed, los|length, show_label=true) }}
       </div>
@@ -43,7 +39,7 @@
         <div class="flex items-start gap-6">
           <div class="flex-1">
             <div class="flex items-center gap-3 mb-3">
-              <h3 class="font-medium text-slate-900 dark:text-white">{{ lo.name }}</h3>
+              <h3 class="font-medium text-slate-900 dark:text-white">{{ lo.vendor_code or lo.name }}</h3>
               {% if is_passed %}
               <span class="px-2 py-1 bg-green-500 text-white rounded-md text-xs font-medium">PASSED</span>
               {% endif %}
@@ -52,8 +48,9 @@
               <div>
                 <p class="text-slate-500 dark:text-slate-400 mb-1">Grades</p>
                 <div class="flex items-center gap-2">
-                  <span class="mastery-badge mastery-{{ lo.top_score|lower }} px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ lo.top_score }}</span>
-                  <span class="mastery-badge mastery-{{ lo.second_score|lower }} px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ lo.second_score }}</span>
+                  {% for g in lo.grades_list %}
+                  <span class="mastery-badge mastery-{{ g|lower }} px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ g }}</span>
+                  {% endfor %}
                   <span class="text-xs text-slate-500 dark:text-slate-400 ml-2">{{ lo.m_count }} / {{ lo.required_ms }} Ms</span>
                 </div>
               </div>

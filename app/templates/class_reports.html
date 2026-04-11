@@ -1,5 +1,4 @@
 {% extends "app_base.html" %}
-{% from "_components.html" import homework_percentage_badge %}
 
 {% block content %}
 <div class="space-y-5">
@@ -128,8 +127,6 @@
           </thead>
           <tbody class="divide-y divide-slate-50 dark:divide-slate-700">
             {% for student in students %}
-            {% set los = student.learning_objectives %}
-            {% set passed = los|selectattr('is_passed')|list|length %}
             <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors student-row group" data-student-name="{{ student.name|lower }}" data-student-id="{{ student.id }}">
               <td class="px-6 py-3 font-medium text-slate-900 dark:text-white">
                 <div class="flex items-center gap-2">
@@ -143,7 +140,9 @@
                   </button>
                 </div>
               </td>
-              <td class="px-4 py-3 text-center">{{ homework_percentage_badge(passed, los|length) }}</td>
+              <td class="px-4 py-3 text-center">
+                <span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="{{ student.id }}">—</span>
+              </td>
               {% for lo in learning_objectives %}
               {% set student_lo = student.learning_objectives|selectattr('learning_objective_id', 'equalto', lo.id|string)|first %}
               {% set grade = student_lo.top_score if student_lo else None %}
@@ -236,6 +235,41 @@
 const studentsData = {{ students | tojson }};
 const assignmentsData = {{ assignments | tojson }};
 const learningObjectivesData = {{ learning_objectives | tojson }};
+const classId = {{ class_id | tojson }};
+
+function fetchHwScoresForAssignment(assignmentId) {
+  // Reset all HW displays to dash
+  document.querySelectorAll('.hw-score-display').forEach(el => {
+    el.textContent = '—';
+    el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
+  });
+  if (!assignmentId) return;
+
+  fetch(`/api/class/${classId}/assignment/${assignmentId}/grades`)
+    .then(r => r.json())
+    .then(data => {
+      if (!data.success) return;
+      const hwScores = data.hw_scores || {};
+      document.querySelectorAll('.hw-score-display').forEach(el => {
+        const sid = el.getAttribute('data-student-id');
+        if (sid in hwScores) {
+          const score = hwScores[sid];
+          if (score === -1) {
+            el.textContent = 'HW Pass';
+            el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300';
+          } else {
+            el.textContent = score + '%';
+            if (score >= 65) {
+              el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300';
+            } else {
+              el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300';
+            }
+          }
+        }
+      });
+    })
+    .catch(e => console.error('Error loading HW scores:', e));
+}
 
 // --- Report tab toggle ---
 function showReport(type) {
@@ -304,6 +338,7 @@ function selectAssignment(assignmentId, assignmentName) {
   });
 
   applyAssignmentFilter();
+  fetchHwScoresForAssignment(assignmentId);
 }
 
 function applyAssignmentFilter() {
