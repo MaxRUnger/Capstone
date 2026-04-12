@@ -1,5 +1,5 @@
 /**
- * Grade Sheet PDF Upload and OCR Analysis
+ * Grade Sheet PDF Upload and Gemini Analysis
  * Step order: Upload → Map Assignment → Review & Edit → Confirm
  * Features: speed-grader keyboard shortcuts, LO comparison, dark mode support
  */
@@ -14,7 +14,7 @@ const VALID_GRADES = new Set(['M', 'R', 'RQ', 'P', 'X', 'A']);
 
 // LO comparison state
 let assignmentLOs   = [];          // vendor_codes from selected assignment
-let approvedExtraLOs = new Set();  // extra OCR LOs the user approved
+let approvedExtraLOs = new Set();  // extra LOs the user approved
 
 // ============================================================================
 // FILE UPLOAD HANDLING
@@ -97,7 +97,7 @@ function goToStep(stepNumber) {
 
   if (stepNumber > current) {
     if (!validateStep(current)) return;
-    // Trigger OCR when leaving step 1 for the first time
+    // Trigger Gemini analysis when leaving step 1 for the first time
     if (current === 1 && !uploadedPDFData) {
       analyzePDF();
       return;
@@ -202,7 +202,7 @@ function onAssignmentSelected() {
 
   approvedExtraLOs.clear();
 
-  // If OCR data already exists, run comparison immediately
+  // If extracted data already exists, run comparison immediately
   if (uploadedPDFData) runLOComparison();
 }
 
@@ -231,7 +231,7 @@ function runLOComparison() {
     html += '</div>';
   }
   if (extra.length) {
-    html += '<p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Extra (found by OCR but not in assignment)</p><div class="flex flex-wrap gap-2 mb-3">';
+    html += '<p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Extra (found by Gemini but not in assignment)</p><div class="flex flex-wrap gap-2 mb-3">';
     extra.forEach(lo => {
       const checked = approvedExtraLOs.has(lo) ? 'checked' : '';
       html += `<label class="lo-extra px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer flex items-center gap-1.5">
@@ -261,7 +261,7 @@ function toggleExtraLO(lo, checked) {
 }
 
 // ============================================================================
-// PDF / OCR ANALYSIS
+// PDF / GEMINI ANALYSIS
 // ============================================================================
 
 async function analyzePDF() {
@@ -272,7 +272,7 @@ async function analyzePDF() {
   const nextBtn = document.getElementById('nextBtn1');
   const origHTML = nextBtn.innerHTML;
   nextBtn.disabled = true;
-  nextBtn.innerHTML = '<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Analyzing with OCR\u2026';
+  nextBtn.innerHTML = '<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Analyzing with Gemini\u2026';
 
   try {
     const formData = new FormData();
@@ -292,7 +292,7 @@ async function analyzePDF() {
     // Jump to step 2 (Map Assignment)
     goToStep(2);
   } catch (err) {
-    console.error('OCR error:', err);
+    console.error('Gemini error:', err);
     alert('Error analyzing PDF: ' + err.message);
   } finally {
     nextBtn.disabled = false;

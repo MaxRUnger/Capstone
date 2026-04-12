@@ -1,2 +1,2 @@
 # Data Access Objects
-from .ocr_analyzer import get_ocr_analyzer
+from .gemini_analyzer import get_gemini_analyzer

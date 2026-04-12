@@ -189,7 +189,7 @@
         </svg>
       </div>
       <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-1">Upload Grade Sheet</h2>
-      <p class="text-sm text-slate-500 dark:text-slate-400 mb-8">OCR will extract student names, objective codes, and grades (works with handwritten and printed sheets)</p>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mb-8">Gemini AI will extract student names, objective codes, and grades (works with handwritten and printed sheets)</p>
 
       <label class="block cursor-pointer" id="dropZone">
         <div class="border-2 border-dashed border-slate-300 dark:border-slate-600 rounded-xl p-14 text-center hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all" id="dropArea">
@@ -216,7 +216,7 @@
   <div id="panel-2" class="hidden bg-white dark:bg-slate-800 rounded-xl shadow-sm p-12">
     <div class="max-w-2xl mx-auto">
       <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-1">Map Assignment</h2>
-      <p class="text-sm text-slate-500 dark:text-slate-400 mb-6">Select which assignment these grades belong to. The assignment's learning objectives will be used to validate OCR results.</p>
+      <p class="text-sm text-slate-500 dark:text-slate-400 mb-6">Select which assignment these grades belong to. The assignment's learning objectives will be used to validate extracted results.</p>
 
       <div class="border border-slate-200 dark:border-slate-700 rounded-xl p-6 mb-6 text-sm">
         <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">Select an assignment to map grades into</h3>
@@ -226,10 +226,10 @@
             <option value="{{ assignment.id }}">{{ assignment.name }}</option>
           {% endfor %}
         </select>
-        <p class="text-xs text-slate-500 dark:text-slate-400 mt-2">The assignment's learning objectives will be compared against what OCR extracted.</p>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-2">The assignment's learning objectives will be compared against what Gemini extracted.</p>
       </div>
 
-      <!-- LO Comparison Section (populated after assignment selection + OCR) -->
+      <!-- LO Comparison Section (populated after assignment selection + Gemini) -->
       <div id="loComparisonSection" class="hidden mb-6">
         <h3 class="text-sm font-semibold text-slate-900 dark:text-white mb-3">Learning Objective Comparison</h3>
         <div id="loComparisonContent"></div>
@@ -253,7 +253,7 @@
       <div class="flex items-start justify-between mb-4">
         <div>
           <h2 class="text-lg font-semibold text-slate-900 dark:text-white mb-1">Review &amp; Edit Extracted Grades</h2>
-          <p class="text-sm text-slate-500 dark:text-slate-400">Confirm or correct what was extracted from your grade sheet using OCR.</p>
+          <p class="text-sm text-slate-500 dark:text-slate-400">Confirm or correct what was extracted from your grade sheet using Gemini AI.</p>
         </div>
         <div id="selectedAssignmentBadge" class="text-sm font-medium text-blue-600 dark:text-blue-400 bg-blue-50 dark:bg-blue-900/30 px-3 py-1 rounded-lg hidden"></div>
       </div>
@@ -297,7 +297,7 @@
           <svg class="w-8 h-8 mx-auto mb-2 text-slate-300 dark:text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
           </svg>
-          Extracted grades will appear here after OCR processing.
+          Extracted grades will appear here after Gemini processing.
         </div>
       </div>
 

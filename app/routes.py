@@ -2,8 +2,8 @@ import logging
 from functools import wraps
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session  # type: ignore
 from app.authentication import supabase, supabase_admin
-from app.models import Course, Grade, Student
-from app.dao.ocr_analyzer import get_ocr_analyzer
+from app.models import Course, Grade, Student, Homework
+from app.dao.gemini_analyzer import get_gemini_analyzer
 from uuid import uuid4
 
 logger = logging.getLogger(__name__)
@@ -107,19 +107,6 @@ def normalize_profile(enrollment):
     if isinstance(prof, list):
         prof = prof[0] if prof else {}
     return prof or {}
-
-
-def get_free_passes_remaining(student_id, class_id, passes_allowed):
-    try:
-        result = supabase_admin.table("free_passes") \
-            .select("passes_used") \
-            .eq("student_id", student_id) \
-            .eq("class_id", class_id) \
-            .execute()
-        used = result.data[0]['passes_used'] if result.data else 0
-        return max(0, passes_allowed - used)
-    except Exception:
-        return passes_allowed
 
 
 def _batch_get_free_passes(student_ids, class_id):
@@ -316,10 +303,6 @@ def login():
             session['user_id'] = result.user.id
             session['role'] = actual_role
             session['full_name'] = result.user.user_metadata.get('full_name', '')
-            # Store Supabase tokens for secure API usage
-            if hasattr(result, 'session') and result.session:
-                session['access_token'] = getattr(result.session, 'access_token', None)
-                session['refresh_token'] = getattr(result.session, 'refresh_token', None)
             # Ensure profile exists on every login in case it was missed at signup
             ensure_profile_exists(
                 result.user.id,
@@ -351,10 +334,6 @@ def signup():
             session['user_id'] = result.user.id
             session['role'] = 'instructor'
             session['full_name'] = data.get("name", "")
-            # Store Supabase tokens for secure API usage
-            if hasattr(result, 'session') and result.session:
-                session['access_token'] = getattr(result.session, 'access_token', None)
-                session['refresh_token'] = getattr(result.session, 'refresh_token', None)
             # Create profile row immediately so foreign keys work right away
             ensure_profile_exists(
                 result.user.id,
@@ -423,7 +402,15 @@ def class_detail(class_id):
     students_for_template, all_students_for_modal, _ = _process_enrollments(class_data)
     summary = organize_by_learning_objectives(students_for_template, class_data.get('learning_objectives', []))
     assignments = load_assignments_for_class(class_id)
-    
+
+    overdue_raw = Grade.get_overdue_revisions(class_id)
+    student_name_map = {s['id']: s.get('name', 'Unknown') for s in students_for_template}
+    overdue_revisions = []
+    for rev in overdue_raw:
+        if rev['student_id'] in student_name_map:
+            rev['student_name'] = student_name_map[rev['student_id']]
+            overdue_revisions.append(rev)
+
     return render_template('class_detail.html', 
                             class_id=class_id, 
                             class_name=class_data.get('name'), 
@@ -431,6 +418,7 @@ def class_detail(class_id):
                             all_students=all_students_for_modal,
                             learning_objectives=summary,
                             assignments=assignments,
+                            overdue_revisions=overdue_revisions,
                             auto_convert_m=class_data.get('auto_convert_m', False),
                             min_masteries=class_data.get('min_masteries', 2))
 
@@ -1071,7 +1059,12 @@ def api_assignment_grades(class_id, assignment_id):
             .execute()
         hw_map = {r['student_id']: r['score_pct'] for r in (hw_resp.data or [])}
 
-        return jsonify({"success": True, "grades": grades_map, "hw_scores": hw_map})
+        # Compute revision eligibility per student (HW >= 65% or pass used)
+        eligibility = {}
+        for sid, score in hw_map.items():
+            eligibility[sid] = score == -1 or (score is not None and score >= Homework.REVISION_THRESHOLD)
+
+        return jsonify({"success": True, "grades": grades_map, "hw_scores": hw_map, "revision_eligible": eligibility})
     except Exception as e:
         logger.error("fetching assignment grades failed: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1137,6 +1130,39 @@ def use_free_pass(class_id):
         return jsonify({"success": True, "passes_remaining": remaining})
     except Exception as e:
         logger.error("use pass failed: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@main_bp.route("/api/class/<class_id>/return_pass", methods=["POST"])
+@api_login_required
+def return_free_pass(class_id):
+    try:
+        data = request.get_json()
+        student_id = data.get('student_id')
+        if not student_id:
+            return jsonify({"success": False, "error": "student_id required"}), 400
+
+        passes_allowed = 2
+
+        existing = supabase_admin.table("free_passes") \
+            .select("id, passes_used") \
+            .eq("student_id", student_id) \
+            .eq("class_id", class_id) \
+            .execute()
+
+        if existing.data and existing.data[0]['passes_used'] > 0:
+            current_used = existing.data[0]['passes_used']
+            supabase_admin.table("free_passes") \
+                .update({"passes_used": current_used - 1}) \
+                .eq("id", existing.data[0]['id']) \
+                .execute()
+            remaining = passes_allowed - (current_used - 1)
+        else:
+            remaining = passes_allowed
+
+        return jsonify({"success": True, "passes_remaining": remaining})
+    except Exception as e:
+        logger.error("return pass failed: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -1376,7 +1402,7 @@ def api_import_grades():
 @api_login_required
 def analyze_grade_pdf():
     """
-    Analyze a grade sheet (PDF or JPG) using OCR.
+    Analyze a grade sheet (PDF or JPG) using Gemini Vision.
     Returns extracted student data and learning objectives.
     Works with both printed and handwritten grade sheets.
     
@@ -1410,21 +1436,21 @@ def analyze_grade_pdf():
                 "error": "File must be a PDF, JPG, or PNG"
             }), 400
         
-        # Initialize OCR Analyzer
-        logger.info("Getting OCR analyzer...")
-        analyzer = get_ocr_analyzer()
+        # Initialize Gemini Analyzer
+        logger.info("Getting Gemini analyzer...")
+        analyzer = get_gemini_analyzer()
         logger.info("Analyzer ready: %s", analyzer is not None)
         
         if analyzer is None:
             return jsonify({
                 "success": False,
-                "error": "OCR not properly configured. Install dependencies: pip install pytesseract pdf2image pillow"
+                "error": "Gemini not properly configured. Set GEMINI_API_KEY and install: pip install google-genai"
             }), 500
         
         # Read PDF content
         pdf_content = pdf_file.read()
         
-        # Analyze PDF with OCR
+        # Analyze PDF with Gemini
         extracted_data = analyzer.analyze_pdf(pdf_content)
         
         return jsonify({

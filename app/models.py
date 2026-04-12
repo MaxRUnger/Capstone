@@ -1,4 +1,5 @@
 import logging
+from datetime import date
 
 from app.authentication import supabase, supabase_admin
 
@@ -6,14 +7,6 @@ logger = logging.getLogger(__name__)
 
 # Valid mastery grade codes used throughout the grading system
 MASTERY_GRADES = ('M', 'R', 'RQ', 'P', 'X', 'A')
-
-
-class Profile:
-    @staticmethod
-    def get_by_id(user_id):
-        """Fetches a single user profile by their UUID."""
-        response = supabase_admin.table("profiles").select("*").eq("id", user_id).single().execute()
-        return response.data
 
 
 class Course:
@@ -159,7 +152,7 @@ class Grade:
         """Upserts a grade for a student, learning objective, and assignment.
 
         The database enforces that scores are one of the mastery codes (e.g. M, R, P, X).
-        When we receive numeric scores (e.g. from OCR), we map them to a mastery code
+        When we receive numeric scores (e.g. from Gemini), we map them to a mastery code
         so the import pipeline doesn't fail due to check constraints.
         """
 
@@ -180,6 +173,56 @@ class Grade:
         # Supabase requires specifying the conflict target for proper behavior.
         return supabase_admin.table("grades").upsert(data, on_conflict="student_id,learning_objective_id,assignment_id").execute()
 
+    @staticmethod
+    def get_overdue_revisions(class_id):
+        """Return RQ grades where the assignment's revision_due date has passed
+        and the student was eligible for revision (HW >= 65% or used a pass)."""
+        today = date.today().isoformat()
+        try:
+            lo_ids = Course.get_lo_ids_for_class(class_id)
+            if not lo_ids:
+                return []
+            resp = supabase_admin.table("grades").select(
+                "student_id, top_score, assignment_id, "
+                "assignments(id, name, revision_due), "
+                "learning_objectives(id, name, vendor_code)"
+            ).eq("top_score", "RQ").in_("learning_objective_id", lo_ids).execute()
+
+            # Collect assignment IDs to batch-check eligibility
+            assignment_ids = set()
+            for g in (resp.data or []):
+                aid = g.get('assignment_id')
+                if aid:
+                    assignment_ids.add(aid)
+
+            # Batch-fetch HW scores for all relevant assignments
+            eligibility_by_assignment = {}
+            for aid in assignment_ids:
+                eligibility_by_assignment[aid] = Homework.get_revision_eligibility(class_id, aid)
+
+            overdue = []
+            for g in (resp.data or []):
+                assignment = g.get('assignments') or {}
+                rev_due = assignment.get('revision_due')
+                if not rev_due or rev_due >= today:
+                    continue
+                # Only flag if student was eligible for revision
+                aid = g.get('assignment_id')
+                eligible = eligibility_by_assignment.get(aid, {}).get(g['student_id'], False)
+                if not eligible:
+                    continue
+                lo = g.get('learning_objectives') or {}
+                overdue.append({
+                    'student_id': g['student_id'],
+                    'assignment_name': assignment.get('name', ''),
+                    'revision_due': rev_due,
+                    'lo_name': lo.get('vendor_code') or lo.get('name', 'Unknown LO'),
+                })
+            return overdue
+        except Exception as e:
+            logger.error("Error fetching overdue revisions: %s", e)
+            return []
+
 class Student:
     @staticmethod
     def get_dashboard_data(student_id):
@@ -194,6 +237,8 @@ class Student:
         return response.data
 
 class Homework:
+    REVISION_THRESHOLD = 65
+
     @staticmethod
     def get_student_scores(student_id, class_id):
         """Fetches homework performance for a specific student in a class."""
@@ -201,3 +246,23 @@ class Homework:
             .eq("student_id", student_id)\
             .eq("class_id", class_id).execute()
         return response.data
+
+    @staticmethod
+    def get_revision_eligibility(class_id, assignment_id):
+        """Return {student_id: bool} indicating revision eligibility for an assignment.
+
+        A student is eligible if their HW score >= 65% or they used a HW pass (score_pct = -1).
+        """
+        try:
+            resp = supabase_admin.table("homework_scores").select(
+                "student_id, score_pct"
+            ).eq("class_id", class_id).eq("homework_group", assignment_id).execute()
+            eligibility = {}
+            for row in (resp.data or []):
+                score = row.get('score_pct')
+                eligible = score == -1 or (score is not None and score >= Homework.REVISION_THRESHOLD)
+                eligibility[row['student_id']] = eligible
+            return eligibility
+        except Exception as e:
+            logger.error("Error checking revision eligibility: %s", e)
+            return {}
