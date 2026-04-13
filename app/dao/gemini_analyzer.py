@@ -86,7 +86,7 @@ class GradeSheetGeminiAnalyzer:
         if not HAS_GENAI:
             raise ImportError("google-genai not installed. Run: pip install google-genai")
         self.client = genai.Client(api_key=api_key)
-        self.models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+        self.models = ["gemini-2.5-flash"]
     
     def analyze_pdf(self, file_obj) -> Dict:
         """
@@ -188,28 +188,27 @@ class GradeSheetGeminiAnalyzer:
         contents = image_parts + [_EXTRACTION_PROMPT]
         last_error = None
 
-        for model in self.models:
-            try:
-                print(f"[Gemini] Trying model: {model}")
-                response = self.client.models.generate_content(
-                    model=model,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        response_mime_type="application/json",
-                        temperature=0.1,
-                    )
+        model = self.models[0]
+        try:
+            print(f"[Gemini] Trying model: {model}")
+            response = self.client.models.generate_content(
+                model=model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                    temperature=0.1,
                 )
-                response_text = response.text.strip()
-                parsed = self._parse_response(response_text)
-                print(f"[Gemini] Success with model: {model}")
-                return self._normalize_data(parsed)
-            except Exception as e:
-                error_str = str(e)
-                print(f"[Gemini] Model {model} failed: {error_str}")
-                last_error = e
-                continue
-
-        raise Exception(f"All Gemini models failed. Please try again in a minute.")
+            )
+            response_text = response.text.strip()
+            parsed = self._parse_response(response_text)
+            print(f"[Gemini] Success with model: {model}")
+            return self._normalize_data(parsed)
+        except Exception as e:
+            error_str = str(e)
+            print(f"[Gemini] Model {model} failed: {error_str}")
+            if '503' in error_str or 'UNAVAILABLE' in error_str:
+                raise Exception("The Gemini AI service is temporarily busy. Please try again in a few minutes.")
+            raise Exception(f"Gemini API error: {error_str}")
 
     def _parse_response(self, response_text: str) -> Dict:
         """Parse the Gemini response text into a dict."""
