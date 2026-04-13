@@ -184,7 +184,7 @@ class GradeSheetGeminiAnalyzer:
 
     def _call_gemini(self, image_parts: List) -> Dict:
         """Send image(s) to Gemini and parse the structured JSON response.
-        Tries each model in self.models, falling back on 503/unavailable errors."""
+        Tries each model in self.models, falling back on any error."""
         contents = image_parts + [_EXTRACTION_PROMPT]
         last_error = None
 
@@ -206,12 +206,10 @@ class GradeSheetGeminiAnalyzer:
             except Exception as e:
                 error_str = str(e)
                 print(f"[Gemini] Model {model} failed: {error_str}")
-                if any(code in error_str for code in ('503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED', '404', 'NOT_FOUND')):
-                    last_error = e
-                    continue
-                raise
+                last_error = e
+                continue
 
-        raise Exception(f"All Gemini models are currently unavailable or rate-limited. Please try again in a minute.")
+        raise Exception(f"All Gemini models failed. Please try again in a minute.")
 
     def _parse_response(self, response_text: str) -> Dict:
         """Parse the Gemini response text into a dict."""
