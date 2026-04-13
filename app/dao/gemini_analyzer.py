@@ -86,7 +86,7 @@ class GradeSheetGeminiAnalyzer:
         if not HAS_GENAI:
             raise ImportError("google-genai not installed. Run: pip install google-genai")
         self.client = genai.Client(api_key=api_key)
-        self.models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-1.5-flash"]
+        self.models = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
     
     def analyze_pdf(self, file_obj) -> Dict:
         """
@@ -206,7 +206,7 @@ class GradeSheetGeminiAnalyzer:
             except Exception as e:
                 error_str = str(e)
                 print(f"[Gemini] Model {model} failed: {error_str}")
-                if any(code in error_str for code in ('503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED')):
+                if any(code in error_str for code in ('503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED', '404', 'NOT_FOUND')):
                     last_error = e
                     continue
                 raise
