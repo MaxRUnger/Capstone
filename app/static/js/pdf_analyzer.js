@@ -279,7 +279,16 @@ async function analyzePDF() {
     formData.append('pdf', file);
 
     const resp = await fetch('/api/analyze-grade-pdf', { method: 'POST', body: formData });
-    if (!resp.ok) { const e = await resp.json(); throw new Error(e.error || 'Failed to analyze PDF'); }
+    if (!resp.ok) {
+      const contentType = resp.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        const e = await resp.json();
+        throw new Error(e.error || 'Failed to analyze PDF');
+      }
+      throw new Error(resp.status === 502 || resp.status === 504
+        ? 'Request timed out. The AI service may be busy — please try again.'
+        : `Server error (${resp.status}). Please try again.`);
+    }
 
     const result = await resp.json();
     if (!result.success) throw new Error(result.error || 'Analysis failed');
