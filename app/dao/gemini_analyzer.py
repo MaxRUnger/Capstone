@@ -206,12 +206,12 @@ class GradeSheetGeminiAnalyzer:
             except Exception as e:
                 error_str = str(e)
                 print(f"[Gemini] Model {model} failed: {error_str}")
-                if '503' in error_str or 'UNAVAILABLE' in error_str:
+                if any(code in error_str for code in ('503', 'UNAVAILABLE', '429', 'RESOURCE_EXHAUSTED')):
                     last_error = e
                     continue
                 raise
 
-        raise Exception(f"All Gemini models unavailable. Last error: {last_error}")
+        raise Exception(f"All Gemini models are currently unavailable or rate-limited. Please try again in a minute.")
 
     def _parse_response(self, response_text: str) -> Dict:
         """Parse the Gemini response text into a dict."""
