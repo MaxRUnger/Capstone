@@ -1,6 +1,11 @@
 import logging
+import os
+import socket
+import threading
+import time
 from functools import wraps
-from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session  # type: ignore
+from typing import Optional
+from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session, abort, Response  # type: ignore
 from app.authentication import supabase, supabase_admin
 from app.models import Course, Grade, Student, Homework
 from app.dao.gemini_analyzer import get_gemini_analyzer
@@ -9,6 +14,94 @@ from uuid import uuid4
 logger = logging.getLogger(__name__)
 
 main_bp = Blueprint('main', __name__, template_folder='templates')
+
+# In-memory mobile upload handoff (single-process dev / one gunicorn worker).
+# For multiple workers, replace with Redis or similar.
+MOBILE_UPLOAD_TTL = 900  # 15 minutes
+_pending_mobile_uploads = {}
+_mobile_upload_lock = threading.Lock()
+
+
+def _get_lan_ipv4() -> Optional[str]:
+    """Best-effort primary LAN IPv4 for QR links when the dev server is opened via localhost."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(0.25)
+        s.connect(("8.8.8.8", 80))
+        ip = s.getsockname()[0]
+        s.close()
+        if ip and not ip.startswith("127."):
+            return ip
+    except OSError:
+        pass
+    try:
+        ip = socket.gethostbyname(socket.gethostname())
+        if ip and not ip.startswith("127."):
+            return ip
+    except OSError:
+        pass
+    return None
+
+
+def _request_host_is_loopback() -> bool:
+    host = (request.host or "").split(":")[0].lower()
+    if host in ("localhost", "127.0.0.1", "::1"):
+        return True
+    if host.startswith("127."):
+        return True
+    return False
+
+
+def _public_base_url():
+    """Base URL for QR / phone links. PUBLIC_BASE_URL wins (use for production, e.g. https://claritygrader.net)."""
+    base = (os.environ.get("PUBLIC_BASE_URL") or "").strip().rstrip("/")
+    if base:
+        return base
+    if _request_host_is_loopback():
+        lan = _get_lan_ipv4()
+        if lan:
+            port = request.environ.get("SERVER_PORT", "5000")
+            try:
+                p = int(port)
+            except ValueError:
+                p = 5000
+            return f"http://{lan}:{p}"
+    return request.host_url.rstrip("/")
+
+
+def _url_looks_like_loopback(url: str) -> bool:
+    if not url:
+        return False
+    u = url.lower()
+    return "localhost" in u or "127.0.0.1" in u or "::1" in u
+
+
+def _pending_put(token: str, class_id: str, user_id: str) -> None:
+    with _mobile_upload_lock:
+        _pending_mobile_uploads[token] = {
+            "class_id": class_id,
+            "user_id": user_id,
+            "created": time.time(),
+            "file": None,
+            "filename": None,
+            "content_type": None,
+        }
+
+
+def _pending_get(token: str):
+    with _mobile_upload_lock:
+        p = _pending_mobile_uploads.get(token)
+        if not p:
+            return None
+        if time.time() - p["created"] > MOBILE_UPLOAD_TTL:
+            del _pending_mobile_uploads[token]
+            return None
+        return p
+
+
+def _pending_delete(token: str) -> None:
+    with _mobile_upload_lock:
+        _pending_mobile_uploads.pop(token, None)
 
 DEFAULT_REQUIRED_MS = 2
 
@@ -836,8 +929,107 @@ def update_grade_handler(class_id):
         return redirect(url_for('main.class_detail', class_id=class_id))
 
     assignments = load_assignments_for_class(class_id)
+    template_kwargs = {
+        "class_id": class_id,
+        "class_name": class_data.get("name"),
+        "assignments": assignments,
+    }
+    if assignments:
+        mobile_upload_token = str(uuid4())
+        _pending_put(mobile_upload_token, class_id, session["user_id"])
+        mobile_upload_url = (
+            f"{_public_base_url()}/class/{class_id}/mobile-upload/{mobile_upload_token}"
+        )
+        template_kwargs["mobile_upload_token"] = mobile_upload_token
+        template_kwargs["mobile_upload_url"] = mobile_upload_url
+        template_kwargs["mobile_upload_url_is_loopback"] = _url_looks_like_loopback(mobile_upload_url)
 
-    return render_template("update_grade.html", class_id=class_id, class_name=class_data.get('name'), assignments=assignments)
+    return render_template("update_grade.html", **template_kwargs)
+
+@main_bp.route("/class/<class_id>/mobile-upload/<token>")
+def mobile_upload_page(class_id, token):
+    """Phone-friendly page to photograph or pick a grade sheet (opened via QR)."""
+    p = _pending_get(token)
+    if not p or p["class_id"] != class_id:
+        return (
+            render_template("mobile_upload.html", error="This link is invalid or has expired."),
+            404,
+        )
+    return render_template("mobile_upload.html", class_id=class_id, token=token, error=None)
+
+
+@main_bp.route("/api/mobile-upload/<token>", methods=["POST"])
+def mobile_upload_receive(token):
+    """Receive file from phone; token proves intent (short-lived, unguessable)."""
+    p = _pending_get(token)
+    if not p:
+        return jsonify({"success": False, "error": "Invalid or expired link"}), 400
+
+    if "file" not in request.files:
+        return jsonify({"success": False, "error": "No file uploaded"}), 400
+
+    f = request.files["file"]
+    if not f or not f.filename:
+        return jsonify({"success": False, "error": "No file selected"}), 400
+
+    allowed_extensions = (".pdf", ".jpg", ".jpeg", ".png")
+    if not f.filename.lower().endswith(allowed_extensions):
+        return jsonify({"success": False, "error": "Use a PDF, JPG, or PNG"}), 400
+
+    data = f.read()
+    max_size = 10 * 1024 * 1024
+    if len(data) > max_size:
+        return jsonify({"success": False, "error": "File must be 10MB or smaller"}), 400
+
+    content_type = f.mimetype or "application/octet-stream"
+    with _mobile_upload_lock:
+        if token not in _pending_mobile_uploads:
+            return jsonify({"success": False, "error": "Link expired"}), 400
+        _pending_mobile_uploads[token]["file"] = data
+        _pending_mobile_uploads[token]["filename"] = f.filename
+        _pending_mobile_uploads[token]["content_type"] = content_type
+
+    return jsonify({"success": True})
+
+
+@main_bp.route("/api/class/<class_id>/mobile-upload-status/<token>")
+@api_login_required
+def mobile_upload_status(class_id, token):
+    """Desktop polls until the phone has uploaded a file."""
+    p = _pending_get(token)
+    if not p or p["class_id"] != class_id or p["user_id"] != session["user_id"]:
+        return jsonify({"success": False, "error": "Not found"}), 404
+    ready = p["file"] is not None
+    return jsonify(
+        {
+            "success": True,
+            "ready": ready,
+            "filename": p["filename"] if ready else None,
+        }
+    )
+
+
+@main_bp.route("/api/class/<class_id>/mobile-upload-file/<token>")
+@api_login_required
+def mobile_upload_file(class_id, token):
+    """Return uploaded bytes once, then clear the handoff."""
+    p = _pending_get(token)
+    if not p or p["class_id"] != class_id or p["user_id"] != session["user_id"]:
+        abort(404)
+    if p["file"] is None:
+        return jsonify({"success": False, "error": "No file yet"}), 404
+
+    data = p["file"]
+    filename = p["filename"] or "upload.jpg"
+    content_type = p["content_type"] or "application/octet-stream"
+    _pending_delete(token)
+
+    return Response(
+        data,
+        mimetype=content_type,
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
+    )
+
 
 @main_bp.route("/class/<class_id>/create_learning_objective", methods=["GET", "POST"], endpoint='create_learning_objective')
 @login_required
