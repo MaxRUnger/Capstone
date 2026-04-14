@@ -401,9 +401,10 @@ function displayExtractedData(data) {
   // Filter LO headers: only show columns the user approved
   const allLOs = (data.learning_objectives && data.learning_objectives.length > 0)
     ? data.learning_objectives : [];
+  // Only columns that belong to the assignment or were explicitly approved as extras
   const loHeaders = approvedSet.size > 0
     ? allLOs.filter(lo => approvedSet.has(lo.toUpperCase()))
-    : allLOs;  // fallback: show all if no assignment was selected
+    : [];
 
   // Update the LO badges on Step 3 to reflect filtered set
   const loContainer = document.getElementById('extractedLOs');
@@ -617,6 +618,16 @@ async function handleFormSubmit(e) {
 
   if (!classId) { alert('Missing class ID.'); return; }
 
+  const includeLOs = new Set(assignmentLOs.map(v => v.toUpperCase()));
+  approvedExtraLOs.forEach(v => includeLOs.add(v.toUpperCase()));
+  if (includeLOs.size === 0) {
+    alert(
+      'No learning objectives are selected for import. Link objectives to this assignment on the Assignments tab, ' +
+        'or check the extra columns you want in step 2, then try again.'
+    );
+    return;
+  }
+
   // Disable submit button and show loading state to prevent double-clicks
   const importBtn = document.getElementById('importBtn');
   if (importBtn) {
@@ -625,24 +636,19 @@ async function handleFormSubmit(e) {
     importBtn.classList.add('opacity-75', 'cursor-not-allowed');
   }
 
-  // Build the set of LOs to include: assignment LOs + approved extras
-  const includeLOs = new Set(assignmentLOs.map(v => v.toUpperCase()));
-  approvedExtraLOs.forEach(v => includeLOs.add(v.toUpperCase()));
-
   // Filter each student's grades to only include the approved LOs
   const filteredStudents = uploadedPDFData.students.map(s => {
     const grades = {};
     Object.keys(s.grades || {}).forEach(lo => {
-      if (includeLOs.size === 0 || includeLOs.has(lo.toUpperCase())) {
+      if (includeLOs.has(lo.toUpperCase())) {
         grades[lo] = s.grades[lo];
       }
     });
     return { name: s.name, grades };
   });
 
-  // Filter LO list similarly
   const filteredLOs = (uploadedPDFData.learning_objectives || []).filter(lo =>
-    includeLOs.size === 0 || includeLOs.has(lo.toUpperCase())
+    includeLOs.has(lo.toUpperCase())
   );
 
   const payload = {

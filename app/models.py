@@ -43,6 +43,11 @@ class Course:
                 return None
 
             class_data = response.data[0]
+            class_lo_ids = {
+                str(lo.get("id"))
+                for lo in (class_data.get("learning_objectives") or [])
+                if lo.get("id")
+            }
 
             # Fetch optional class-level settings in a single query.
             # If any column doesn't exist yet, fall back to defaults.
@@ -85,10 +90,13 @@ class Course:
                 try:
                     grades_resp = supabase_admin.table("grades").select(
                         "student_id, learning_objective_id, top_score, second_score, "
-                        "learning_objectives(id, name, required_ms)"
+                        "learning_objectives(id, name, vendor_code, required_ms)"
                     ).in_("student_id", student_ids).execute()
                     for g in (grades_resp.data or []):
-                        grades_by_student.setdefault(g['student_id'], []).append(g)
+                        lo_gid = g.get("learning_objective_id")
+                        if class_lo_ids and str(lo_gid) not in class_lo_ids:
+                            continue
+                        grades_by_student.setdefault(g["student_id"], []).append(g)
                 except Exception as e:
                     logger.error("Error batch-loading grades: %s", e)
 

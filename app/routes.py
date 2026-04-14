@@ -105,6 +105,25 @@ def _pending_delete(token: str) -> None:
 
 DEFAULT_REQUIRED_MS = 2
 
+
+def _merge_lo_row(lo_lookup, lo_id, embed):
+    """Merge canonical LO metadata with an optional grade-row embed (fills gaps)."""
+    base = dict(lo_lookup.get(lo_id) or {})
+    emb = embed if isinstance(embed, dict) else {}
+    for key in ("name", "vendor_code", "required_ms"):
+        v = emb.get(key)
+        if v is not None and v != "" and (key not in base or base.get(key) in (None, "")):
+            base[key] = v
+    return base
+
+
+def _lo_display_title(lo_info):
+    """Prefer vendor_code for short codes (EX1), then name."""
+    vc = (lo_info.get("vendor_code") or "").strip()
+    nm = (lo_info.get("name") or "").strip()
+    return vc or nm or "Unknown LO"
+
+
 # ============================================================================
 # AUTH DECORATORS
 # ============================================================================
@@ -257,12 +276,26 @@ def _load_students_from_grades(class_id):
         except Exception:
             pass  # Names fall back to student_id
 
-    # Build lo_lookup from the LO data embedded in the grade rows
+    # Seed from canonical class LOs so names resolve even when grade embeds are missing
     lo_lookup = {}
+    try:
+        seed = supabase_admin.table("learning_objectives").select(
+            "id, name, vendor_code, required_ms"
+        ).eq("class_id", class_id).execute()
+        for lo in (seed.data or []):
+            lid = str(lo.get("id")) if lo.get("id") else None
+            if lid:
+                lo_lookup[lid] = lo
+    except Exception as e:
+        logger.error("Error seeding LO lookup for class %s: %s", class_id, e)
+
     for g in grades:
-        lo = g.get('learning_objectives') or {}
-        lo_id = str(lo.get('id')) if lo.get('id') else None
-        if lo_id and lo_id not in lo_lookup:
+        lo = g.get("learning_objectives") or {}
+        raw_id = g.get("learning_objective_id")
+        lo_id = str(raw_id) if raw_id is not None else None
+        if not lo_id and lo.get("id"):
+            lo_id = str(lo.get("id"))
+        if lo_id and lo_id not in lo_lookup and lo.get("id"):
             lo_lookup[lo_id] = lo
 
     # Aggregate per-LO across assignments for each student
@@ -280,16 +313,19 @@ def _aggregate_lo_grades(raw_grades, lo_lookup):
     so the student detail page can show e.g. "2 / 2 Ms".
     """
     lo_grades = {}
+    allowed_ids = set(lo_lookup.keys()) if isinstance(lo_lookup, dict) else None
     for g in (raw_grades or []):
         lo_id = str(g.get('learning_objective_id')) if g.get('learning_objective_id') else None
         if not lo_id:
             continue
+        if allowed_ids is not None and len(allowed_ids) > 0 and lo_id not in allowed_ids:
+            continue
         if lo_id not in lo_grades:
-            lo_info = lo_lookup.get(lo_id, {})
+            lo_info = _merge_lo_row(lo_lookup, lo_id, g.get("learning_objectives"))
             lo_grades[lo_id] = {
                 'learning_objective_id': lo_id,
-                'name': lo_info.get('name', 'Unknown LO'),
-                'vendor_code': lo_info.get('vendor_code', ''),
+                'name': _lo_display_title(lo_info),
+                'vendor_code': (lo_info.get('vendor_code') or '').strip(),
                 'required_ms': lo_info.get('required_ms') or DEFAULT_REQUIRED_MS,
                 'm_count': 0,
                 'grades_list': [],
