@@ -1,2 +1,19 @@
-# Created by venv; see https://docs.python.org/3/library/venv.html
-*
+# Environment variables
+.env
+
+# Virtual environment
+venv/
+.venv/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Mac + IDE junk
+.DS_Store
+.vscode/
+.idea/
+
+# OS files
+Thumbs.db
