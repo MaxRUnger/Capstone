@@ -156,7 +156,7 @@
                 <div class="hw-pass-text hidden mt-0.5">
                   <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-green-500 text-white">HW Pass</span>
                 </div>
-                <div class="revision-status mt-0.5 hidden" data-student-id="{{ student.id }}"></div>
+                <div class="revision-status mark-only mt-0.5 hidden" data-student-id="{{ student.id }}"></div>
                 {% if instructor_mode == 'mark' %}
                 <label class="flex items-center justify-center gap-1 mt-1 mark-only cursor-pointer" title="Use a HW pass">
                   <input type="checkbox" class="hw-pass-check w-3.5 h-3.5 rounded border-slate-300 text-green-600 focus:ring-green-500"
@@ -238,6 +238,7 @@
 <script id="assignmentData" type="application/json">{{ assignments | tojson }}</script>
 
 <script>
+const INSTRUCTOR_MODE = '{{ instructor_mode }}';
 const GRADES = ['M', 'R', 'Q', 'P', 'X', 'A'];
 const GRADE_MAP = { 'Q': 'RQ' }; // Q key → RQ grade
 const gradeHistory = [];
@@ -433,7 +434,7 @@ function filterByAssignment() {
         } else if (sid in hwScores) {
           input.classList.remove('hidden');
           input.value = hwScores[sid];
-          input.style.background = hwScores[sid] >= 65 ? '#22c55e' : '#ef4444';
+          input.style.background = INSTRUCTOR_MODE === 'shelbi' ? '#64748b' : (hwScores[sid] >= 65 ? '#22c55e' : '#ef4444');
           if (passText) passText.classList.add('hidden');
           if (passCb) passCb.checked = false;
           updateRevisionStatus(sid, hwScores[sid] >= 65);
@@ -452,6 +453,7 @@ function filterByAssignment() {
 
 // Revision eligibility indicator
 function updateRevisionStatus(studentId, eligible) {
+  if (INSTRUCTOR_MODE === 'shelbi') return;
   const el = document.querySelector(`.revision-status[data-student-id="${studentId}"]`);
   if (!el) return;
   el.classList.remove('hidden');
@@ -471,7 +473,7 @@ document.querySelectorAll('.hw-pct-input').forEach(input => {
     const raw = input.value.trim();
     if (raw === '') { input.style.background = '#64748b'; return; }
     const val = parseInt(raw) || 0;
-    input.style.background = val >= 65 ? '#22c55e' : '#ef4444';
+    input.style.background = INSTRUCTOR_MODE === 'shelbi' ? '#64748b' : (val >= 65 ? '#22c55e' : '#ef4444');
   }
   input.addEventListener('input', () => {
     updateColor();
@@ -613,6 +615,11 @@ document.getElementById('saveBtn').addEventListener('click', async function () {
     btn.disabled = false;
     btn.innerHTML = orig;
   }
+});
+</script>
+<script>
+document.querySelectorAll('.mark-only').forEach(function (el) {
+  if ('{{ instructor_mode }}' === 'shelbi') el.style.display = 'none';
 });
 </script>
 {% endblock %}
