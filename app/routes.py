@@ -1279,13 +1279,8 @@ def api_assignment_grades(class_id, assignment_id):
             key = f"{g['student_id']}|{g['learning_objective_id']}"
             grades_map[key] = g['top_score']
 
-        # Also fetch HW% scores for this assignment (homework_group = assignment_id)
-        hw_resp = supabase_admin.table("homework_scores") \
-            .select("student_id, score_pct") \
-            .eq("class_id", class_id) \
-            .eq("homework_group", assignment_id) \
-            .execute()
-        hw_map = {r['student_id']: r['score_pct'] for r in (hw_resp.data or [])}
+        # HW % is shared by all assignments in the same homework_group (see Homework.get_hw_scores_map_for_assignment)
+        hw_map = Homework.get_hw_scores_map_for_assignment(class_id, assignment_id)
 
         # Compute revision eligibility per student (HW >= 65% or pass used)
         eligibility = {}
@@ -1311,8 +1306,11 @@ def save_hw_percentage(class_id):
         score = int(score)
         if score != -1:
             score = max(0, min(100, score))
+        hw_key = Homework.resolve_hw_group_storage_key(class_id, assignment_id)
+        if hw_key is None:
+            return jsonify({"success": False, "error": "Assignment not found for this class"}), 404
         supabase_admin.table("homework_scores").upsert(
-            {"student_id": student_id, "class_id": class_id, "homework_group": assignment_id, "score_pct": score},
+            {"student_id": student_id, "class_id": class_id, "homework_group": hw_key, "score_pct": score},
             on_conflict="student_id,class_id,homework_group"
         ).execute()
         return jsonify({"success": True})

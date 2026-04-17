@@ -248,6 +248,68 @@ class Homework:
     REVISION_THRESHOLD = 65
 
     @staticmethod
+    def resolve_hw_group_storage_key(class_id, assignment_id):
+        """Return the value stored in homework_scores.homework_group for this assignment.
+
+        All assignments that share the same homework_group label use one HW % row per student.
+        If the assignment has no group label, fall back to assignment_id (legacy behavior).
+        """
+        try:
+            resp = supabase_admin.table("assignments").select("homework_group").eq(
+                "id", assignment_id
+            ).eq("class_id", class_id).limit(1).execute()
+            if not resp.data:
+                return None
+            hg = (resp.data[0].get("homework_group") or "").strip()
+            return hg if hg else assignment_id
+        except Exception as e:
+            logger.error("Error resolving homework group for assignment %s: %s", assignment_id, e)
+            return None
+
+    @staticmethod
+    def get_hw_scores_map_for_assignment(class_id, assignment_id):
+        """Return {student_id: score_pct} for the HW group this assignment belongs to.
+
+        Scores are keyed by the shared homework_group string. Rows keyed by assignment UUID
+        (older data) are merged in so every assignment in the group shows the same HW %.
+        """
+        try:
+            resp = supabase_admin.table("assignments").select("id, homework_group").eq(
+                "id", assignment_id
+            ).eq("class_id", class_id).limit(1).execute()
+            if not resp.data:
+                return {}
+            row = resp.data[0]
+            hg = (row.get("homework_group") or "").strip()
+            hw_map = {}
+            if hg:
+                sib = supabase_admin.table("assignments").select("id").eq(
+                    "class_id", class_id
+                ).eq("homework_group", hg).execute()
+                sib_ids = [r["id"] for r in (sib.data or [])]
+                if sib_ids:
+                    leg = supabase_admin.table("homework_scores").select(
+                        "student_id, score_pct"
+                    ).eq("class_id", class_id).in_("homework_group", sib_ids).execute()
+                    for r in (leg.data or []):
+                        hw_map[r["student_id"]] = r["score_pct"]
+                cur = supabase_admin.table("homework_scores").select(
+                    "student_id, score_pct"
+                ).eq("class_id", class_id).eq("homework_group", hg).execute()
+                for r in (cur.data or []):
+                    hw_map[r["student_id"]] = r["score_pct"]
+            else:
+                single = supabase_admin.table("homework_scores").select(
+                    "student_id, score_pct"
+                ).eq("class_id", class_id).eq("homework_group", assignment_id).execute()
+                for r in (single.data or []):
+                    hw_map[r["student_id"]] = r["score_pct"]
+            return hw_map
+        except Exception as e:
+            logger.error("Error loading homework scores for assignment %s: %s", assignment_id, e)
+            return {}
+
+    @staticmethod
     def get_student_scores(student_id, class_id):
         """Fetches homework performance for a specific student in a class."""
         response = supabase_admin.table("homework_scores").select("*")\
@@ -260,16 +322,14 @@ class Homework:
         """Return {student_id: bool} indicating revision eligibility for an assignment.
 
         A student is eligible if their HW score >= 65% or they used a HW pass (score_pct = -1).
+        Uses the shared homework-group HW % when the assignment is part of a group.
         """
         try:
-            resp = supabase_admin.table("homework_scores").select(
-                "student_id, score_pct"
-            ).eq("class_id", class_id).eq("homework_group", assignment_id).execute()
+            hw_map = Homework.get_hw_scores_map_for_assignment(class_id, assignment_id)
             eligibility = {}
-            for row in (resp.data or []):
-                score = row.get('score_pct')
+            for sid, score in hw_map.items():
                 eligible = score == -1 or (score is not None and score >= Homework.REVISION_THRESHOLD)
-                eligibility[row['student_id']] = eligible
+                eligibility[sid] = eligible
             return eligibility
         except Exception as e:
             logger.error("Error checking revision eligibility: %s", e)
