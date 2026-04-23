@@ -272,12 +272,14 @@ function fetchHwScoresForAssignment(assignmentId) {
         if (sid in hwScores) {
           const score = hwScores[sid];
           if (score === -1) {
-            el.textContent = 'HW Pass';
-            el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300';
+            el.textContent = 'HW Pass (exam only)';
+            el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-sky-100 dark:bg-sky-900/40 text-sky-800 dark:text-sky-200';
           } else {
             el.textContent = score + '%';
-            if (score >= 65) {
+            if (score >= 75) {
               el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300';
+            } else if (score >= 65) {
+              el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200';
             } else {
               el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300';
             }

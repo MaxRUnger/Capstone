@@ -5,8 +5,9 @@ import os
 import socket
 import threading
 import time
+from collections import deque
 from functools import wraps
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session, abort, Response  # type: ignore
 from app.authentication import supabase, supabase_admin
 from app.models import Course, Grade, Student, Homework
@@ -1989,6 +1990,12 @@ def save_grades(class_id):
         data = request.get_json()
         grades_dict = data.get('grades', {})
         assignment_id = data.get('assignment_id')
+        hw_map = (
+            Homework.get_hw_scores_map_for_assignment(class_id, assignment_id)
+            if assignment_id
+            else None
+        )
+        apply_hw_policy = session.get("instructor_mode", "mark") == "mark"
         # Build batch of grade rows and upsert in one call
         grade_rows = []
         for key, grade_value in grades_dict.items():
@@ -1998,6 +2005,18 @@ def save_grades(class_id):
                 if lo_id and grade_value:
                     normalized = Grade.normalize_score(grade_value)
                     if normalized:
+                        if hw_map is not None and apply_hw_policy:
+                            score = hw_map.get(student_id)
+                            if not Homework.is_exam_grade_eligible_hw_score(score):
+                                return jsonify({
+                                    "success": False,
+                                    "error": "No in-class exam grade: homework is below 65% and no free pass for this group.",
+                                }), 400
+                            if normalized in ("M", "MR") and not Homework.is_revision_to_m_eligible_hw_score(score):
+                                return jsonify({
+                                    "success": False,
+                                    "error": "M and MR require homework at 75% or above (free pass only unlocks in-class exam marks, not revision to M).",
+                                }), 400
                         row = {"student_id": student_id, "learning_objective_id": lo_id, "top_score": normalized}
                         if assignment_id:
                             row["assignment_id"] = assignment_id
@@ -2029,12 +2048,19 @@ def api_assignment_grades(class_id, assignment_id):
         # HW % is shared by all assignments in the same homework_group (see Homework.get_hw_scores_map_for_assignment)
         hw_map = Homework.get_hw_scores_map_for_assignment(class_id, assignment_id)
 
-        # Compute revision eligibility per student (HW >= 65% or pass used)
-        eligibility = {}
+        revision_eligible = {}
+        exam_grade_eligible = {}
         for sid, score in hw_map.items():
-            eligibility[sid] = score == -1 or (score is not None and score >= Homework.REVISION_THRESHOLD)
+            revision_eligible[sid] = Homework.is_revision_to_m_eligible_hw_score(score)
+            exam_grade_eligible[sid] = Homework.is_exam_grade_eligible_hw_score(score)
 
-        return jsonify({"success": True, "grades": grades_map, "hw_scores": hw_map, "revision_eligible": eligibility})
+        return jsonify({
+            "success": True,
+            "grades": grades_map,
+            "hw_scores": hw_map,
+            "revision_eligible": revision_eligible,
+            "exam_grade_eligible": exam_grade_eligible,
+        })
     except Exception as e:
         logger.error("fetching assignment grades failed: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
@@ -2261,9 +2287,9 @@ def api_import_grades():
         if lo.get('name'):
             lo_map[lo['name'].strip().lower()] = lo['id']
 
-    # Create missing LOs from extracted list
+    # Create missing LOs from extracted list (ignore homework % columns)
     for lo_name in extracted_los:
-        if not lo_name:
+        if not lo_name or Homework.is_import_sheet_hw_column(lo_name):
             continue
         key = lo_name.strip().lower()
         if key in lo_map:
@@ -2281,6 +2307,7 @@ def api_import_grades():
 
     imported = 0
     grade_rows = []
+    hw_score_rows: List[Dict] = []
 
     # Link all extracted LOs to the selected assignment (if not already linked)
     if assignment_id:
@@ -2293,7 +2320,7 @@ def api_import_grades():
 
             new_links = []
             for lo_name in extracted_los:
-                if not lo_name:
+                if not lo_name or Homework.is_import_sheet_hw_column(lo_name):
                     continue
                 lo_id = lo_map.get(lo_name.strip().lower())
                 if lo_id and lo_id not in already_linked:
@@ -2305,6 +2332,29 @@ def api_import_grades():
         except Exception as e:
             logger.error("Error linking LOs to assignment: %s", e)
 
+    # One queue per name, seeded only from *existing* class enrollments before this
+    # import. Each file row for "Jane Doe" takes the next pre-enrolled student with
+    # that name; after the queue is empty, further rows with that name get new
+    # profiles. The old `profiles...eq(full_name).limit(1)` behavior merged every
+    # duplicate line onto the same id (overwriting LOs) so deleting a "spare" row
+    # could still remove the only enrollment that had been receiving those grades.
+    pre_enrolled_by_name: Dict[str, Deque[str]] = {}
+    try:
+        enr = supabase_admin.table("enrollments").select(
+            "id, student_id, profiles(id, full_name)"
+        ).eq("class_id", class_id).order("id", desc=False).execute()
+        for row in (enr.data or []):
+            prof = row.get("profiles")
+            if not isinstance(prof, dict) or not prof.get("id"):
+                continue
+            name_key = (prof.get("full_name") or "").strip().lower()
+            if not name_key:
+                continue
+            pre_enrolled_by_name.setdefault(name_key, deque()).append(str(row["student_id"]))
+    except Exception as e:
+        logger.error("Error loading class enrollments for import matching: %s", e)
+        pre_enrolled_by_name = {}
+
     for student in students:
         full_name = (student.get('name') or student.get('full_name') or '').strip()
         logger.debug("Processing student: name='%s', full_name='%s', extracted='%s'", student.get('name'), student.get('full_name'), full_name)
@@ -2312,21 +2362,16 @@ def api_import_grades():
             logger.debug("Skipping student - no name found")
             continue
 
-        # Try to find existing profile by name (avoid single() throwing when no rows)
-        profile_id = None
-        try:
-            profile_resp = supabase_admin.table("profiles").select("id").eq("full_name", full_name).limit(1).execute()
-            if profile_resp.data and len(profile_resp.data) > 0:
-                profile_id = profile_resp.data[0]['id']
-                logger.debug("Found existing profile for '%s': %s", full_name, profile_id)
-        except Exception as e:
-            logger.error("Error searching for profile for '%s': %s", full_name, e)
-            profile_id = None
+        name_key = full_name.lower()
+        q = pre_enrolled_by_name.get(name_key)
+        profile_id: Optional[str] = None
+        if q and len(q) > 0:
+            profile_id = q.popleft()
 
         if not profile_id:
             profile_id = str(uuid4())
             try:
-                result = supabase_admin.table("profiles").insert({
+                supabase_admin.table("profiles").insert({
                     "id": profile_id,
                     "full_name": full_name,
                     "role": "student"
@@ -2335,8 +2380,9 @@ def api_import_grades():
             except Exception as e:
                 logger.error("Error creating profile for '%s': %s", full_name, e)
                 continue
+        # else: matched an existing class enrollment; grades attach to that student only
 
-        # Enroll student in class if not already enrolled
+        # Enroll in class if not already (new profiles only)
         try:
             enrollment_resp = supabase_admin.table("enrollments").select("id").eq("class_id", class_id).eq("student_id", profile_id).limit(1).execute()
             if not (enrollment_resp.data and len(enrollment_resp.data) > 0):
@@ -2351,6 +2397,8 @@ def api_import_grades():
         grades = student.get('grades', {}) or {}
         for lo_name, mark in grades.items():
             if not lo_name or not mark:
+                continue
+            if Homework.is_import_sheet_hw_column(lo_name):
                 continue
 
             lo_id = lo_map.get(lo_name.strip().lower())
@@ -2367,6 +2415,20 @@ def api_import_grades():
                 "top_score": normalized,
                 "assignment_id": assignment_id
             })
+
+        if assignment_id:
+            hwp = student.get("homework_pct")
+            if hwp is not None and str(hwp).strip() != "":
+                p = Homework.parse_import_hw_pct(hwp)
+                if p is not None:
+                    hw_key = Homework.resolve_hw_group_storage_key(class_id, assignment_id)
+                    if hw_key:
+                        hw_score_rows.append({
+                            "student_id": profile_id,
+                            "class_id": class_id,
+                            "homework_group": hw_key,
+                            "score_pct": p,
+                        })
 
         imported += 1
 
@@ -2388,7 +2450,23 @@ def api_import_grades():
     except Exception as e:
         logger.error("Error processing grades in bulk: %s", e)
 
-    return jsonify({"success": True, "imported_students": imported, "imported_grades": len(grade_rows)}), 200
+    if hw_score_rows and assignment_id:
+        try:
+            for i in range(0, len(hw_score_rows), 150):
+                chunk = hw_score_rows[i : i + 150]
+                supabase_admin.table("homework_scores").upsert(
+                    chunk, on_conflict="student_id,class_id,homework_group"
+                ).execute()
+            logger.info("Upserted %d homework score rows for import", len(hw_score_rows))
+        except Exception as e:
+            logger.error("Homework score upsert error on import: %s", e)
+
+    return jsonify({
+        "success": True,
+        "imported_students": imported,
+        "imported_grades": len(grade_rows),
+        "imported_hw_scores": len(hw_score_rows),
+    }), 200
 
 
 @main_bp.route("/api/analyze-grade-pdf", methods=["POST"])
@@ -2451,6 +2529,7 @@ def analyze_grade_pdf():
             "data": {
                 "students": extracted_data.get('students', []),
                 "learning_objectives": extracted_data.get('learning_objectives', []),
+                "homework_column": extracted_data.get("homework_column"),
                 "raw_text": extracted_data.get('raw_text', '')
             }
         }), 200

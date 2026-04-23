@@ -16,6 +16,8 @@ import os
 import json
 import re
 
+from app.models import Homework
+
 try:
     import fitz  # type: ignore  # PyMuPDF for PDF→image conversion
     HAS_PYMUPDF = True
@@ -62,12 +64,14 @@ Return ONLY valid JSON in this exact format (no markdown fencing, no extra text)
 }
 
 Rules:
-- "learning_objectives" is the ordered list of column headers (excluding the student name column).
+- "learning_objectives" is the ordered list of column headers (excluding the student name column), in left-to-right order.
 - Each student's "grades" object uses the column header as key and the grade mark as value.
+- Columns for homework completion percentage must use headers like HW, HW%, Homework, or HW1 — not fake learning objective codes. Put numeric homework scores only under those columns.
 - Omit empty/blank cells from the grades object entirely.
 - Normalize all grade marks to uppercase (M, MR, P, X, R, RQ, A).
-- Convert any checkmark symbol to "P".
-- Preserve numbers as strings (e.g., "85" not 85).
+- Convert any checkmark symbol to "P" for learning-objective columns only (not for homework % columns).
+- For homework % columns, preserve numbers as strings (e.g., "85" not 85).
+- Do not put a homework percentage under a learning objective code (EX1, A7, etc.); it must be under a homework-style header.
 - Student names should be in their original order as they appear on the sheet.
 - Preserve the exact spelling of student names as printed on the sheet.
 """
@@ -124,19 +128,23 @@ class GradeSheetGeminiAnalyzer:
                   f"{len(extracted['learning_objectives'])} LOs")
 
             # Build raw text for display
-            raw_lines = []
-            headers = extracted['learning_objectives']
-            if headers:
-                raw_lines.append('Name | ' + ' | '.join(headers))
+            raw_lines: List[str] = []
+            headers = list(extracted['learning_objectives'])
+            hw_lbl = extracted.get('homework_column')
+            has_hw = any((s.get('homework_pct') or '').strip() for s in extracted['students'])
+            line_headers = headers + ([hw_lbl] if (hw_lbl and has_hw) else [])
+            if line_headers:
+                raw_lines.append('Name | ' + ' | '.join(line_headers))
             for s in extracted['students']:
-                grade_str = ' | '.join(
-                    str(s['grades'].get(h, '')) for h in headers
-                )
-                raw_lines.append(f"{s['name']} | {grade_str}")
+                cells = [str(s['grades'].get(h, '')) for h in headers]
+                if hw_lbl and has_hw:
+                    cells.append(str(s.get('homework_pct', '')))
+                raw_lines.append(f"{s['name']} | {' | '.join(cells)}")
 
             return {
                 'students': extracted['students'],
                 'learning_objectives': extracted['learning_objectives'],
+                'homework_column': extracted.get('homework_column'),
                 'raw_text': '\n'.join(raw_lines),
                 'success': True
             }
@@ -232,11 +240,20 @@ class GradeSheetGeminiAnalyzer:
             raise Exception("Failed to parse grade sheet data from AI response")
 
     def _normalize_data(self, data: Dict) -> Dict:
-        """Normalize and validate the extracted data."""
-        learning_objectives = data.get('learning_objectives', [])
+        """Normalize and validate the extracted data.
+
+        Splits homework percentage columns (HW, Homework, etc.) out of the LO list so they are
+        not stored as learning objectives or coerced to mastery codes.
+        """
+        learning_objectives = list(data.get('learning_objectives', []) or [])
         students_raw = data.get('students', [])
 
         valid_marks = {'M', 'MR', 'X', 'R', 'P', 'A', 'RQ', '/'}
+
+        hw_headers = [h for h in learning_objectives if Homework.is_import_sheet_hw_column(h)]
+        lo_only = [h for h in learning_objectives if not Homework.is_import_sheet_hw_column(h)]
+
+        first_hw_label = hw_headers[0] if hw_headers else None
 
         students = []
         for s in students_raw:
@@ -244,28 +261,45 @@ class GradeSheetGeminiAnalyzer:
             if not name or len(name) < 2:
                 continue
 
-            grades = {}
-            raw_grades = s.get('grades', {})
-            for lo, mark in raw_grades.items():
-                mark_str = str(mark).strip().upper()
-                if mark_str in ('✓', '✔', 'CHECK', 'PASS', 'YES'):
-                    mark_str = 'P'
-                if mark_str in valid_marks or re.match(r'^\d+\.?\d*$', mark_str):
-                    grades[lo] = mark_str
+            grades: Dict[str, str] = {}
+            raw_grades = s.get('grades', {}) or {}
+            homework_pct: Optional[str] = None
+
+            for h in learning_objectives:
+                if h not in raw_grades:
+                    continue
+                mark = raw_grades[h]
+                if Homework.is_import_sheet_hw_column(h):
+                    parsed = Homework.parse_import_hw_pct(mark)
+                    if parsed is not None:
+                        homework_pct = str(parsed)
+                    elif str(mark).strip() != "":
+                        # Keep raw (e.g. "92.3") for UI editing if parse failed on odd formats
+                        m = str(mark).strip()
+                        if re.match(r"^\d+\.?\d*%?$", m):
+                            homework_pct = m.rstrip("%")
+                else:
+                    mark_str = str(mark).strip().upper()
+                    if mark_str in ('✓', '✔', 'CHECK', 'PASS', 'YES'):
+                        mark_str = 'P'
+                    if mark_str in valid_marks or re.match(r'^\d+\.?\d*$', mark_str):
+                        grades[h] = mark_str
 
             students.append({
                 'name': name,
-                'grades': grades
+                'grades': grades,
+                'homework_pct': homework_pct,
             })
 
         return {
-            'learning_objectives': learning_objectives,
+            'learning_objectives': lo_only,
+            'homework_column': first_hw_label,
             'students': students
         }
 
 
 _cached_analyzer = None
-_module_version = 12  # Bumped for Gemini migration
+_module_version = 13  # Bumped: homework columns split from LOs
 
 def get_gemini_analyzer() -> Optional[GradeSheetGeminiAnalyzer]:
     """

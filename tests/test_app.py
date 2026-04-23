@@ -25,7 +25,7 @@ sys.modules.setdefault('app.authentication', MagicMock(
     supabase_admin=_mock_supabase_admin,
 ))
 
-from app.models import Grade, MASTERY_GRADES
+from app.models import Grade, Homework, MASTERY_GRADES
 from app.routes import (
     organize_by_learning_objectives,
     normalize_profile,
@@ -122,6 +122,44 @@ class TestGradeGetPriority(unittest.TestCase):
     def test_unknown_grade_returns_negative(self):
         self.assertEqual(Grade.get_priority('Z'), -1)
         self.assertEqual(Grade.get_priority(None), -1)
+
+
+class TestHomeworkImportSheetColumn(unittest.TestCase):
+    """Homework % columns on scanned sheets are not learning objectives."""
+
+    def test_is_import_sheet_hw_column(self):
+        self.assertTrue(Homework.is_import_sheet_hw_column("HW"))
+        self.assertTrue(Homework.is_import_sheet_hw_column("  HW%  "))
+        self.assertTrue(Homework.is_import_sheet_hw_column("Homework"))
+        self.assertTrue(Homework.is_import_sheet_hw_column("HW1"))
+        self.assertFalse(Homework.is_import_sheet_hw_column("EX1"))
+        self.assertFalse(Homework.is_import_sheet_hw_column("A7"))
+
+    def test_parse_import_hw_pct(self):
+        self.assertEqual(Homework.parse_import_hw_pct("85"), 85)
+        self.assertEqual(Homework.parse_import_hw_pct(" 92.3% "), 92)
+        self.assertEqual(Homework.parse_import_hw_pct(-1), -1)
+        self.assertIsNone(Homework.parse_import_hw_pct("M"))
+        self.assertIsNone(Homework.parse_import_hw_pct(""))
+        self.assertIsNone(Homework.parse_import_hw_pct(None))
+
+
+class TestHomeworkEligibilityThresholds(unittest.TestCase):
+    """HW % rules: 65%+ in-class exam marks; 75%+ for M/MR; pass (-1) = exam only."""
+
+    def test_exam_grade_eligible(self):
+        self.assertFalse(Homework.is_exam_grade_eligible_hw_score(None))
+        self.assertFalse(Homework.is_exam_grade_eligible_hw_score(64))
+        self.assertTrue(Homework.is_exam_grade_eligible_hw_score(65))
+        self.assertTrue(Homework.is_exam_grade_eligible_hw_score(100))
+        self.assertTrue(Homework.is_exam_grade_eligible_hw_score(-1))
+
+    def test_revision_to_m_eligible(self):
+        self.assertFalse(Homework.is_revision_to_m_eligible_hw_score(None))
+        self.assertFalse(Homework.is_revision_to_m_eligible_hw_score(-1))
+        self.assertFalse(Homework.is_revision_to_m_eligible_hw_score(74))
+        self.assertTrue(Homework.is_revision_to_m_eligible_hw_score(75))
+        self.assertTrue(Homework.is_revision_to_m_eligible_hw_score(100))
 
 
 # ==========================================================================
