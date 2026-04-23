@@ -1,0 +1,1034 @@
+{% extends "app_base.html" %}
+{% from "_components.html" import homework_percentage_badge, progress_bar, copy_email_button %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Dashboard</h1>
+      <p class="text-slate-500 dark:text-slate-400 mt-1">{{ class_name }}</p>
+    </div>
+
+  </div>
+
+  {% set total_students = students|length %}
+  {% set total_all_students = all_students|length %}
+  {% set total_los = learning_objectives|length %}
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <button type="button" onclick="document.getElementById('studentManagementModal').classList.remove('hidden')" class="text-left bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm hover:scale-[1.02] transition-transform">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Active Students</p>
+          <p class="text-3xl font-semibold text-slate-900 dark:text-white">{{ total_students }}</p>
+        </div>
+        <div class="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+        </div>
+      </div>
+    </button>
+    <button type="button" onclick="document.getElementById('overdueRevisionsModal').classList.remove('hidden')" class="mark-only text-left bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm hover:scale-[1.02] transition-transform">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Overdue Revisions</p>
+          <p class="text-3xl font-semibold text-orange-600 dark:text-orange-400">{{ overdue_revisions|length }}</p>
+        </div>
+        <div class="p-2.5 rounded-lg bg-orange-50 dark:bg-orange-900 text-orange-600 dark:text-orange-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+        </div>
+      </div>
+    </button>
+    <div class="bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Learning Objectives</p>
+          <p class="text-3xl font-semibold text-slate-900 dark:text-white">{{ total_los }}</p>
+        </div>
+        <div class="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138z"></path></svg>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-6 items-start">
+    <!-- ~60%: students, assignments, upload -->
+    <div class="min-w-0 bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+      <div class="p-6 border-b border-slate-100 dark:border-slate-700">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+          <div class="flex gap-2 flex-wrap">
+            <button type="button" onclick="switchView('students')" id="btnStudents" class="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors">By Students</button>
+            <button type="button" onclick="switchView('assignments')" id="btnAssignments" class="px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">By Assignments</button>
+          </div>
+          <div class="flex gap-2 flex-wrap">
+            <a href="{{ url_for('main.upload_grades', class_id=class_id) }}" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium">Upload Grades</a>
+            <a href="{{ url_for('main.class_assignments', class_id=class_id) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">Manage Assignments</a>
+          </div>
+        </div>
+        <div class="relative">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+          <input type="text" id="searchInput" placeholder="Search..." oninput="handleSearch()" class="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-900 dark:text-white dark:placeholder-slate-400">
+        </div>
+      </div>
+
+      <div id="studentsView" class="divide-y divide-slate-50 dark:divide-slate-700">
+        {% for student in students %}
+        {% set los = student.learning_objectives %}
+        {% set passed = los|selectattr('is_passed')|list|length %}
+        <div class="student-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-name="{{ student.name|lower }} {{ (student.email or '')|lower }}">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <div class="min-w-0 flex-1">
+                <a href="{{ url_for('main.class_student_detail', class_id=class_id, student_id=student.id) }}" class="block hover:underline">
+                  <span class="font-medium text-slate-900 dark:text-white">{{ student.name }}</span>
+                </a>
+                {% if student.email %}
+                <div class="flex items-center gap-1 mt-0.5 min-w-0">
+                  <span class="text-xs text-slate-500 dark:text-slate-400 select-text cursor-text truncate">{{ student.email }}</span>
+                  {{ copy_email_button(student.email, compact=True) }}
+                </div>
+                {% endif %}
+              </div>
+              <a href="{{ url_for('main.class_student_detail', class_id=class_id, student_id=student.id) }}" class="shrink-0 hover:opacity-90" tabindex="-1" aria-hidden="true">
+                {{ homework_percentage_badge(passed, los|length) }}
+              </a>
+            </div>
+            <button type="button" onclick="deleteStudent('{{ student.id }}', '{{ student.name }}')" class="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors flex-shrink-0" title="Delete student">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+            </button>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div id="assignmentsView" class="hidden divide-y divide-slate-50 dark:divide-slate-700">
+        {% for assignment in assignments %}
+        <div class="assignment-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-assignment-name="{{ assignment.name|lower }}">
+          <div class="flex items-center justify-between cursor-pointer" onclick="toggleAssignment(this)">
+            <span class="font-medium text-slate-900 dark:text-white">{{ assignment.name }}</span>
+            <svg class="w-5 h-5 text-slate-400 chevron transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+          </div>
+          <div class="assignment-content mt-4 hidden">
+            <div class="space-y-4">
+              <div class="text-sm text-slate-600 dark:text-slate-400">
+                <span class="mark-only"><strong>Homework Group:</strong> {{ assignment.homework_group }}<br></span>
+                <span class="mark-only">{% if assignment.date_returned %}<strong>Date Returned:</strong> {{ assignment.date_returned }}<br>{% endif %}</span>
+                <span class="mark-only">{% if assignment.revision_due %}<strong>Revision Due:</strong> {{ assignment.revision_due }}<br>{% endif %}</span>
+              </div>
+              {% if assignment.assignment_objectives %}
+              <div>
+                <strong class="text-sm text-slate-600 dark:text-slate-400">Linked Learning Objectives:</strong>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  {% for ao in assignment.assignment_objectives %}
+                  <span class="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs rounded-full">
+                    {{ ao.learning_objectives.vendor_code or ao.learning_objectives.name }}
+                  </span>
+                  {% endfor %}
+                </div>
+              </div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% else %}
+        <div class="p-12 text-center text-slate-400 dark:text-slate-500 text-sm">
+          No assignments yet.<br>
+          <span class="mt-1 inline-block">Go to <a href="{{ url_for('main.class_assignments', class_id=class_id) }}" class="text-blue-600 dark:text-blue-400 underline">Manage Assignments</a> to create one.</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- ~40%: learning objectives -->
+    <aside class="min-w-0 bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 lg:sticky lg:top-6 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+      <div class="mb-5">
+        <h2 class="font-semibold text-slate-900 dark:text-white">Learning objectives</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Add objectives here or under Assignments. Link them to assignments when you manage assignments.</p>
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Objective Code</label>
+        <input type="text" id="loCode" placeholder="e.g., ALG-1.1"
+          class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+      </div>
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Objective Name</label>
+        <textarea id="loName" rows="1" data-max-height="520" placeholder="e.g., Solve Linear Equations"
+          class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none overflow-hidden min-h-[2.75rem] leading-snug block"></textarea>
+      </div>
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Description <span class="text-slate-400">(optional)</span></label>
+        <input type="text" id="loDescription" placeholder="Brief description of the objective"
+          class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+      </div>
+      <div class="mb-6">
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Required Ms</label>
+        <input type="number" id="loRequiredMs" value="2" min="1" max="5"
+          class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+      </div>
+
+      <form action="{{ url_for('main.create_learning_objective', class_id=class_id) }}" method="post" id="loForm">
+        <input type="hidden" name="form_type" value="create_lo">
+        <input type="hidden" name="return_to" value="dashboard">
+        <input type="hidden" name="name" id="hiddenLoName">
+        <input type="hidden" name="code" id="hiddenLoCode">
+        <input type="hidden" name="description" id="hiddenLoDescription">
+        <input type="hidden" name="required_ms" id="hiddenLoRequiredMs">
+        <button type="button" onclick="dashboardCreateLO()" id="createLOBtn"
+          class="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2 shadow-sm shadow-blue-500/20">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          Create Objective
+        </button>
+      </form>
+
+      <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-600 space-y-2">
+        <button type="button" id="loCsvToggleBtn"
+          class="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+          Upload Learning Objective
+        </button>
+        <div id="loCsvUploadPanel" class="hidden space-y-3 pt-1">
+          <p class="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wide">Import from CSV</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400">Uses only <strong class="text-slate-700 dark:text-slate-300">title</strong>, <strong class="text-slate-700 dark:text-slate-300">description</strong>, and <strong class="text-slate-700 dark:text-slate-300">calculation_int</strong> (e.g. Canvas outcomes export). You will preview rows before anything is saved.</p>
+          <input type="file" id="loCsvInput" accept=".csv,text/csv,application/csv" class="hidden">
+          <button type="button" id="loCsvChooseBtn" onclick="document.getElementById('loCsvInput').click()"
+            class="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100 rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+            Choose CSV from computer
+          </button>
+          {% if lo_mobile_upload_token %}
+          <div class="rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 p-3 space-y-2">
+            <p class="text-xs font-semibold text-slate-800 dark:text-slate-100">Or use your phone</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Scan the QR code to open the uploader on your phone; the file is sent to this browser tab.</p>
+            {% if lo_mobile_upload_url_is_loopback %}
+            <div class="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+              Phones cannot open <code class="rounded bg-white/70 px-0.5 dark:bg-slate-800">localhost</code>. Set <code class="rounded bg-white/70 px-0.5 dark:bg-slate-800">PUBLIC_BASE_URL</code> or use your LAN URL (same Wi‑Fi as the phone).
+            </div>
+            {% endif %}
+            <div class="flex justify-center py-1">
+              <div id="loQrCanvas" class="rounded-lg bg-white p-2 shadow-sm inline-block" aria-label="QR code for CSV upload from phone"></div>
+            </div>
+            <p id="loCsvMobileStatus" class="hidden text-xs text-green-600 dark:text-green-400 font-medium text-center"></p>
+          </div>
+          {% endif %}
+          <button type="button" id="loCsvPanelCloseBtn" class="w-full text-xs font-medium text-slate-600 dark:text-slate-300 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-500 bg-transparent hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-800 dark:hover:text-white transition-colors">
+            Hide upload
+          </button>
+        </div>
+      </div>
+
+      <div class="mt-8">
+        <button type="button"
+          class="w-full flex items-center justify-between gap-2 rounded-lg px-1 py-2 -mx-1 mb-2 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors text-left"
+          onclick="toggleExistingLosSection(this)" aria-expanded="false" aria-controls="existingLosListWrapper">
+          <span class="font-medium text-slate-900 dark:text-white">Existing objectives</span>
+          <svg class="w-5 h-5 text-slate-400 chevron transition-transform shrink-0 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+        <div id="existingLosListWrapper" class="hidden">
+        <div id="existingLosList" class="space-y-2 max-h-56 overflow-y-auto pr-1">
+          {% for lo in all_los %}
+          <div class="lo-row flex items-center gap-1 px-3 py-2 bg-slate-50 dark:bg-slate-700 rounded-lg"
+               data-lo-id="{{ lo.id }}"
+               data-lo-code="{{ (lo.vendor_code or '')|e }}"
+               data-lo-name="{{ (lo.name or '')|e }}"
+               data-lo-description="{{ (lo.description or '')|e }}"
+               data-lo-required="{{ lo.required_ms|default(2, true) }}">
+            <span class="lo-row-display text-xs font-medium text-slate-700 dark:text-slate-300 flex-1 truncate min-w-0">{{ lo.vendor_code or lo.name }}</span>
+            <button type="button" class="lo-edit-btn p-1 text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0" title="Edit">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+            </button>
+            <button type="button" class="lo-delete-btn p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-colors shrink-0" title="Delete">
+              <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+            </button>
+          </div>
+          {% else %}
+          <p class="text-sm text-slate-500 dark:text-slate-400 py-2">No objectives yet. Create one above.</p>
+          {% endfor %}
+        </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Learning objectives CSV preview (nothing saved until user confirms) -->
+  <div id="loCsvPreviewModal" class="hidden fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+       role="dialog" aria-modal="true"
+       onclick="if (event.target === this && typeof closeLoCsvPreviewModal === 'function') closeLoCsvPreviewModal()">
+    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+      <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700 flex items-start justify-between gap-3 shrink-0">
+        <div>
+          <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Confirm import</h3>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Review what was read from your file. Only <strong class="text-slate-700 dark:text-slate-300">new</strong> codes are added; rows already in this class are skipped.</p>
+        </div>
+        <button type="button" onclick="closeLoCsvPreviewModal()" class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0" aria-label="Close">
+          <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div id="loCsvPreviewWarnings" class="hidden px-5 py-2.5 text-xs bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-100 border-b border-amber-100 dark:border-amber-900/40 shrink-0 whitespace-pre-wrap"></div>
+      <div class="flex-1 min-h-0 overflow-auto p-4">
+        <table class="w-full text-sm text-left border-collapse">
+          <thead class="text-xs uppercase text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-700/50 sticky top-0 z-10">
+            <tr>
+              <th class="px-2 py-2 font-medium">Code (title)</th>
+              <th class="px-2 py-2 font-medium">Objective</th>
+              <th class="px-2 py-2 font-medium w-12">Ms</th>
+              <th class="px-2 py-2 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody id="loCsvPreviewTbody" class="divide-y divide-slate-100 dark:divide-slate-700 text-slate-800 dark:text-slate-200"></tbody>
+        </table>
+      </div>
+      <div class="px-5 py-3 border-t border-slate-200 dark:border-slate-700 flex flex-wrap gap-2 justify-end shrink-0 bg-slate-50/90 dark:bg-slate-900/50">
+        <button type="button" id="loCsvPreviewCancel" onclick="closeLoCsvPreviewModal()"
+          class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">Cancel</button>
+        <button type="button" id="loCsvPreviewConfirm"
+          class="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Import confirmed rows</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit learning objective (same row id — grades stay linked) -->
+  <div id="editLoModal" class="hidden fixed inset-0 z-[61] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+       role="dialog" aria-modal="true" onclick="if (event.target === this) closeEditLoModal()">
+    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 w-full max-w-md p-6" onclick="event.stopPropagation()">
+      <div class="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Edit objective</h3>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Updates labels and settings only. All grades and assignment links stay on this objective.</p>
+        </div>
+        <button type="button" onclick="closeEditLoModal()" class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500" aria-label="Close">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Objective code</label>
+          <input type="text" id="editLoCode" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Objective name</label>
+          <textarea id="editLoName" rows="1" data-max-height="360" required class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-hidden min-h-[2.75rem] leading-snug block"></textarea>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description <span class="text-slate-400 font-normal">(optional)</span></label>
+          <input type="text" id="editLoDescription" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Required Ms</label>
+          <input type="number" id="editLoRequiredMs" min="1" max="5" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+      </div>
+      <div class="flex gap-2 justify-end mt-6">
+        <button type="button" onclick="closeEditLoModal()" class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">Cancel</button>
+        <button type="button" id="editLoSaveBtn" onclick="saveEditLo()" class="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors">Save changes</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="overdueRevisionsModal" class="mark-only hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-8">
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900 dark:text-white">Overdue Revisions Report</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Students with revisions past due date</p>
+      </div>
+      <button type="button" onclick="document.getElementById('overdueRevisionsModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-6">
+      {% if overdue_revisions %}
+      <div class="space-y-3">
+        {% for rev in overdue_revisions %}
+        <div class="flex items-center justify-between p-4 rounded-lg border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20">
+          <div>
+            <p class="font-medium text-slate-900 dark:text-white">{{ rev.student_name }}</p>
+            <p class="text-sm text-slate-600 dark:text-slate-400">{{ rev.lo_name }} · {{ rev.assignment_name }}</p>
+          </div>
+          <div class="text-right">
+            <span class="px-2 py-1 bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-orange-300 text-xs font-medium rounded-full">RQ</span>
+            <p class="text-xs text-red-500 mt-1">Due {{ rev.revision_due }}</p>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-slate-500 dark:text-slate-400 text-center py-8">No overdue revisions.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div id="studentManagementModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-8">
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-4xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900 dark:text-white">Manage Students</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ students|length }} active students ({{ all_students|length }} total)</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <button type="button" onclick="document.getElementById('addStudentModal').classList.remove('hidden')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
+          Add Student
+        </button>
+        <button type="button" onclick="document.getElementById('studentManagementModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+          <svg class="w-5 h-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+    </div>
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700">
+      <div class="relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+        <input type="text" id="modalSearchInput" placeholder="Search students..." oninput="filterModalStudents()" class="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-900 dark:text-white dark:placeholder-slate-400">
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto p-6 space-y-2" id="modalStudentList">
+      {% for student in all_students %}
+      <div class="modal-student flex items-center justify-between p-4 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 gap-4{% if student.muted %} opacity-60{% endif %}" data-name="{{ student.name|lower }} {{ (student.email or '')|lower }}" data-student-id="{{ student.id }}">
+        <div class="flex-1 min-w-0">
+          <p class="font-medium text-slate-900 dark:text-white{% if student.muted %} line-through{% endif %}">{{ student.name }}</p>
+          {% if student.email %}
+          <div class="flex items-center gap-1 mt-0.5 min-w-0">
+            <span class="text-xs text-slate-500 dark:text-slate-400 select-text cursor-text truncate">{{ student.email }}</span>
+            {{ copy_email_button(student.email, compact=True) }}
+          </div>
+          {% endif %}
+        </div>
+        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 cursor-pointer shrink-0">
+          <input type="checkbox" class="mute-toggle rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" data-student-id="{{ student.id }}" onchange="toggleMute(this)"{% if student.muted %} checked{% endif %}>
+          <span>Mute</span>
+        </label>
+        <a href="{{ url_for('main.class_student_detail', class_id=class_id, student_id=student.id) }}" class="text-sm text-blue-600 dark:text-blue-400 hover:underline shrink-0">View progress →</a>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm text-slate-600 dark:text-slate-400">
+      Muted students are hidden from all grading views, reports, and student lists.
+    </div>
+  </div>
+</div>
+
+<div id="addStudentModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onclick="if(event.target===this) this.classList.add('hidden')">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full" onclick="event.stopPropagation()">
+    <div class="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+      <h2 class="font-semibold text-slate-900 dark:text-white">Add Student</h2>
+      <button type="button" onclick="document.getElementById('addStudentModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <form id="addStudentForm" onsubmit="addStudent(event)" class="p-6 space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Email</label>
+        <input type="email" id="studentEmail" required placeholder="student@university.edu" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
+        <input type="text" id="studentName" required placeholder="John Doe" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button type="button" onclick="document.getElementById('addStudentModal').classList.add('hidden')" class="flex-1 px-4 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-colors">
+          Cancel
+        </button>
+        <button type="submit" class="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm shadow-blue-500/20">
+          Add Student
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+
+
+<script>
+function filterModalStudents() {
+  const q = document.getElementById('modalSearchInput')?.value.toLowerCase() || '';
+  document.querySelectorAll('.modal-student').forEach(el => {
+    el.style.display = (!q || el.dataset.name.includes(q)) ? '' : 'none';
+  });
+}
+function toggleMute(checkbox) {
+  const row = checkbox.closest('.modal-student');
+  const studentId = checkbox.dataset.studentId;
+  const muted = checkbox.checked;
+  row.classList.toggle('opacity-60', muted);
+  row.querySelector('p').classList.toggle('line-through', muted);
+  fetch(`/api/class/{{ class_id }}/toggle_mute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ student_id: studentId, muted: muted })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.success) {
+      alert('Error toggling mute: ' + (data.error || 'Unknown error'));
+      checkbox.checked = !muted;
+      row.classList.toggle('opacity-60', !muted);
+      row.querySelector('p').classList.toggle('line-through', !muted);
+    }
+  })
+  .catch(() => {
+    alert('Error toggling mute.');
+    checkbox.checked = !muted;
+    row.classList.toggle('opacity-60', !muted);
+    row.querySelector('p').classList.toggle('line-through', !muted);
+  });
+}
+</script>
+
+<script>
+function switchView(view) {
+  const studentsView = document.getElementById('studentsView');
+  const assignmentsView = document.getElementById('assignmentsView');
+  const btnStudents = document.getElementById('btnStudents');
+  const btnAssignments = document.getElementById('btnAssignments');
+  if (view === 'students') {
+    studentsView.classList.remove('hidden');
+    assignmentsView.classList.add('hidden');
+    btnStudents.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors';
+    btnAssignments.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+  } else {
+    studentsView.classList.add('hidden');
+    assignmentsView.classList.remove('hidden');
+    btnAssignments.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors';
+    btnStudents.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+  }
+}
+function deleteStudent(studentId, studentName) {
+  if (window.__studentDeleteInFlight) return;
+  if (!confirm('Delete ' + studentName + ' from this class? This removes all their grades and cannot be undone.')) return;
+  window.__studentDeleteInFlight = true;
+  var url = '/class/{{ class_id }}/students/' + encodeURIComponent(studentId) + '/delete';
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    credentials: 'same-origin',
+    body: '{}'
+  })
+    .then(function (response) {
+      return response.json().then(function (data) {
+        return { ok: response.ok, data: data };
+      });
+    })
+    .then(function (result) {
+      if (!result.ok || !result.data.success) {
+        alert('Error: ' + (result.data.error || 'Unknown error'));
+        return;
+      }
+      location.reload();
+    })
+    .catch(function (err) {
+      var msg = (err && err.message) ? String(err.message) : String(err);
+      var hint = '';
+      if (/failed to fetch|networkerror|load failed|aborted|reset/i.test(msg)) {
+        hint = '\n\nTip: If this happened right after saving code, the dev server may have restarted and dropped the request. Try again, or run with FLASK_NO_RELOADER=1 for a stable local server.';
+      }
+      alert('Could not reach the server to delete this student.' + hint);
+    })
+    .finally(function () {
+      window.__studentDeleteInFlight = false;
+    });
+}
+function toggleObjective(el) {
+  const content = el.nextElementSibling;
+  const chevron = el.querySelector('.chevron');
+  content.classList.toggle('hidden');
+  chevron.classList.toggle('rotate-180');
+}
+function toggleAssignment(el) {
+  const content = el.nextElementSibling;
+  const chevron = el.querySelector('.chevron');
+  content.classList.toggle('hidden');
+  chevron.classList.toggle('rotate-180');
+}
+
+function toggleExistingLosSection(btn) {
+  var wrap = document.getElementById('existingLosListWrapper');
+  if (!wrap || !btn) return;
+  var chev = btn.querySelector('.chevron');
+  wrap.classList.toggle('hidden');
+  if (chev) {
+    chev.classList.toggle('rotate-180', wrap.classList.contains('hidden'));
+  }
+  btn.setAttribute('aria-expanded', wrap.classList.contains('hidden') ? 'false' : 'true');
+}
+function handleSearch() {
+  const q = document.getElementById('searchInput').value.toLowerCase();
+  document.querySelectorAll('.student-item').forEach(item => {
+    const name = item.dataset.name || '';
+    item.style.display = (!q || name.includes(q)) ? '' : 'none';
+  });
+  document.querySelectorAll('.assignment-item').forEach(item => {
+    const name = item.dataset.assignmentName || '';
+    item.style.display = (!q || name.includes(q)) ? '' : 'none';
+  });
+}
+
+function dashboardCreateLO() {
+  const loForm = document.getElementById('loForm');
+  if (!loForm) return;
+  document.getElementById('hiddenLoName').value = (document.getElementById('loName').value || '').trim();
+  document.getElementById('hiddenLoCode').value = document.getElementById('loCode').value;
+  document.getElementById('hiddenLoDescription').value = document.getElementById('loDescription').value;
+  document.getElementById('hiddenLoRequiredMs').value = document.getElementById('loRequiredMs').value;
+  const btn = document.getElementById('createLOBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('opacity-60', 'cursor-not-allowed');
+  }
+  loForm.submit();
+}
+
+var editLoCurrentId = null;
+
+function openEditLoFromRow(row) {
+  if (!row) return;
+  openEditLoModal({
+    id: row.getAttribute('data-lo-id'),
+    vendor_code: row.getAttribute('data-lo-code') || '',
+    name: row.getAttribute('data-lo-name') || '',
+    description: row.getAttribute('data-lo-description') || '',
+    required_ms: parseInt(row.getAttribute('data-lo-required') || '2', 10) || 2
+  });
+}
+
+function growObjectiveNameField(el) {
+  if (!el || el.tagName !== 'TEXTAREA') return;
+  el.style.height = 'auto';
+  var max = parseInt(el.getAttribute('data-max-height') || '480', 10);
+  var h = Math.min(el.scrollHeight, max);
+  el.style.height = h + 'px';
+  el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
+}
+
+function wireObjectiveNameAutoGrow() {
+  ['loName', 'editLoName'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var grow = function () { growObjectiveNameField(el); };
+    el.addEventListener('input', grow);
+    el.addEventListener('focus', grow);
+    window.addEventListener('resize', grow);
+    grow();
+  });
+}
+
+function openEditLoModal(lo) {
+  if (!lo || !lo.id) return;
+  editLoCurrentId = String(lo.id);
+  var c = document.getElementById('editLoCode');
+  var n = document.getElementById('editLoName');
+  var d = document.getElementById('editLoDescription');
+  var r = document.getElementById('editLoRequiredMs');
+  if (c) c.value = lo.vendor_code != null ? String(lo.vendor_code) : '';
+  if (n) n.value = lo.name != null ? String(lo.name) : '';
+  if (d) d.value = lo.description != null ? String(lo.description) : '';
+  if (r) r.value = lo.required_ms != null ? String(lo.required_ms) : '2';
+  var m = document.getElementById('editLoModal');
+  if (m) m.classList.remove('hidden');
+  requestAnimationFrame(function () {
+    growObjectiveNameField(n);
+  });
+}
+
+function closeEditLoModal() {
+  editLoCurrentId = null;
+  var m = document.getElementById('editLoModal');
+  if (m) m.classList.add('hidden');
+}
+
+function saveEditLo() {
+  if (!editLoCurrentId) return;
+  var nameEl = document.getElementById('editLoName');
+  var name = nameEl && nameEl.value ? nameEl.value.trim() : '';
+  if (!name) {
+    alert('Objective name is required.');
+    return;
+  }
+  var body = {
+    vendor_code: document.getElementById('editLoCode') ? document.getElementById('editLoCode').value.trim() : '',
+    name: name,
+    description: document.getElementById('editLoDescription') ? document.getElementById('editLoDescription').value.trim() : '',
+    required_ms: parseInt(document.getElementById('editLoRequiredMs') && document.getElementById('editLoRequiredMs').value, 10) || 2
+  };
+  var btn = document.getElementById('editLoSaveBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+  }
+  fetch('/api/class/' + encodeURIComponent('{{ class_id }}') + '/update-lo/' + encodeURIComponent(editLoCurrentId), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(body)
+  })
+    .then(function (response) {
+      return response.json().then(function (data) {
+        return { ok: response.ok, data: data };
+      });
+    })
+    .then(function (result) {
+      if (!result.ok || !result.data.success) {
+        alert(result.data.error || 'Could not save changes.');
+        return;
+      }
+      location.reload();
+    })
+    .catch(function () {
+      alert('Could not save changes.');
+    })
+    .finally(function () {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Save changes';
+      }
+    });
+}
+
+function dashboardDeleteLO(id, name) {
+  if (!id) return;
+  var label = name != null && String(name).length ? String(name) : 'this objective';
+  if (!confirm('Are you sure you want to delete "' + label + '"? This will also remove all associated grades.')) return;
+  fetch('/class/{{ class_id }}/delete_lo/' + encodeURIComponent(id), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: '{}'
+  })
+    .then(function (response) {
+      return response.json().then(function (data) {
+        return { ok: response.ok, data: data };
+      });
+    })
+    .then(function (result) {
+      if (!result.ok || !result.data.success) {
+        alert('Error deleting learning objective: ' + (result.data.error || 'Unknown error'));
+        return;
+      }
+      location.reload();
+    })
+    .catch(function () {
+      alert('Error deleting learning objective.');
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  var list = document.getElementById('existingLosList');
+  if (list) {
+    list.addEventListener('click', function (e) {
+      var row = e.target.closest('.lo-row');
+      if (!row) return;
+      if (e.target.closest('.lo-delete-btn')) {
+        var id = row.getAttribute('data-lo-id');
+        var disp = row.querySelector('.lo-row-display');
+        var nm = disp ? disp.textContent : '';
+        dashboardDeleteLO(id, nm);
+        return;
+      }
+      if (e.target.closest('.lo-edit-btn')) {
+        openEditLoFromRow(row);
+      }
+    });
+  }
+  wireObjectiveNameAutoGrow();
+});
+
+function addStudent(event) {
+  event.preventDefault();
+  
+  const email = document.getElementById('studentEmail').value;
+  const name = document.getElementById('studentName').value;
+  
+  fetch(`/class/{{ class_id }}/add_student`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email: email,
+      name: name
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      document.getElementById('addStudentModal').classList.add('hidden');
+      document.getElementById('addStudentForm').reset();
+      location.reload(); // Refresh to show the new student
+    } else {
+      alert('Error adding student: ' + data.error);
+    }
+  })
+  .catch(error => {
+    alert('Error: ' + error);
+  });
+}
+</script>
+<script src="{{ url_for('static', filename='js/qrcodejs.min.js') }}"></script>
+<script>
+window.LO_CLASS_ID = {{ class_id|tojson }};
+window.LO_MOBILE_UPLOAD_TOKEN = {{ (lo_mobile_upload_token|default(''))|tojson }};
+window.LO_MOBILE_UPLOAD_URL = {{ (lo_mobile_upload_url|default(''))|tojson }};
+
+var loCsvMobilePollInterval = null;
+var loCsvPendingRows = null;
+var loQrAssignmentsInited = false;
+
+function stopLoCsvMobilePoll() {
+  if (loCsvMobilePollInterval) {
+    clearInterval(loCsvMobilePollInterval);
+    loCsvMobilePollInterval = null;
+  }
+}
+
+function maybeInitAssignmentsLoQr() {
+  if (loQrAssignmentsInited) return;
+  var el = document.getElementById('loQrCanvas');
+  var url = window.LO_MOBILE_UPLOAD_URL;
+  if (el && url && typeof QRCode !== 'undefined') {
+    try {
+      new QRCode(el, { text: url, width: 140, height: 140, colorDark: '#0f172a', colorLight: '#ffffff' });
+      loQrAssignmentsInited = true;
+    } catch (e) {
+      console.error(e);
+    }
+  }
+}
+
+function closeLoCsvPreviewModal() {
+  var m = document.getElementById('loCsvPreviewModal');
+  if (m) m.classList.add('hidden');
+  loCsvPendingRows = null;
+  var inp = document.getElementById('loCsvInput');
+  if (inp) inp.value = '';
+  var w = document.getElementById('loCsvPreviewWarnings');
+  if (w) {
+    w.classList.add('hidden');
+    w.textContent = '';
+  }
+  var cbtn = document.getElementById('loCsvPreviewConfirm');
+  if (cbtn) {
+    cbtn.disabled = false;
+    cbtn.textContent = 'Import confirmed rows';
+  }
+  var st = document.getElementById('loCsvMobileStatus');
+  if (st) {
+    st.classList.add('hidden');
+    st.textContent = '';
+  }
+}
+
+function renderLoCsvPreviewTable(rows) {
+  var tbody = document.getElementById('loCsvPreviewTbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  (rows || []).forEach(function (r) {
+    var dup = !!r.duplicate;
+    var tr = document.createElement('tr');
+    if (dup) tr.className = 'bg-slate-50/90 dark:bg-slate-800/40';
+    var codeTd = document.createElement('td');
+    codeTd.className = 'px-2 py-2 align-top break-all max-w-[140px]';
+    codeTd.textContent = String(r.vendor_code || '');
+    tr.appendChild(codeTd);
+    var nameTd = document.createElement('td');
+    nameTd.className = 'px-2 py-2 align-top break-words';
+    nameTd.textContent = String(r.name || '');
+    tr.appendChild(nameTd);
+    var msTd = document.createElement('td');
+    msTd.className = 'px-2 py-2 align-top whitespace-nowrap';
+    msTd.textContent = r.required_ms != null ? String(r.required_ms) : '';
+    tr.appendChild(msTd);
+    var stTd = document.createElement('td');
+    stTd.className = 'px-2 py-2 align-top text-xs font-medium';
+    if (dup) {
+      stTd.className += ' text-slate-500 dark:text-slate-400';
+      stTd.textContent = 'Already in class';
+    } else {
+      stTd.className += ' text-green-700 dark:text-green-400';
+      stTd.textContent = 'Will import';
+    }
+    tr.appendChild(stTd);
+    tbody.appendChild(tr);
+  });
+}
+
+function openLoCsvPreviewModal(rows, warnings) {
+  loCsvPendingRows = rows;
+  renderLoCsvPreviewTable(rows);
+  var warnEl = document.getElementById('loCsvPreviewWarnings');
+  if (warnEl) {
+    if (warnings && warnings.length) {
+      warnEl.textContent = warnings.join('\n');
+      warnEl.classList.remove('hidden');
+    } else {
+      warnEl.classList.add('hidden');
+      warnEl.textContent = '';
+    }
+  }
+  var newCount = (rows || []).filter(function (r) { return !r.duplicate; }).length;
+  var cbtn = document.getElementById('loCsvPreviewConfirm');
+  if (cbtn) {
+    cbtn.disabled = newCount === 0;
+    cbtn.title = newCount === 0 ? 'No new objectives to import' : '';
+  }
+  var modal = document.getElementById('loCsvPreviewModal');
+  if (modal) modal.classList.remove('hidden');
+}
+
+async function assignmentsPreviewLoCsv(file) {
+  if (!file || !file.name.toLowerCase().endsWith('.csv')) {
+    alert('Please choose a .csv file.');
+    return;
+  }
+  var fd = new FormData();
+  fd.append('file', file);
+  var btn = document.getElementById('loCsvChooseBtn');
+  var prevLabel = '';
+  if (btn) {
+    prevLabel = btn.textContent;
+    btn.disabled = true;
+    btn.classList.add('opacity-60', 'cursor-not-allowed');
+    btn.textContent = 'Reading file…';
+  }
+  try {
+    var r = await fetch(
+      '/api/class/' + encodeURIComponent(window.LO_CLASS_ID) + '/preview-learning-objectives',
+      { method: 'POST', body: fd, credentials: 'same-origin' }
+    );
+    var j = await r.json().catch(function () { return {}; });
+    if (!j.success) {
+      alert(j.error || 'Could not read that CSV.');
+      return;
+    }
+    openLoCsvPreviewModal(j.rows || [], j.warnings || []);
+  } catch (e) {
+    alert('Preview failed: ' + (e && e.message ? e.message : String(e)));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('opacity-60', 'cursor-not-allowed');
+      btn.textContent = prevLabel || 'Choose CSV from computer';
+    }
+    var inp = document.getElementById('loCsvInput');
+    if (inp) inp.value = '';
+  }
+}
+
+async function assignmentsConfirmLoCsvImport() {
+  if (!loCsvPendingRows || !loCsvPendingRows.length) return;
+  var toSend = loCsvPendingRows
+    .filter(function (r) { return !r.duplicate; })
+    .map(function (r) {
+      return {
+        vendor_code: String(r.vendor_code || '').trim(),
+        name: String(r.name != null ? r.name : '').trim() || String(r.vendor_code || '').trim(),
+        required_ms: r.required_ms
+      };
+    });
+  if (!toSend.length) {
+    alert('No new objectives to import — every code in this file already exists in the class.');
+    return;
+  }
+  var cbtn = document.getElementById('loCsvPreviewConfirm');
+  if (cbtn) {
+    cbtn.disabled = true;
+    cbtn.textContent = 'Importing…';
+  }
+  try {
+    var r = await fetch(
+      '/api/class/' + encodeURIComponent(window.LO_CLASS_ID) + '/import-learning-objectives',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ rows: toSend })
+      }
+    );
+    var j = await r.json().catch(function () { return {}; });
+    if (!j.success) {
+      alert(j.error || 'Import failed');
+      if (cbtn) {
+        cbtn.disabled = false;
+        cbtn.textContent = 'Import confirmed rows';
+      }
+      return;
+    }
+    var msg = 'Imported ' + (j.inserted || 0) + ' objective(s).';
+    if (j.skipped) msg += ' Skipped ' + j.skipped + ' duplicate code(s).';
+    alert(msg);
+    closeLoCsvPreviewModal();
+    location.reload();
+  } catch (e) {
+    alert('Import failed: ' + (e && e.message ? e.message : String(e)));
+    if (cbtn) {
+      cbtn.disabled = false;
+      cbtn.textContent = 'Import confirmed rows';
+    }
+  }
+}
+
+document.getElementById('loCsvToggleBtn')?.addEventListener('click', function () {
+  var p = document.getElementById('loCsvUploadPanel');
+  if (!p) return;
+  p.classList.remove('hidden');
+  maybeInitAssignmentsLoQr();
+});
+
+document.getElementById('loCsvPanelCloseBtn')?.addEventListener('click', function () {
+  var p = document.getElementById('loCsvUploadPanel');
+  if (p) p.classList.add('hidden');
+});
+
+document.getElementById('loCsvInput')?.addEventListener('change', function () {
+  var f = this.files && this.files[0];
+  if (f) assignmentsPreviewLoCsv(f);
+});
+
+document.getElementById('loCsvPreviewConfirm')?.addEventListener('click', assignmentsConfirmLoCsvImport);
+
+function startLoCsvMobilePoll() {
+  if (!window.LO_MOBILE_UPLOAD_TOKEN || !window.LO_CLASS_ID) return;
+  stopLoCsvMobilePoll();
+  loCsvMobilePollInterval = setInterval(async function () {
+    try {
+      var r = await fetch(
+        '/api/class/' + encodeURIComponent(window.LO_CLASS_ID) + '/mobile-upload-status/' + encodeURIComponent(window.LO_MOBILE_UPLOAD_TOKEN),
+        { credentials: 'same-origin' }
+      );
+      if (!r.ok) return;
+      var j = await r.json();
+      if (!j.success || !j.ready) return;
+      stopLoCsvMobilePoll();
+      var fr = await fetch(
+        '/api/class/' + encodeURIComponent(window.LO_CLASS_ID) + '/mobile-upload-file/' + encodeURIComponent(window.LO_MOBILE_UPLOAD_TOKEN),
+        { credentials: 'same-origin' }
+      );
+      if (!fr.ok) {
+        alert('Could not retrieve the file from your phone. Try scanning the QR code again.');
+        return;
+      }
+      var blob = await fr.blob();
+      var name = j.filename || 'outcomes.csv';
+      var file = new File([blob], name, { type: blob.type || 'text/csv' });
+      var st = document.getElementById('loCsvMobileStatus');
+      if (st) {
+        st.textContent = 'CSV received from phone — review the import preview.';
+        st.classList.remove('hidden');
+      }
+      await assignmentsPreviewLoCsv(file);
+    } catch (e) {
+      console.error('LO CSV mobile poll:', e);
+    }
+  }, 2000);
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  startLoCsvMobilePoll();
+});
+</script>
+<script>
+document.querySelectorAll('.mark-only').forEach(el => {
+  if ('{{ instructor_mode }}' === 'shelbi') el.style.display = 'none';
+});
+</script>
+{% endblock %}

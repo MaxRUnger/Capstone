@@ -1,0 +1,81 @@
+{% extends "app_base.html" %}
+{% from "_components.html" import progress_bar, copy_email_button %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center gap-4">
+    <a href="{{ url_for('main.class_students', class_id=class_id) }}" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+      <svg class="w-5 h-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+    </a>
+    <div class="flex-1 min-w-0">
+      <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">{{ student.name }}</h1>
+      {% if student.email %}
+      <div class="flex items-start gap-1.5 mt-1 min-w-0">
+        <span class="text-sm text-slate-500 dark:text-slate-400 select-text cursor-text break-all min-w-0">{{ student.email }}</span>
+        {{ copy_email_button(student.email) }}
+      </div>
+      {% endif %}
+      <p class="text-slate-600 dark:text-slate-400 text-sm mt-1">{{ class_name }}</p>
+    </div>
+  </div>
+
+  {% set los = student.learning_objectives %}
+  {% set passed = los|selectattr('is_passed')|list|length %}
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6">
+    <div class="grid grid-cols-2 gap-6">
+      <div>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Passed</p>
+        <p class="text-2xl font-semibold text-slate-900 dark:text-white">{{ passed }} / {{ los|length }}</p>
+      </div>
+      <div>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Progress</p>
+        {{ progress_bar(passed, los|length, show_label=true) }}
+      </div>
+    </div>
+  </div>
+
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700">
+      <h2 class="font-semibold text-slate-900 dark:text-white">Learning Objectives</h2>
+    </div>
+    <div class="divide-y divide-slate-50 dark:divide-slate-700">
+      {% for lo in student.learning_objectives %}
+      {% set is_passed = lo.is_passed %}
+      <div class="p-6">
+        <div class="flex items-start gap-6">
+          <div class="flex-1">
+            <div class="flex items-center gap-3 mb-3">
+              <h3 class="font-medium text-slate-900 dark:text-white">{{ lo.vendor_code or lo.name }}</h3>
+              {% if is_passed %}
+              <span class="px-2 py-1 bg-green-500 text-white rounded-md text-xs font-medium">PASSED</span>
+              {% endif %}
+            </div>
+            <div class="flex items-center gap-4 text-sm">
+              <div>
+                <p class="text-slate-500 dark:text-slate-400 mb-1">Grades</p>
+                <div class="flex items-center gap-2">
+                  {% for g in lo.grades_list %}
+                  <span class="mastery-badge mastery-{{ g|lower }} px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ g }}</span>
+                  {% endfor %}
+                  <span class="text-xs text-slate-500 dark:text-slate-400 ml-2">{{ lo.m_count }} / {{ lo.required_ms }} Ms{% if lo.mr_count %}<span class="ml-1">({{ lo.mr_count }} MR)</span>{% endif %}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+<style>
+.mastery-m { background: #dcfce7; color: #15803d; border-color: #86efac; }
+.mastery-mr { background: #ecfdf5; color: #047857; border-color: #34d399; }
+.mastery-r { background: #fef9c3; color: #a16207; border-color: #fde047; }
+.mastery-rq { background: #ffedd5; color: #c2410c; border-color: #fdba74; }
+.mastery-p { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
+.mastery-x { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
+.mastery-a { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+</style>
+{% endblock %}

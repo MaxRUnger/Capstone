@@ -1,0 +1,11 @@
+-- Allow MR (mastered on revision) in grades.top_score (and second_score if you use the same check).
+-- Run in Supabase SQL editor if inserts fail with a check constraint error.
+-- Inspect existing constraints: SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint
+--   WHERE conrelid = 'public.grades'::regclass;
+
+-- Example if top_score is restricted to a fixed list (adjust names/definitions to match your DB):
+-- ALTER TABLE public.grades DROP CONSTRAINT IF EXISTS grades_top_score_check;
+-- ALTER TABLE public.grades ADD CONSTRAINT grades_top_score_check
+--   CHECK (top_score = ANY (ARRAY['M', 'MR', 'R', 'RQ', 'P', 'X', 'A']::text[]));
+--
+-- If second_score uses the same allowed values, add a matching CHECK or extend the column definition.
