@@ -1,11 +1,14 @@
 import csv
 import io
+import json
 import logging
 import os
 import re
 import socket
 import threading
 import time
+import urllib.error
+import urllib.request
 from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session, abort, Response  # type: ignore
@@ -182,7 +185,6 @@ def parse_learning_objectives_csv_text(text: str) -> Tuple[List[Dict[str, Any]],
         if not title:
             continue
         desc = (r.get("description") or "").strip()
-        name = desc if desc else title
         calc_raw = (r.get("calculation_int") or "").strip()
         required_ms = DEFAULT_REQUIRED_MS
         if calc_raw:
@@ -194,9 +196,8 @@ def parse_learning_objectives_csv_text(text: str) -> Tuple[List[Dict[str, Any]],
         rows_out.append(
             {
                 "vendor_code": title,
-                "name": name,
                 "required_ms": required_ms,
-                "description": None,
+                "description": desc or None,
             }
         )
     if not rows_out:
@@ -348,6 +349,34 @@ def annotate_learning_objective_rows_for_preview(
     return out
 
 
+def _is_lo_name_not_null_error(err: Exception) -> bool:
+    msg = str(err or "").lower()
+    return (
+        'learning_objectives' in msg
+        and 'null value in column "name"' in msg
+        and 'not-null constraint' in msg
+    )
+
+
+def _insert_learning_objectives_compat(payload: Any):
+    """Insert LOs, retrying with legacy name when old DB schema still requires it."""
+    try:
+        return supabase_admin.table("learning_objectives").insert(payload).execute()
+    except Exception as e:
+        if not _is_lo_name_not_null_error(e):
+            raise
+        rows = payload if isinstance(payload, list) else [payload]
+        legacy_rows: List[Dict[str, Any]] = []
+        for row in rows:
+            r = dict(row or {})
+            vc = (r.get("vendor_code") or "").strip()
+            if not r.get("name"):
+                r["name"] = vc
+            legacy_rows.append(r)
+        legacy_payload = legacy_rows if isinstance(payload, list) else legacy_rows[0]
+        return supabase_admin.table("learning_objectives").insert(legacy_payload).execute()
+
+
 def import_learning_objectives_rows(class_id: str, rows: List[Dict[str, Any]]) -> Tuple[int, int, List[str]]:
     """Insert new LOs; skip vendor_codes that already exist (case-insensitive). Returns (inserted, skipped, errors)."""
     errors: List[str] = []
@@ -386,7 +415,6 @@ def import_learning_objectives_rows(class_id: str, rows: List[Dict[str, Any]]) -
             {
                 "class_id": class_id,
                 "vendor_code": vc,
-                "name": row.get("name") or vc,
                 "description": row.get("description"),
                 "required_ms": int(row.get("required_ms") or DEFAULT_REQUIRED_MS),
             }
@@ -397,7 +425,7 @@ def import_learning_objectives_rows(class_id: str, rows: List[Dict[str, Any]]) -
         if not piece:
             continue
         try:
-            supabase_admin.table("learning_objectives").insert(piece).execute()
+            _insert_learning_objectives_compat(piece)
             inserted += len(piece)
         except Exception as e:
             logger.error("LO batch insert failed: %s", e)
@@ -410,7 +438,7 @@ def _merge_lo_row(lo_lookup, lo_id, embed):
     """Merge canonical LO metadata with an optional grade-row embed (fills gaps)."""
     base = dict(lo_lookup.get(lo_id) or {})
     emb = embed if isinstance(embed, dict) else {}
-    for key in ("name", "vendor_code", "required_ms"):
+    for key in ("vendor_code", "description", "required_ms"):
         v = emb.get(key)
         if v is not None and v != "" and (key not in base or base.get(key) in (None, "")):
             base[key] = v
@@ -418,10 +446,9 @@ def _merge_lo_row(lo_lookup, lo_id, embed):
 
 
 def _lo_display_title(lo_info):
-    """Prefer vendor_code for short codes (EX1), then name."""
+    """Display objective identifier in UI lists."""
     vc = (lo_info.get("vendor_code") or "").strip()
-    nm = (lo_info.get("name") or "").strip()
-    return vc or nm or "Unknown LO"
+    return vc or "Unknown LO"
 
 
 # ============================================================================
@@ -469,7 +496,7 @@ def organize_by_learning_objectives(students, learning_objectives):
     """Maps student grades to the relevant Learning Objectives for the UI."""
     lo_dict = {str(lo['id']): {
         'id': str(lo['id']),
-        'name': lo['name'],
+        'name': _lo_display_title(lo),
         'students_with_2m': [],
         'students_with_1m': [],
         'students_with_0m': [],
@@ -615,7 +642,7 @@ def _load_students_from_grades(class_id):
     """Return a list of students (with grades) by scanning grades for this class."""
     try:
         grades_result = supabase_admin.table("grades") \
-            .select("student_id, learning_objective_id, top_score, second_score, learning_objectives(id, name, vendor_code, class_id, required_ms)") \
+            .select("student_id, learning_objective_id, top_score, second_score, learning_objectives(id, vendor_code, description, class_id, required_ms)") \
             .eq("learning_objectives.class_id", class_id) \
             .execute()
         grades = grades_result.data or []
@@ -773,7 +800,7 @@ def load_assignments_for_class(class_id, desc=False):
     """
     try:
         assignments_result = supabase_admin.table("assignments") \
-            .select("*, assignment_objectives(learning_objective_id, learning_objectives(id, name, vendor_code))") \
+            .select("*, assignment_objectives(learning_objective_id, learning_objectives(id, vendor_code, description))") \
             .eq("class_id", class_id) \
             .order("created_at", desc=desc) \
             .execute()
@@ -1109,19 +1136,18 @@ def copy_class(class_id):
 
         lo_resp = (
             supabase_admin.table("learning_objectives")
-            .select("name, vendor_code, description, required_ms")
+            .select("vendor_code, description, required_ms")
             .eq("class_id", class_id)
             .execute()
         )
         los = lo_resp.data or []
         lo_specs = []
         for lo in los:
-            nm = (lo.get("name") or "").strip()
-            if not nm:
+            vc = (lo.get("vendor_code") or "").strip()
+            if not vc:
                 continue
             spec = {
-                "name": nm,
-                "vendor_code": lo.get("vendor_code"),
+                "vendor_code": vc,
                 "required_ms": int(lo.get("required_ms") or DEFAULT_REQUIRED_MS),
             }
             desc = lo.get("description")
@@ -1181,7 +1207,7 @@ def copy_class(class_id):
             lo_rows = [{**spec, "class_id": new_id} for spec in lo_specs]
             chunk = 100
             for i in range(0, len(lo_rows), chunk):
-                supabase_admin.table("learning_objectives").insert(lo_rows[i : i + chunk]).execute()
+                _insert_learning_objectives_compat(lo_rows[i : i + chunk])
 
         return redirect(url_for("main.instructor_dashboard"))
     except Exception as e:
@@ -1410,7 +1436,7 @@ def api_update_learning_objective(class_id, lo_id):
     try:
         cur = (
             supabase_admin.table("learning_objectives")
-            .select("id, name, vendor_code, description, required_ms")
+            .select("id, vendor_code, description, required_ms")
             .eq("id", lo_id)
             .eq("class_id", class_id)
             .limit(1)
@@ -1419,14 +1445,13 @@ def api_update_learning_objective(class_id, lo_id):
         if not cur.data:
             return jsonify({"success": False, "error": "Learning objective not found"}), 404
         row = cur.data[0]
-        name = (data.get("name") if data.get("name") is not None else row.get("name") or "").strip()
-        if not name:
-            return jsonify({"success": False, "error": "Objective name is required"}), 400
         vendor_raw = data.get("vendor_code")
         if vendor_raw is None:
             vendor_code = (row.get("vendor_code") or "").strip() or None
         else:
             vendor_code = str(vendor_raw).strip() or None
+        if not vendor_code:
+            return jsonify({"success": False, "error": "Objective code is required"}), 400
         if vendor_code and _lo_vendor_code_conflict(class_id, vendor_code, lo_id):
             return jsonify(
                 {"success": False, "error": "Another objective in this class already uses that code."}
@@ -1446,7 +1471,6 @@ def api_update_learning_objective(class_id, lo_id):
         req = max(1, min(5, req))
         supabase_admin.table("learning_objectives").update(
             {
-                "name": name,
                 "vendor_code": vendor_code,
                 "description": description,
                 "required_ms": req,
@@ -1519,18 +1543,18 @@ def api_import_learning_objectives(class_id):
         vc = (item.get("vendor_code") or "").strip()
         if not vc:
             continue
-        name = (item.get("name") or "").strip() or vc
         try:
             req = int(item.get("required_ms", DEFAULT_REQUIRED_MS))
         except (TypeError, ValueError):
             req = DEFAULT_REQUIRED_MS
         req = max(1, min(5, req))
+        desc_raw = item.get("description")
+        description = str(desc_raw).strip() if desc_raw is not None else ""
         rows.append(
             {
                 "vendor_code": vc,
-                "name": name,
                 "required_ms": req,
-                "description": None,
+                "description": description or None,
             }
         )
 
@@ -1573,7 +1597,7 @@ def class_reports(class_id):
         students = _load_students_from_grades(class_id)
 
     # Load assignments with their linked LOs and dates
-    assignments = load_assignments_for_class(class_id, desc=True)
+    assignments = load_assignments_for_class(class_id, desc=False)
 
     return render_template("class_reports.html", 
                             class_id=class_id, 
@@ -1581,6 +1605,166 @@ def class_reports(class_id):
                             students=students, 
                             learning_objectives=learning_objectives,
                             assignments=assignments)
+
+
+def _send_via_resend(to_email: str, subject: str, body_text: str) -> Tuple[bool, str]:
+    api_key = (os.environ.get("RESEND_API_KEY") or "").strip()
+    from_email = (os.environ.get("REPORTS_FROM_EMAIL") or "").strip()
+    if not api_key:
+        return False, "Missing RESEND_API_KEY environment variable."
+    if not from_email:
+        return False, "Missing REPORTS_FROM_EMAIL environment variable."
+
+    payload = {
+        "from": from_email,
+        "to": [to_email],
+        "subject": subject,
+        "text": body_text,
+    }
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            if int(getattr(resp, "status", 200) or 200) >= 400:
+                return False, "Email provider returned an error."
+        return True, ""
+    except urllib.error.HTTPError as e:
+        try:
+            provider_msg = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            provider_msg = str(e)
+        return False, f"Email provider rejected request: {provider_msg[:400]}"
+    except Exception as e:
+        return False, f"Email send failed: {e}"
+
+
+@main_bp.route("/api/class/<class_id>/student/<student_id>/send-report-email", methods=["POST"])
+@api_instructor_required
+def api_send_single_report_email(class_id, student_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+
+    data = request.get_json(silent=True) or {}
+    subject = str(data.get("subject") or "").strip()
+    body = str(data.get("body") or "").strip()
+    if not subject or not body:
+        return jsonify({"success": False, "error": "Missing subject or body"}), 400
+
+    try:
+        enrollment = (
+            supabase_admin.table("enrollments")
+            .select("student_id, profiles(id, full_name, email)")
+            .eq("class_id", class_id)
+            .eq("student_id", student_id)
+            .limit(1)
+            .execute()
+        )
+        if not enrollment.data:
+            return jsonify({"success": False, "error": "Student is not enrolled in this class"}), 404
+        profile = normalize_profile({"profiles": enrollment.data[0].get("profiles")})
+        to_email = (profile.get("email") or "").strip()
+        if not to_email:
+            return jsonify({"success": False, "error": "No email address is saved for this student"}), 400
+    except Exception as e:
+        logger.error("Error loading enrollment for report email: %s", e)
+        return jsonify({"success": False, "error": "Could not load student email"}), 500
+
+    ok, err = _send_via_resend(to_email, subject, body)
+    if not ok:
+        return jsonify({"success": False, "error": err}), 502
+    return jsonify({"success": True, "to": to_email})
+
+
+@main_bp.route("/api/class/<class_id>/send-report-emails", methods=["POST"])
+@api_instructor_required
+def api_send_bulk_report_emails(class_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+
+    data = request.get_json(silent=True) or {}
+    reports = data.get("reports")
+    if not isinstance(reports, list) or not reports:
+        return jsonify({"success": False, "error": "Missing reports payload"}), 400
+    if len(reports) > 250:
+        return jsonify({"success": False, "error": "Too many reports in one request"}), 400
+
+    student_ids: List[str] = []
+    for item in reports:
+        if not isinstance(item, dict):
+            continue
+        sid = str(item.get("student_id") or "").strip()
+        if sid:
+            student_ids.append(sid)
+    if not student_ids:
+        return jsonify({"success": False, "error": "No valid student ids provided"}), 400
+
+    try:
+        enrollments = (
+            supabase_admin.table("enrollments")
+            .select("student_id, profiles(id, full_name, email)")
+            .eq("class_id", class_id)
+            .in_("student_id", list(set(student_ids)))
+            .execute()
+        )
+    except Exception as e:
+        logger.error("Error loading enrollments for bulk report emails: %s", e)
+        return jsonify({"success": False, "error": "Could not load student emails"}), 500
+
+    email_by_student: Dict[str, str] = {}
+    for row in (enrollments.data or []):
+        sid = str(row.get("student_id") or "").strip()
+        profile = normalize_profile({"profiles": row.get("profiles")})
+        email = (profile.get("email") or "").strip()
+        if sid and email:
+            email_by_student[sid] = email
+
+    sent = 0
+    skipped = 0
+    failures: List[str] = []
+    for item in reports:
+        if not isinstance(item, dict):
+            skipped += 1
+            continue
+        sid = str(item.get("student_id") or "").strip()
+        subject = str(item.get("subject") or "").strip()
+        body = str(item.get("body") or "").strip()
+        student_name = str(item.get("student_name") or sid).strip() or sid
+        if not sid or not subject or not body:
+            skipped += 1
+            continue
+        to_email = email_by_student.get(sid, "")
+        if not to_email:
+            skipped += 1
+            failures.append(f"{student_name}: no saved email")
+            continue
+        ok, err = _send_via_resend(to_email, subject, body)
+        if ok:
+            sent += 1
+        else:
+            failures.append(f"{student_name}: {err}")
+
+    if sent == 0 and failures:
+        return jsonify({
+            "success": False,
+            "error": "No emails were sent.",
+            "sent": 0,
+            "skipped": skipped,
+            "failures": failures[:20],
+        }), 502
+
+    return jsonify({
+        "success": True,
+        "sent": sent,
+        "skipped": skipped,
+        "failures": failures[:20],
+    })
 
 @main_bp.route("/class/<class_id>/student/<student_id>/history")
 @login_required
@@ -1643,8 +1827,8 @@ def student_history(class_id, student_id):
         grades = student_grades.get(lo_id, [])
         lo_info = {
             'id': lo_id,
-            'name': lo.get('name'),
             'vendor_code': lo.get('vendor_code'),
+                'description': lo.get('description'),
             'grades': grades
         }
         lo_grade_data.append(lo_info)
@@ -1737,7 +1921,7 @@ def update_grade_handler(class_id):
 
         logger.info("File uploaded for class %s: %s, assignment_id=%s", class_id, file.filename, assignment_id)
 
-        # TODO: Parse and import grades from the uploaded file.
+        # Placeholder for grade import parsing implementation.
         # Currently we just redirect back to the class detail page.
         return redirect(url_for('main.class_detail', class_id=class_id))
 
@@ -1919,20 +2103,18 @@ def create_lo_handler(class_id):
 
         else:
             # Create a new learning objective
-            lo_name = request.form.get('name', '').strip()
             lo_code = request.form.get('code', '').strip()
             lo_description = request.form.get('description', '').strip()
             lo_required_ms = request.form.get('required_ms', 2)
 
-            if lo_name:
+            if lo_code:
                 try:
-                    supabase_admin.table("learning_objectives").insert({
+                    _insert_learning_objectives_compat({
                         "class_id": class_id,
-                        "vendor_code": lo_code or None,
-                        "name": lo_name,
+                        "vendor_code": lo_code,
                         "description": lo_description or None,
                         "required_ms": int(lo_required_ms)
-                    }).execute()
+                    })
                 except Exception as e:
                     logger.error("Error creating LO: %s", e)
 
@@ -2723,9 +2905,9 @@ def api_import_grades():
     if not class_id:
         return jsonify({"success": False, "error": "Missing class_id"}), 400
 
-    # Load existing LOs for the class (to map by name/code)
+    # Load existing LOs for the class (map by code and optional description text)
     try:
-        los_resp = supabase_admin.table("learning_objectives").select("id,name,vendor_code").eq("class_id", class_id).execute()
+        los_resp = supabase_admin.table("learning_objectives").select("id,vendor_code,description").eq("class_id", class_id).execute()
         existing_los = los_resp.data or []
     except Exception as e:
         return jsonify({"success": False, "error": f"Failed to load learning objectives: {e}"}), 500
@@ -2734,8 +2916,8 @@ def api_import_grades():
     for lo in existing_los:
         if lo.get('vendor_code'):
             lo_map[lo['vendor_code'].strip().lower()] = lo['id']
-        if lo.get('name'):
-            lo_map[lo['name'].strip().lower()] = lo['id']
+        if lo.get('description'):
+            lo_map[lo['description'].strip().lower()] = lo['id']
 
     # Create missing LOs from extracted list
     for lo_name in extracted_los:
@@ -2745,11 +2927,11 @@ def api_import_grades():
         if key in lo_map:
             continue
         try:
-            res = supabase_admin.table("learning_objectives").insert({
+            res = _insert_learning_objectives_compat({
                 "class_id": class_id,
                 "vendor_code": lo_name,
-                "name": lo_name
-            }).execute()
+                "description": None
+            })
             if res.data:
                 lo_map[key] = res.data[0]['id']
         except Exception as e:

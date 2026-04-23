@@ -30,6 +30,7 @@ from app.routes import (
     organize_by_learning_objectives,
     normalize_profile,
     DEFAULT_REQUIRED_MS,
+    parse_learning_objectives_csv_text,
     parse_students_csv_text,
     _student_row_sort_key,
     _student_sort_key_last_name,
@@ -133,7 +134,7 @@ class TestOrganizeByLearningObjectives(unittest.TestCase):
         students = self._build_data([
             {'learning_objective_id': '10', 'top_score': 'M', 'second_score': 'M'},
         ])
-        los = [{'id': '10', 'name': 'LO-A'}]
+        los = [{'id': '10', 'vendor_code': 'LO-A'}]
         result = organize_by_learning_objectives(students, los)
         self.assertEqual(len(result), 1)
         self.assertEqual(len(result[0]['students_with_2m']), 1)
@@ -143,7 +144,7 @@ class TestOrganizeByLearningObjectives(unittest.TestCase):
         students = self._build_data([
             {'learning_objective_id': '10', 'top_score': 'M', 'second_score': 'R'},
         ])
-        los = [{'id': '10', 'name': 'LO-A'}]
+        los = [{'id': '10', 'vendor_code': 'LO-A'}]
         result = organize_by_learning_objectives(students, los)
         self.assertEqual(len(result[0]['students_with_1m']), 1)
 
@@ -151,12 +152,12 @@ class TestOrganizeByLearningObjectives(unittest.TestCase):
         students = self._build_data([
             {'learning_objective_id': '10', 'top_score': 'P', 'second_score': 'X'},
         ])
-        los = [{'id': '10', 'name': 'LO-A'}]
+        los = [{'id': '10', 'vendor_code': 'LO-A'}]
         result = organize_by_learning_objectives(students, los)
         self.assertEqual(len(result[0]['students_with_0m']), 1)
 
     def test_empty_students_list(self):
-        los = [{'id': '10', 'name': 'LO-A'}]
+        los = [{'id': '10', 'vendor_code': 'LO-A'}]
         result = organize_by_learning_objectives([], los)
         self.assertEqual(result[0]['total_students'], 0)
         self.assertEqual(result[0]['students_with_2m'], [])
@@ -166,7 +167,7 @@ class TestOrganizeByLearningObjectives(unittest.TestCase):
             {'learning_objective_id': '10', 'top_score': 'M', 'second_score': 'M'},
             {'learning_objective_id': '20', 'top_score': 'P', 'second_score': 'P'},
         ])
-        los = [{'id': '10', 'name': 'LO-A'}, {'id': '20', 'name': 'LO-B'}]
+        los = [{'id': '10', 'vendor_code': 'LO-A'}, {'id': '20', 'vendor_code': 'LO-B'}]
         result = organize_by_learning_objectives(students, los)
         lo_a = next(lo for lo in result if lo['name'] == 'LO-A')
         lo_b = next(lo for lo in result if lo['name'] == 'LO-B')
@@ -208,10 +209,29 @@ class TestStudentSortKeyLastName(unittest.TestCase):
                 ],
             },
         ]
-        los = [{"id": "10", "name": "LO-A"}]
+        los = [{"id": "10", "vendor_code": "LO-A"}]
         result = organize_by_learning_objectives(students, los)
         names = [s["name"] for s in result[0]["students_with_2m"]]
         self.assertEqual(names, ["Adams Zoe", "Zenith Bob"])
+
+
+class TestLearningObjectivesCsvHelpers(unittest.TestCase):
+    def test_parse_lo_csv_uses_optional_description(self):
+        text = "title,description,calculation_int\nALG-1,Solve equations,3\n"
+        rows, warnings = parse_learning_objectives_csv_text(text)
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["vendor_code"], "ALG-1")
+        self.assertEqual(rows[0]["description"], "Solve equations")
+        self.assertEqual(rows[0]["required_ms"], 3)
+
+    def test_parse_lo_csv_without_description(self):
+        text = "title,calculation_int\nALG-2,2\n"
+        rows, warnings = parse_learning_objectives_csv_text(text)
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["vendor_code"], "ALG-2")
+        self.assertIsNone(rows[0]["description"])
 
 
 class TestFormatNameLastFirst(unittest.TestCase):

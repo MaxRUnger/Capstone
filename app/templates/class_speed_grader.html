@@ -124,9 +124,8 @@
             </th>
             <!-- LO columns -->
             {% for lo in lo_names %}
-            <th class="px-3 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[120px]" data-lo="{{ lo.name }}" data-lo-id="{{ lo.id }}">
-              <div class="text-xs font-bold text-slate-800 dark:text-white">{{ lo.vendor_code or lo.name }}</div>
-              <div class="text-xs font-normal text-slate-400 dark:text-slate-500 mt-0.5 leading-tight">{{ lo.name }}</div>
+            <th class="px-3 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[120px]" data-lo="{{ lo.vendor_code }}" data-lo-id="{{ lo.id }}">
+              <div class="text-xs font-bold text-slate-800 dark:text-white">{{ lo.vendor_code }}</div>
             </th>
             {% endfor %}
           </tr>
@@ -169,7 +168,7 @@
             </td>
             <!-- Grade cells -->
             {% for lo in lo_names %}
-            <td class="px-1 py-1" data-lo="{{ lo.name }}" data-lo-id="{{ lo.id }}">
+            <td class="px-1 py-1" data-lo="{{ lo.vendor_code }}" data-lo-id="{{ lo.id }}">
               <div class="grade-cell w-full min-h-[44px] flex items-center justify-center rounded-lg border-2 border-transparent hover:bg-slate-100 dark:hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-300 transition-all cursor-pointer"
                    data-student-id="{{ student.id }}"
                    data-lo-id="{{ lo.id }}"

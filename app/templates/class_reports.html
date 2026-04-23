@@ -53,9 +53,12 @@
               oninput="filterAssignmentDropdown()">
           </div>
           <div class="max-h-60 overflow-y-auto p-2 space-y-1" id="assignmentDropdownList">
+            <button type="button" onclick="selectAssignment('', 'All Assignments')"
+              class="assignment-dd-item w-full text-left px-3 py-2 text-sm rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 text-slate-700 dark:text-slate-300 bg-blue-50 dark:bg-blue-900/20 font-medium"
+              data-assignment-id="" data-assignment-name="all assignments">All Assignments</button>
             {% for assignment in assignments %}
             <button type="button" onclick="selectAssignment('{{ assignment.id }}', '{{ assignment.name }}')"
-              class="assignment-dd-item w-full text-left px-3 py-2 text-sm rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 text-slate-700 dark:text-slate-300{% if loop.first %} bg-blue-50 dark:bg-blue-900/20 font-medium{% endif %}"
+              class="assignment-dd-item w-full text-left px-3 py-2 text-sm rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 text-slate-700 dark:text-slate-300"
               data-assignment-id="{{ assignment.id }}" data-assignment-name="{{ assignment.name|lower }}">{{ assignment.name }}</button>
             {% endfor %}
           </div>
@@ -116,11 +119,16 @@
           <thead>
             <tr class="border-b border-slate-200 dark:border-slate-700">
               <th class="text-left px-6 py-3 font-medium text-slate-500 dark:text-slate-400">Student</th>
+              <th class="text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                <button type="button" id="emailAllBtn" onclick="emailAllVisibleReports(this)"
+                  class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">
+                  Email All
+                </button>
+              </th>
               <th class="text-center px-4 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">Homework %</th>
               {% for lo in learning_objectives %}
               <th class="text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs" data-lo-id="{{ lo.id }}">
-                <div class="text-xs font-bold text-slate-800 dark:text-white">{{ lo.vendor_code or lo.name }}</div>
-                <div class="text-xs font-normal text-slate-400 dark:text-slate-500 mt-0.5 leading-tight">{{ lo.name }}</div>
+                <div class="text-xs font-bold text-slate-800 dark:text-white">{{ lo.vendor_code }}</div>
               </th>
               {% endfor %}
             </tr>
@@ -139,20 +147,22 @@
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
                     </svg>
                   </button>
-                  {% if student.email %}
-                  <button type="button" onclick="emailStudentReport('{{ student.id }}')"
-                    class="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex-shrink-0"
-                    title="Email this report to {{ student.email }}"
-                    aria-label="Email progress report to student">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
-                    </svg>
-                  </button>
-                  {% endif %}
                 </div>
               </td>
+              <td class="px-3 py-3 text-center">
+                {% if student.email %}
+                <button type="button" onclick="emailStudentReport('{{ student.id }}', this)"
+                  class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors"
+                  title="Email this report to {{ student.email }}"
+                  aria-label="Email progress report to {{ student.name }}">
+                  Email
+                </button>
+                {% else %}
+                <span class="text-slate-300 dark:text-slate-600">—</span>
+                {% endif %}
+              </td>
               <td class="px-4 py-3 text-center">
-                <span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="{{ student.id }}">—</span>
+                <span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="{{ student.id }}" data-assignment-id="">—</span>
               </td>
               {% for lo in learning_objectives %}
               {% set student_lo = student.learning_objectives|selectattr('learning_objective_id', 'equalto', lo.id|string)|first %}
@@ -176,6 +186,9 @@
         </table>
       </div>
     </div>
+
+    <!-- All assignments view (one panel per assignment) -->
+    <div id="view-all-assignments" class="hidden space-y-4"></div>
 
   </div>
 
@@ -237,8 +250,8 @@
   .print\:hidden { display: none !important; }
   body { background: white !important; }
   .dark body { background: white !important; }
-  #view-all { display: block !important; }
-  #view-assignments, #view-students, #studentHistoryPanel { display: none !important; }
+  #assignmentReport { display: block !important; }
+  #studentHistoryPanel { display: none !important; }
 }
 </style>
 
@@ -252,12 +265,32 @@ const studentsData = JSON.parse(document.getElementById('studentsJson').textCont
 const assignmentsData = JSON.parse(document.getElementById('assignmentsJson').textContent);
 const learningObjectivesData = JSON.parse(document.getElementById('losJson').textContent);
 const classId = JSON.parse(document.getElementById('classIdJson').textContent);
+const learningObjectiveCodeById = Object.fromEntries(
+  learningObjectivesData.map((lo) => [String(lo.id), String(lo.vendor_code || '')])
+);
+const chevronSvg = '<svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
+const assignmentReportEl = document.getElementById('assignmentReport');
+const studentHistoryPanelEl = document.getElementById('studentHistoryPanel');
+const filterControlsEl = document.getElementById('filterControls');
+const assignmentDropdownEl = document.getElementById('assignmentDropdown');
+const studentDropdownEl = document.getElementById('studentDropdown');
+const assignmentDropdownBtnEl = document.getElementById('assignmentDropdownBtn');
+const studentDropdownBtnEl = document.getElementById('studentDropdownBtn');
+const viewAllEl = document.getElementById('view-all');
+const viewAllAssignmentsEl = document.getElementById('view-all-assignments');
+const defaultHwBadgeClass = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
+const passingHwBadgeClass = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300';
+const failingHwBadgeClass = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300';
 
-function fetchHwScoresForAssignment(assignmentId) {
-  // Reset all HW displays to dash
-  document.querySelectorAll('.hw-score-display').forEach(el => {
+function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
+  var scope = (scopeAssignmentId === undefined || scopeAssignmentId === null)
+    ? '.hw-score-display'
+    : '.hw-score-display[data-assignment-id="' + String(scopeAssignmentId) + '"]';
+
+  // Reset HW displays in current scope to dash
+  document.querySelectorAll(scope).forEach(el => {
     el.textContent = '—';
-    el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
+    el.className = defaultHwBadgeClass;
   });
   if (!assignmentId) return;
 
@@ -266,19 +299,19 @@ function fetchHwScoresForAssignment(assignmentId) {
     .then(data => {
       if (!data.success) return;
       const hwScores = data.hw_scores || {};
-      document.querySelectorAll('.hw-score-display').forEach(el => {
+      document.querySelectorAll(scope).forEach(el => {
         const sid = el.getAttribute('data-student-id');
         if (sid in hwScores) {
           const score = hwScores[sid];
           if (score === -1) {
             el.textContent = 'HW Pass';
-            el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300';
+            el.className = passingHwBadgeClass;
           } else {
             el.textContent = score + '%';
             if (score >= 65) {
-              el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300';
+              el.className = passingHwBadgeClass;
             } else {
-              el.className = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300';
+              el.className = failingHwBadgeClass;
             }
           }
         }
@@ -289,9 +322,9 @@ function fetchHwScoresForAssignment(assignmentId) {
 
 // --- Report tab toggle ---
 function showReport(type) {
-  document.getElementById('assignmentReport').classList.toggle('hidden', type !== 'assignment');
-  document.getElementById('studentHistoryPanel').classList.toggle('hidden', type !== 'studentHistory');
-  document.getElementById('filterControls').classList.toggle('hidden', type !== 'assignment');
+  assignmentReportEl.classList.toggle('hidden', type !== 'assignment');
+  studentHistoryPanelEl.classList.toggle('hidden', type !== 'studentHistory');
+  filterControlsEl.classList.toggle('hidden', type !== 'assignment');
 
   const activeClass = 'flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-sm bg-blue-600 text-white transition-colors';
   const inactiveClass = 'flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-sm bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
@@ -309,26 +342,24 @@ function filterStudentHistory() {
 
 // --- Dropdown open/close ---
 function toggleDropdown(type) {
-  const aDD = document.getElementById('assignmentDropdown');
-  const sDD = document.getElementById('studentDropdown');
   if (type === 'assignment') {
-    aDD.classList.toggle('hidden');
-    sDD.classList.add('hidden');
+    assignmentDropdownEl.classList.toggle('hidden');
+    studentDropdownEl.classList.add('hidden');
   } else {
-    sDD.classList.toggle('hidden');
-    aDD.classList.add('hidden');
+    studentDropdownEl.classList.toggle('hidden');
+    assignmentDropdownEl.classList.add('hidden');
   }
 }
 
 document.addEventListener('click', function(e) {
   const aC = document.getElementById('assignmentDropdownContainer');
   const sC = document.getElementById('studentDropdownContainer');
-  if (aC && !aC.contains(e.target)) document.getElementById('assignmentDropdown').classList.add('hidden');
-  if (sC && !sC.contains(e.target)) document.getElementById('studentDropdown').classList.add('hidden');
+  if (aC && !aC.contains(e.target)) assignmentDropdownEl.classList.add('hidden');
+  if (sC && !sC.contains(e.target)) studentDropdownEl.classList.add('hidden');
 });
 
 // --- Filter by Assignment ---
-let selectedAssignmentId = null;
+let selectedAssignmentId = '';
 
 function filterAssignmentDropdown() {
   const search = document.getElementById('assignmentDropdownSearch').value.toLowerCase();
@@ -338,13 +369,10 @@ function filterAssignmentDropdown() {
 }
 
 function selectAssignment(assignmentId, assignmentName) {
-  selectedAssignmentId = assignmentId;
-  document.getElementById('assignmentDropdown').classList.add('hidden');
-
-  const btn = document.getElementById('assignmentDropdownBtn');
-  const chevron = '<svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
-  btn.innerHTML = assignmentName + ' ' + chevron;
-  btn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors bg-blue-600 text-white hover:bg-blue-700';
+  selectedAssignmentId = assignmentId ? String(assignmentId) : '';
+  assignmentDropdownEl.classList.add('hidden');
+  assignmentDropdownBtnEl.innerHTML = assignmentName + ' ' + chevronSvg;
+  assignmentDropdownBtnEl.className = 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors bg-blue-600 text-white hover:bg-blue-700';
 
   document.querySelectorAll('.assignment-dd-item').forEach(item => {
     const isActive = item.getAttribute('data-assignment-id') === String(assignmentId);
@@ -354,21 +382,26 @@ function selectAssignment(assignmentId, assignmentName) {
   });
 
   applyAssignmentFilter();
-  fetchHwScoresForAssignment(assignmentId);
+  fetchHwScoresForAssignment(selectedAssignmentId, '');
 }
 
 function applyAssignmentFilter() {
   if (!selectedAssignmentId) {
-    document.querySelectorAll('[data-lo-id]').forEach(el => el.classList.remove('hidden'));
+    viewAllEl.classList.add('hidden');
+    renderAllAssignmentsView();
+    viewAllAssignmentsEl.classList.remove('hidden');
+    document.querySelectorAll('#view-all [data-lo-id]').forEach(el => el.classList.remove('hidden'));
     return;
   }
+  viewAllAssignmentsEl.classList.add('hidden');
+  viewAllEl.classList.remove('hidden');
   const assignment = assignmentsData.find(a => String(a.id) === String(selectedAssignmentId));
   if (!assignment || !assignment.assignment_objectives) {
-    document.querySelectorAll('[data-lo-id]').forEach(el => el.classList.remove('hidden'));
+    document.querySelectorAll('#view-all [data-lo-id]').forEach(el => el.classList.remove('hidden'));
     return;
   }
   const loIds = new Set(assignment.assignment_objectives.map(ao => String(ao.learning_objective_id)));
-  document.querySelectorAll('[data-lo-id]').forEach(el => {
+  document.querySelectorAll('#view-all [data-lo-id]').forEach(el => {
     el.classList.toggle('hidden', !loIds.has(String(el.getAttribute('data-lo-id'))));
   });
 }
@@ -385,14 +418,12 @@ function applyStudentFilter() {
   const checked = [...document.querySelectorAll('.student-checkbox:checked')].map(cb => cb.value);
   const checkedSet = new Set(checked);
 
-  const btn = document.getElementById('studentDropdownBtn');
-  const chevron = '<svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
   if (checked.length > 0) {
-    btn.innerHTML = checked.length + ' Student' + (checked.length > 1 ? 's' : '') + ' Selected ' + chevron;
-    btn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors bg-blue-600 text-white hover:bg-blue-700';
+    studentDropdownBtnEl.innerHTML = checked.length + ' Student' + (checked.length > 1 ? 's' : '') + ' Selected ' + chevronSvg;
+    studentDropdownBtnEl.className = 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors bg-blue-600 text-white hover:bg-blue-700';
   } else {
-    btn.innerHTML = 'Filter by Student ' + chevron;
-    btn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-500';
+    studentDropdownBtnEl.innerHTML = 'Filter by Student ' + chevronSvg;
+    studentDropdownBtnEl.className = 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors bg-slate-200 dark:bg-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-500';
   }
 
   document.querySelectorAll('.student-row').forEach(row => {
@@ -413,52 +444,163 @@ function clearStudentSelection() {
 
 // --- Clear all filters ---
 function clearAllFilters() {
-  // Re-select first assignment
-  const firstItem = document.querySelector('.assignment-dd-item');
-  if (firstItem) {
-    selectAssignment(firstItem.getAttribute('data-assignment-id'), firstItem.textContent.trim());
+  const firstAssignmentItem = document.querySelector('.assignment-dd-item[data-assignment-id]:not([data-assignment-id=""])');
+  if (firstAssignmentItem) {
+    selectAssignment(firstAssignmentItem.getAttribute('data-assignment-id'), firstAssignmentItem.textContent.trim());
   }
   clearStudentSelection();
 }
 
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function loCodeForId(loId, fallbackObj) {
+  const fromAssignment = fallbackObj && fallbackObj.learning_objectives && fallbackObj.learning_objectives.vendor_code
+    ? String(fallbackObj.learning_objectives.vendor_code)
+    : '';
+  if (fromAssignment) return fromAssignment;
+  return learningObjectiveCodeById[String(loId)] || 'LO';
+}
+
+function renderAllAssignmentsView() {
+  const container = viewAllAssignmentsEl;
+  if (!container) return;
+  if (!assignmentsData.length) {
+    container.innerHTML =
+      '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-8 text-center text-slate-500 dark:text-slate-400 text-sm">No assignments available.</div>';
+    return;
+  }
+
+  let html = '';
+  assignmentsData.forEach(function (assignment) {
+    const assignmentId = String(assignment.id || '');
+    const assignmentName = assignment.name || 'Assignment';
+    const aos = Array.isArray(assignment.assignment_objectives) ? assignment.assignment_objectives : [];
+    const loMeta = aos
+      .map(function (ao) {
+        const loId = String(ao.learning_objective_id || '');
+        if (!loId) return null;
+        return {
+          id: loId,
+          code: loCodeForId(loId, ao)
+        };
+      })
+      .filter(Boolean);
+
+    html += '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 print:shadow-none print:border-0">';
+    html += '  <div class="p-6 border-b border-slate-100 dark:border-slate-700">';
+    html += '    <h3 class="font-semibold text-slate-900 dark:text-white">' + escapeHtml(assignmentName) + '</h3>';
+    html += '    <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{{ class_name }}</p>';
+    html += '  </div>';
+    html += '  <div class="overflow-x-auto">';
+    html += '    <table class="w-full text-sm">';
+    html += '      <thead><tr class="border-b border-slate-200 dark:border-slate-700">';
+    html += '        <th class="text-left px-6 py-3 font-medium text-slate-500 dark:text-slate-400">Student</th>';
+    html += '        <th class="text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap print:hidden">Email</th>';
+    html += '        <th class="text-center px-4 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">Homework %</th>';
+    loMeta.forEach(function (lo) {
+      html += '        <th class="text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs" data-lo-id="' + escapeHtml(lo.id) + '"><div class="text-xs font-bold text-slate-800 dark:text-white">' + escapeHtml(lo.code) + '</div></th>';
+    });
+    html += '      </tr></thead>';
+    html += '      <tbody class="divide-y divide-slate-50 dark:divide-slate-700">';
+
+    studentsData.forEach(function (student) {
+      const studentId = String(student.id || '');
+      const studentName = String(student.name || '');
+      const lowered = studentName.toLowerCase();
+      const los = Array.isArray(student.learning_objectives) ? student.learning_objectives : [];
+      html += '        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors student-row group" data-student-name="' + escapeHtml(lowered) + '" data-student-id="' + escapeHtml(studentId) + '">';
+      html += '          <td class="px-6 py-3 font-medium text-slate-900 dark:text-white"><div class="flex items-center gap-1"><span>' + escapeHtml(studentName) + '</span>';
+      html += '            <button type="button" onclick="printStudentReport(\'' + escapeHtml(studentId) + '\', \'' + escapeHtml(assignmentId) + '\')" class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors flex-shrink-0 print:hidden">Print</button>';
+      html += '          </div></td>';
+      html += '          <td class="px-3 py-3 text-center print:hidden">';
+      if (student.email) {
+        html += '            <button type="button" onclick="emailStudentReport(\'' + escapeHtml(studentId) + '\', this, \'' + escapeHtml(assignmentId) + '\')" class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">Email</button>';
+      } else {
+        html += '            <span class="text-slate-300 dark:text-slate-600">—</span>';
+      }
+      html += '          </td>';
+      html += '          <td class="px-4 py-3 text-center"><span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="' + escapeHtml(studentId) + '" data-assignment-id="' + escapeHtml(assignmentId) + '">—</span></td>';
+      loMeta.forEach(function (lo) {
+        const slo = los.find(function (x) { return String(x.learning_objective_id) === String(lo.id); });
+        const grade = slo ? (slo.top_score || '') : '';
+        if (grade) {
+          html += '          <td class="px-3 py-3 text-center" data-lo-id="' + escapeHtml(lo.id) + '"><span class="mastery-badge mastery-' + escapeHtml(String(grade).toLowerCase()) + ' inline-block px-2 py-0.5 text-xs font-semibold font-mono rounded border cursor-pointer hover:opacity-80">' + escapeHtml(grade) + '</span></td>';
+        } else {
+          html += '          <td class="px-3 py-3 text-center" data-lo-id="' + escapeHtml(lo.id) + '"><span class="text-slate-300 dark:text-slate-600">—</span></td>';
+        }
+      });
+      html += '        </tr>';
+    });
+
+    html += '      </tbody></table></div></div>';
+  });
+
+  container.innerHTML = html;
+  assignmentsData.forEach(function (assignment) {
+    if (assignment && assignment.id) {
+      fetchHwScoresForAssignment(String(assignment.id), String(assignment.id));
+    }
+  });
+  applyStudentFilter();
+}
+
 // --- Individual student report (same data for print + email-to-student) ---
-function getIndividualReportParts(student) {
-  const visibleLoThs = [...document.querySelectorAll('th[data-lo-id]:not(.hidden)')];
+function getIndividualReportParts(student, assignmentIdOverride) {
+  const activeAssignmentId = assignmentIdOverride ? String(assignmentIdOverride) : (selectedAssignmentId ? String(selectedAssignmentId) : '');
+  const visibleLoThs = [...document.querySelectorAll('#view-all th[data-lo-id]:not(.hidden)')];
   const visibleLoIds = visibleLoThs.map(th => th.getAttribute('data-lo-id'));
   const visibleLoNames = visibleLoThs.map(th => th.textContent.trim());
 
-  const assignmentLabel = selectedAssignmentId
-    ? (assignmentsData.find(a => String(a.id) === String(selectedAssignmentId))?.name || 'Assignment Report')
+  const assignmentLabel = activeAssignmentId
+    ? (assignmentsData.find(a => String(a.id) === String(activeAssignmentId))?.name || 'Assignment Report')
     : 'Assignment Report';
 
   const los = student.learning_objectives || [];
   const className = document.querySelector('#view-all p.text-sm')?.textContent.trim() || '';
   const rows = [];
-  if (visibleLoIds.length > 0) {
+  if (activeAssignmentId) {
+    const assignment = assignmentsData.find(a => String(a.id) === String(activeAssignmentId));
+    const assignmentObjectives = assignment && Array.isArray(assignment.assignment_objectives)
+      ? assignment.assignment_objectives
+      : [];
+    assignmentObjectives.forEach((ao) => {
+      const loId = String(ao.learning_objective_id || '');
+      if (!loId) return;
+      const slo = los.find(lo => String(lo.learning_objective_id) === loId);
+      const grade = slo ? (slo.top_score || 'Not graded') : 'Not graded';
+      const loTitle = (ao.learning_objectives && ao.learning_objectives.vendor_code)
+        ? String(ao.learning_objectives.vendor_code)
+        : (learningObjectivesData.find(lo => String(lo.id) === loId)?.vendor_code || '');
+      rows.push({ title: loTitle, grade: grade });
+    });
+  } else if (visibleLoIds.length > 0) {
     visibleLoIds.forEach((loId, i) => {
       const slo = los.find(lo => String(lo.learning_objective_id) === String(loId));
-      const grade = slo ? (slo.top_score || '—') : '—';
+      const grade = slo ? (slo.top_score || 'Not graded') : 'Not graded';
       rows.push({ title: visibleLoNames[i] || '', grade: grade });
     });
   } else {
     los.forEach(lo => {
-      rows.push({ title: lo.name || '', grade: lo.top_score || '—' });
+      rows.push({ title: lo.vendor_code || '', grade: lo.top_score || 'Not graded' });
     });
   }
-  const hwEl = document.querySelector('.hw-score-display[data-student-id="' + String(student.id) + '"]');
+  const hwSelector = activeAssignmentId
+    ? '.hw-score-display[data-student-id="' + String(student.id) + '"][data-assignment-id="' + activeAssignmentId + '"]'
+    : '.hw-score-display[data-student-id="' + String(student.id) + '"]';
+  const hwEl = document.querySelector(hwSelector);
   const homeworkPct = hwEl ? hwEl.textContent.trim() : '';
   return { student, assignmentLabel, className, rows, homeworkPct };
 }
 
-function emailStudentReport(studentId) {
-  const student = studentsData.find(s => String(s.id) === String(studentId));
-  if (!student) return;
-  const addr = (student.email || '').trim();
-  if (!addr) {
-    alert('No email address is saved for this student. Add it from Students (or the class dashboard), then try again.');
-    return;
-  }
-  const parts = getIndividualReportParts(student);
+function buildEmailPayloadForStudent(student, assignmentIdOverride) {
+  const parts = getIndividualReportParts(student, assignmentIdOverride);
   const lines = [
     'Hello,',
     '',
@@ -478,25 +620,139 @@ function emailStudentReport(studentId) {
   lines.push('----------------------------------------');
   parts.rows.forEach(function (r) {
     const t = String(r.title || '').replace(/\s+/g, ' ').trim();
-    lines.push(t + '  |  ' + String(r.grade));
+    lines.push(t + '  |  ' + String(r.grade || 'Not graded'));
   });
   lines.push('');
   lines.push('— Your instructor (via Project Clarity)');
-  var body = lines.join('\n');
+  let body = lines.join('\n');
   if (body.length > 2000) {
     body = body.slice(0, 1970) + '\n\n[Message trimmed. Ask your instructor for the full printed report if needed.]';
   }
-  var subject = 'Your progress report — ' + (parts.className || 'Class');
-  var href = 'mailto:' + encodeURI(addr) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
-  window.location.href = href;
+  const subject = 'Your progress report — ' + (parts.className || 'Class');
+  return { subject, body, parts };
+}
+
+function emailStudentReport(studentId, btnEl, assignmentIdOverride) {
+  const student = studentsData.find(s => String(s.id) === String(studentId));
+  if (!student) return;
+  const addr = (student.email || '').trim();
+  if (!addr) {
+    alert('No email address is saved for this student. Add it from Students (or the class dashboard), then try again.');
+    return;
+  }
+  const emailPayload = buildEmailPayloadForStudent(student, assignmentIdOverride);
+  if (!confirm('Send this report directly to ' + addr + '?')) {
+    return;
+  }
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.classList.add('opacity-60', 'cursor-not-allowed');
+  }
+  fetch(`/api/class/${classId}/student/${encodeURIComponent(studentId)}/send-report-email`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({
+      subject: emailPayload.subject,
+      body: emailPayload.body
+    })
+  })
+    .then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      return { ok: response.ok, data };
+    })
+    .then(({ ok, data }) => {
+      if (!ok || !data.success) {
+        alert('Could not send email: ' + (data.error || 'Unknown error'));
+        return;
+      }
+      alert('Report emailed to ' + (student.email || 'student') + '.');
+    })
+    .catch(() => {
+      alert('Unexpected error sending report email.');
+    })
+    .finally(() => {
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
+      }
+    });
+}
+
+function emailAllVisibleReports(btnEl) {
+  const visibleRows = [...document.querySelectorAll('#assignmentReport .student-row:not(.hidden)')];
+  const visibleIds = [...new Set(visibleRows.map((row) => String(row.getAttribute('data-student-id') || '')).filter(Boolean))];
+  if (!visibleIds.length) {
+    alert('No visible students to email.');
+    return;
+  }
+  const reports = [];
+  visibleIds.forEach((id) => {
+    const student = studentsData.find((s) => String(s.id) === id);
+    if (!student || !(student.email || '').trim()) return;
+    const payload = buildEmailPayloadForStudent(student);
+    reports.push({
+      student_id: id,
+      student_name: student.name || '',
+      subject: payload.subject,
+      body: payload.body
+    });
+  });
+  if (!reports.length) {
+    alert('None of the visible students have saved email addresses.');
+    return;
+  }
+  if (!confirm(`Send reports directly to ${reports.length} student(s)?`)) {
+    return;
+  }
+
+  const priorText = btnEl ? btnEl.textContent : 'Email All';
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.classList.add('opacity-60', 'cursor-not-allowed');
+    btnEl.textContent = 'Sending...';
+  }
+  fetch(`/api/class/${classId}/send-report-emails`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ reports })
+  })
+    .then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      return { ok: response.ok, data };
+    })
+    .then(({ ok, data }) => {
+      if (!ok || !data.success) {
+        const failures = Array.isArray(data.failures) && data.failures.length
+          ? '\n\n' + data.failures.slice(0, 5).join('\n')
+          : '';
+        alert('Could not send email reports: ' + (data.error || 'Unknown error') + failures);
+        return;
+      }
+      const sent = Number(data.sent || 0);
+      const skipped = Number(data.skipped || 0);
+      const failures = Array.isArray(data.failures) ? data.failures.length : 0;
+      alert(`Email send complete.\n\nSent: ${sent}\nSkipped: ${skipped}\nFailed: ${failures}`);
+    })
+    .catch(() => {
+      alert('Unexpected error sending email reports.');
+    })
+    .finally(() => {
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
+        btnEl.textContent = priorText || 'Email All';
+      }
+    });
 }
 
 // --- Print individual student report ---
-function printStudentReport(studentId) {
+function printStudentReport(studentId, assignmentIdOverride) {
   const student = studentsData.find(s => String(s.id) === String(studentId));
   if (!student) return;
 
-  const parts = getIndividualReportParts(student);
+  const parts = getIndividualReportParts(student, assignmentIdOverride);
   const { assignmentLabel, className, rows } = parts;
 
   let tbodyRows = '';
@@ -561,9 +817,9 @@ function printStudentReport(studentId) {
 
 // Auto-select first assignment on page load
 (function() {
-  const firstItem = document.querySelector('.assignment-dd-item');
-  if (firstItem) {
-    selectAssignment(firstItem.getAttribute('data-assignment-id'), firstItem.textContent.trim());
+  const firstAssignmentItem = document.querySelector('.assignment-dd-item[data-assignment-id]:not([data-assignment-id=""])');
+  if (firstAssignmentItem) {
+    selectAssignment(firstAssignmentItem.getAttribute('data-assignment-id'), firstAssignmentItem.textContent.trim());
   }
 })();
 </script>

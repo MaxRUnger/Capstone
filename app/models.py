@@ -26,7 +26,7 @@ class Course:
     def get_learning_objectives(class_id):
         """Return learning objectives for a class (includes fields needed for edit UI)."""
         resp = supabase_admin.table("learning_objectives") \
-            .select("id, name, vendor_code, description, required_ms") \
+            .select("id, vendor_code, description, required_ms") \
             .eq("class_id", class_id) \
             .execute()
         return resp.data or []
@@ -36,7 +36,7 @@ class Course:
         """Fetches a class, its learning objectives, and all enrolled students with their grades."""
         try:
             response = supabase_admin.table("classes").select(
-                "id, name, semester, learning_objectives(id, name, vendor_code, required_ms)"
+                "id, name, semester, learning_objectives(id, vendor_code, description, required_ms)"
             ).eq("id", class_id).execute()
 
             if not response.data or len(response.data) == 0:
@@ -98,7 +98,7 @@ class Course:
                 try:
                     grades_resp = supabase_admin.table("grades").select(
                         "student_id, learning_objective_id, top_score, second_score, "
-                        "learning_objectives(id, name, vendor_code, required_ms)"
+                        "learning_objectives(id, vendor_code, description, required_ms)"
                     ).in_("student_id", student_ids).execute()
                     for g in (grades_resp.data or []):
                         lo_gid = g.get("learning_objective_id")
@@ -201,7 +201,7 @@ class Grade:
             resp = supabase_admin.table("grades").select(
                 "student_id, top_score, assignment_id, "
                 "assignments(id, name, revision_due), "
-                "learning_objectives(id, name, vendor_code)"
+                "learning_objectives(id, vendor_code, description)"
             ).eq("top_score", "RQ").in_("learning_objective_id", lo_ids).execute()
 
             # Collect assignment IDs to batch-check eligibility

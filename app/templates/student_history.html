@@ -44,10 +44,7 @@
     {% for lo in learning_objectives %}
     <div class="student-history-tile bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 print:shadow-none print:break-inside-avoid">
       <div class="p-6 border-b border-slate-100 dark:border-slate-700 student-history-tile-section">
-        <h2 class="font-semibold text-slate-900 dark:text-white">{{ lo.name }}</h2>
-        {% if lo.vendor_code %}
-        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Code: {{ lo.vendor_code }}</p>
-        {% endif %}
+        <h2 class="font-semibold text-slate-900 dark:text-white">{{ lo.vendor_code }}</h2>
       </div>
 
       <!-- Grade History -->
@@ -131,7 +128,7 @@ function emailStudentHistoryReport() {
     '',
   ];
   (p.objectives || []).forEach(function (lo) {
-    lines.push('--- ' + (lo.name || 'Objective') + (lo.vendor_code ? ' (' + lo.vendor_code + ')' : '') + ' ---');
+    lines.push('--- ' + String(lo.vendor_code || 'Objective') + ' ---');
     var grades = lo.grades || [];
     if (grades.length === 0) {
       lines.push('  (no grades yet)');

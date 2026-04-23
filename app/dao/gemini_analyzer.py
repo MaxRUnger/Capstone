@@ -11,10 +11,12 @@ Handles:
 """
 
 from typing import Dict, List, Optional
-import io
 import os
 import json
 import re
+import logging
+
+logger = logging.getLogger(__name__)
 
 try:
     import fitz  # type: ignore  # PyMuPDF for PDF→image conversion
@@ -107,20 +109,27 @@ class GradeSheetGeminiAnalyzer:
             else:
                 file_bytes = file_obj
 
-            print(f"[Gemini] analyze_pdf called, {len(file_bytes)} bytes")
+            logger.debug("[Gemini] analyze_pdf called, %s bytes", len(file_bytes))
 
             # Convert file to image parts for Gemini
             image_parts = self._file_to_image_parts(file_bytes)
-            print(f"[Gemini] Prepared {len(image_parts)} image(s) in {_time.time()-_t0:.1f}s")
+            logger.debug(
+                "[Gemini] Prepared %s image(s) in %.1fs",
+                len(image_parts),
+                _time.time() - _t0,
+            )
 
             if not image_parts:
                 raise Exception("Could not extract images from file")
 
             # Send to Gemini for extraction
             extracted = self._call_gemini(image_parts)
-            print(f"[Gemini] Extraction done in {_time.time()-_t0:.1f}s")
-            print(f"[Gemini] Found {len(extracted['students'])} students, "
-                  f"{len(extracted['learning_objectives'])} LOs")
+            logger.debug("[Gemini] Extraction done in %.1fs", _time.time() - _t0)
+            logger.debug(
+                "[Gemini] Found %s students, %s LOs",
+                len(extracted["students"]),
+                len(extracted["learning_objectives"]),
+            )
 
             # Build raw text for display
             raw_lines = []
@@ -141,8 +150,7 @@ class GradeSheetGeminiAnalyzer:
             }
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception("Gemini analyze_pdf failed")
             raise Exception(f"Error analyzing file: {str(e)}")
 
     def _file_to_image_parts(self, file_bytes: bytes) -> List:
@@ -190,7 +198,7 @@ class GradeSheetGeminiAnalyzer:
 
         model = self.models[0]
         try:
-            print(f"[Gemini] Trying model: {model}")
+            logger.debug("[Gemini] Trying model: %s", model)
             response = self.client.models.generate_content(
                 model=model,
                 contents=contents,
@@ -201,11 +209,11 @@ class GradeSheetGeminiAnalyzer:
             )
             response_text = response.text.strip()
             parsed = self._parse_response(response_text)
-            print(f"[Gemini] Success with model: {model}")
+            logger.debug("[Gemini] Success with model: %s", model)
             return self._normalize_data(parsed)
         except Exception as e:
             error_str = str(e)
-            print(f"[Gemini] Model {model} failed: {error_str}")
+            logger.warning("[Gemini] Model %s failed: %s", model, error_str)
             if '503' in error_str or 'UNAVAILABLE' in error_str:
                 raise Exception("The Gemini AI service is temporarily busy. Please try again in a few minutes.")
             raise Exception(f"Gemini API error: {error_str}")
@@ -226,8 +234,8 @@ class GradeSheetGeminiAnalyzer:
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            print(f"[Gemini] Failed to parse response: {e}")
-            print(f"[Gemini] Response text: {response_text[:500]}")
+            logger.warning("[Gemini] Failed to parse response: %s", e)
+            logger.debug("[Gemini] Response text snippet: %s", response_text[:500])
             raise Exception("Failed to parse grade sheet data from AI response")
 
     def _normalize_data(self, data: Dict) -> Dict:
@@ -280,5 +288,5 @@ def get_gemini_analyzer() -> Optional[GradeSheetGeminiAnalyzer]:
         _cached_analyzer._version = _module_version  # type: ignore
         return _cached_analyzer
     except (ImportError, ValueError) as e:
-        print(f"Failed to initialize Gemini analyzer: {e}")
+        logger.warning("Failed to initialize Gemini analyzer: %s", e)
         return None
