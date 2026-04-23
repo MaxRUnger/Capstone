@@ -30,6 +30,10 @@ from app.routes import (
     organize_by_learning_objectives,
     normalize_profile,
     DEFAULT_REQUIRED_MS,
+    _student_row_sort_key,
+    _student_sort_key_last_name,
+    _format_name_last_first,
+    _student_display_name,
 )
 from app import create_app
 
@@ -167,6 +171,62 @@ class TestOrganizeByLearningObjectives(unittest.TestCase):
         lo_b = next(lo for lo in result if lo['name'] == 'LO-B')
         self.assertEqual(len(lo_a['students_with_2m']), 1)
         self.assertEqual(len(lo_b['students_with_0m']), 1)
+
+
+class TestStudentSortKeyLastName(unittest.TestCase):
+    """Students lists sort by family name (last token, or segment before comma)."""
+
+    def test_last_token_used_for_first_last_format(self):
+        rows = [
+            {"full_name": "Bob Zenith"},
+            {"full_name": "Zoe Adams"},
+        ]
+        ordered = sorted(rows, key=_student_row_sort_key)
+        self.assertEqual([r["full_name"] for r in ordered], ["Zoe Adams", "Bob Zenith"])
+
+    def test_comma_format_sorts_by_part_before_comma(self):
+        self.assertEqual(
+            _student_sort_key_last_name("Washington, George")[0],
+            "washington",
+        )
+
+    def test_organize_buckets_sorted_by_last_name(self):
+        students = [
+            {
+                "id": "1",
+                "full_name": "Bob Zenith",
+                "grades": [
+                    {"learning_objective_id": "10", "top_score": "M", "second_score": "M"},
+                ],
+            },
+            {
+                "id": "2",
+                "full_name": "Zoe Adams",
+                "grades": [
+                    {"learning_objective_id": "10", "top_score": "M", "second_score": "M"},
+                ],
+            },
+        ]
+        los = [{"id": "10", "name": "LO-A"}]
+        result = organize_by_learning_objectives(students, los)
+        names = [s["name"] for s in result[0]["students_with_2m"]]
+        self.assertEqual(names, ["Adams Zoe", "Zenith Bob"])
+
+
+class TestFormatNameLastFirst(unittest.TestCase):
+    """Roster display: family name first."""
+
+    def test_first_last_to_last_first(self):
+        self.assertEqual(_format_name_last_first("John Smith"), "Smith John")
+
+    def test_comma_form(self):
+        self.assertEqual(_format_name_last_first("Washington, George"), "Washington George")
+
+    def test_student_display_name_formats(self):
+        self.assertEqual(
+            _student_display_name({"id": "x", "full_name": "John Smith"}),
+            "Smith John",
+        )
 
 
 class TestNormalizeProfile(unittest.TestCase):

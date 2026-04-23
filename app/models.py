@@ -24,9 +24,9 @@ class Course:
 
     @staticmethod
     def get_learning_objectives(class_id):
-        """Return learning objectives (id, name, vendor_code) for a class."""
+        """Return learning objectives for a class (includes fields needed for edit UI)."""
         resp = supabase_admin.table("learning_objectives") \
-            .select("id, name, vendor_code") \
+            .select("id, name, vendor_code, description, required_ms") \
             .eq("class_id", class_id) \
             .execute()
         return resp.data or []
@@ -54,7 +54,7 @@ class Course:
             try:
                 settings_resp = supabase_admin.table("classes").select(
                     "auto_convert_m, min_masteries, num_learning_objectives, "
-                    "hw_passes_enabled, hw_passes_allowed"
+                    "hw_passes_enabled, hw_passes_allowed, is_online"
                 ).eq("id", class_id).execute()
                 if settings_resp.data:
                     class_data.update(settings_resp.data[0])
@@ -64,20 +64,28 @@ class Course:
                 class_data.setdefault('num_learning_objectives', 0)
                 class_data.setdefault('hw_passes_enabled', False)
                 class_data.setdefault('hw_passes_allowed', 2)
+                class_data.setdefault('is_online', False)
+            class_data.setdefault('is_online', False)
 
-            # Fetch enrollments with profiles
+            # Fetch enrollments with profiles (email column optional until DB migration applied)
             try:
                 enrollments_resp = supabase_admin.table("enrollments").select(
-                    "id, class_id, student_id, muted, profiles(id, full_name, role)"
+                    "id, class_id, student_id, muted, profiles(id, full_name, role, email)"
                 ).eq("class_id", class_id).execute()
                 enrollments = enrollments_resp.data or []
             except Exception:
-                enrollments_resp = supabase_admin.table("enrollments").select(
-                    "id, class_id, student_id, profiles(id, full_name, role)"
-                ).eq("class_id", class_id).execute()
-                enrollments = enrollments_resp.data or []
-                for e in enrollments:
-                    e['muted'] = False
+                try:
+                    enrollments_resp = supabase_admin.table("enrollments").select(
+                        "id, class_id, student_id, muted, profiles(id, full_name, role)"
+                    ).eq("class_id", class_id).execute()
+                    enrollments = enrollments_resp.data or []
+                except Exception:
+                    enrollments_resp = supabase_admin.table("enrollments").select(
+                        "id, class_id, student_id, profiles(id, full_name, role)"
+                    ).eq("class_id", class_id).execute()
+                    enrollments = enrollments_resp.data or []
+                    for e in enrollments:
+                        e['muted'] = False
 
             # Batch-fetch grades for ALL enrolled students in one query (fixes N+1)
             student_ids = [

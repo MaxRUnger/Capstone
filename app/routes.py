@@ -1,10 +1,12 @@
+import csv
+import io
 import logging
 import os
 import socket
 import threading
 import time
 from functools import wraps
-from typing import Optional
+from typing import Any, Dict, List, Optional, Tuple
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session, abort, Response  # type: ignore
 from app.authentication import supabase, supabase_admin
 from app.models import Course, Grade, Student, Homework
@@ -20,6 +22,9 @@ main_bp = Blueprint('main', __name__, template_folder='templates')
 MOBILE_UPLOAD_TTL = 900  # 15 minutes
 _pending_mobile_uploads = {}
 _mobile_upload_lock = threading.Lock()
+FORM_TOKEN_TTL = 900  # 15 minutes
+_used_form_tokens = {}
+_form_token_lock = threading.Lock()
 
 
 def _get_lan_ipv4() -> Optional[str]:
@@ -76,11 +81,12 @@ def _url_looks_like_loopback(url: str) -> bool:
     return "localhost" in u or "127.0.0.1" in u or "::1" in u
 
 
-def _pending_put(token: str, class_id: str, user_id: str) -> None:
+def _pending_put(token: str, class_id: str, user_id: str, upload_kind: str = "grades") -> None:
     with _mobile_upload_lock:
         _pending_mobile_uploads[token] = {
             "class_id": class_id,
             "user_id": user_id,
+            "upload_kind": upload_kind,
             "created": time.time(),
             "file": None,
             "filename": None,
@@ -103,7 +109,226 @@ def _pending_delete(token: str) -> None:
     with _mobile_upload_lock:
         _pending_mobile_uploads.pop(token, None)
 
+
+def _consume_one_time_form_token(namespace: str, token: str) -> bool:
+    """Return True once per (namespace, token) within TTL; False for replays."""
+    key = f"{namespace}:{token}"
+    now = time.time()
+    with _form_token_lock:
+        expired = [
+            k for k, created in _used_form_tokens.items()
+            if now - created > FORM_TOKEN_TTL
+        ]
+        for k in expired:
+            _used_form_tokens.pop(k, None)
+
+        if key in _used_form_tokens:
+            return False
+
+        _used_form_tokens[key] = now
+        return True
+
 DEFAULT_REQUIRED_MS = 2
+
+
+def _csv_row_norm_keys(row: Dict[str, Any]) -> Dict[str, str]:
+    """Lowercase + strip CSV header keys (handles UTF-8 BOM on first column)."""
+    out: Dict[str, str] = {}
+    for k, v in row.items():
+        if k is None:
+            continue
+        nk = str(k).strip().lower().lstrip("\ufeff")
+        if isinstance(v, str):
+            out[nk] = v.strip()
+        elif v is None:
+            out[nk] = ""
+        else:
+            out[nk] = str(v).strip()
+    return out
+
+
+def parse_learning_objectives_csv_text(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
+    """Parse CSV using only title, description, and calculation_int (e.g. Canvas outcomes export)."""
+    warnings: List[str] = []
+    text = (text or "").strip()
+    if not text:
+        return [], ["File is empty"]
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        return [], ["Missing header row"]
+    need = {"title", "description", "calculation_int"}
+    lower_fn = {(f or "").strip().lower().lstrip("\ufeff") for f in reader.fieldnames if f}
+    missing = need - lower_fn
+    if missing:
+        return [], [
+            "CSV must include columns: title, description, calculation_int. "
+            f"Missing: {', '.join(sorted(missing))}"
+        ]
+
+    rows_out: List[Dict[str, Any]] = []
+    for raw in reader:
+        r = _csv_row_norm_keys(raw)
+        title = (r.get("title") or "").strip()
+        if not title:
+            continue
+        desc = (r.get("description") or "").strip()
+        name = desc if desc else title
+        calc_raw = (r.get("calculation_int") or "").strip()
+        required_ms = DEFAULT_REQUIRED_MS
+        if calc_raw:
+            try:
+                ci = int(float(calc_raw))
+                if 1 <= ci <= 5:
+                    required_ms = ci
+                else:
+                    warnings.append(
+                        f"Row '{title}': calculation_int {ci} out of range 1–5, using {DEFAULT_REQUIRED_MS}"
+                    )
+            except (ValueError, TypeError):
+                warnings.append(
+                    f"Row '{title}': invalid calculation_int, using {DEFAULT_REQUIRED_MS}"
+                )
+        rows_out.append(
+            {
+                "vendor_code": title,
+                "name": name,
+                "required_ms": required_ms,
+                "description": None,
+            }
+        )
+    if not rows_out:
+        return [], ["No data rows with a non-empty title"]
+    return rows_out, warnings
+
+
+def _class_instructor_id(class_id: str) -> Optional[str]:
+    try:
+        resp = supabase_admin.table("classes").select("instructor_id").eq("id", class_id).limit(1).execute()
+        if resp.data:
+            return resp.data[0].get("instructor_id")
+    except Exception as e:
+        logger.error("_class_instructor_id: %s", e)
+    return None
+
+
+def _user_ids_equal(a: Any, b: Any) -> bool:
+    """Compare auth user ids / FK ids from Supabase (string case and whitespace tolerant)."""
+    if a is None or b is None:
+        return False
+    sa = str(a).strip().lower()
+    sb = str(b).strip().lower()
+    if sa == sb:
+        return True
+    return sa.replace("-", "") == sb.replace("-", "")
+
+
+def build_lo_csv_mobile_upload_context(
+    class_id: str, user_id: Optional[str], role: Optional[str]
+) -> Dict[str, Any]:
+    """Token + URL for learning-objective CSV upload from phone (class owner only)."""
+    empty: Dict[str, Any] = {
+        "lo_mobile_upload_token": "",
+        "lo_mobile_upload_url": "",
+        "lo_mobile_upload_url_is_loopback": False,
+    }
+    if not user_id or (role or "").strip().lower() != "instructor":
+        return empty
+    owner_id = _class_instructor_id(class_id)
+    if not owner_id or not _user_ids_equal(owner_id, user_id):
+        return empty
+    token = str(uuid4())
+    _pending_put(token, class_id, user_id, upload_kind="lo_outcomes")
+    url = f"{_public_base_url()}/class/{class_id}/mobile-upload/{token}"
+    return {
+        "lo_mobile_upload_token": token,
+        "lo_mobile_upload_url": url,
+        "lo_mobile_upload_url_is_loopback": _url_looks_like_loopback(url),
+    }
+
+
+def annotate_learning_objective_rows_for_preview(
+    class_id: str, rows: List[Dict[str, Any]]
+) -> List[Dict[str, Any]]:
+    """Tag each row with duplicate=true if vendor_code already exists in the class."""
+    try:
+        existing_resp = (
+            supabase_admin.table("learning_objectives")
+            .select("vendor_code")
+            .eq("class_id", class_id)
+            .execute()
+        )
+        existing = {
+            (r.get("vendor_code") or "").strip().lower()
+            for r in (existing_resp.data or [])
+            if (r.get("vendor_code") or "").strip()
+        }
+    except Exception:
+        existing = set()
+    out = []
+    for row in rows:
+        r = dict(row)
+        vc = (r.get("vendor_code") or "").strip()
+        r["duplicate"] = bool(vc and vc.lower() in existing)
+        out.append(r)
+    return out
+
+
+def import_learning_objectives_rows(class_id: str, rows: List[Dict[str, Any]]) -> Tuple[int, int, List[str]]:
+    """Insert new LOs; skip vendor_codes that already exist (case-insensitive). Returns (inserted, skipped, errors)."""
+    errors: List[str] = []
+    if not rows:
+        return 0, 0, errors
+    try:
+        existing_resp = (
+            supabase_admin.table("learning_objectives")
+            .select("vendor_code")
+            .eq("class_id", class_id)
+            .execute()
+        )
+        existing = {
+            (r.get("vendor_code") or "").strip().lower()
+            for r in (existing_resp.data or [])
+            if (r.get("vendor_code") or "").strip()
+        }
+    except Exception as e:
+        return 0, 0, [f"Failed to load existing objectives: {e}"]
+
+    inserted = 0
+    skipped = 0
+    batch: List[Dict[str, Any]] = []
+    chunk = 80
+
+    for row in rows:
+        vc = (row.get("vendor_code") or "").strip()
+        if not vc:
+            continue
+        key = vc.lower()
+        if key in existing:
+            skipped += 1
+            continue
+        existing.add(key)
+        batch.append(
+            {
+                "class_id": class_id,
+                "vendor_code": vc,
+                "name": row.get("name") or vc,
+                "description": row.get("description"),
+                "required_ms": int(row.get("required_ms") or DEFAULT_REQUIRED_MS),
+            }
+        )
+
+    for i in range(0, len(batch), chunk):
+        piece = batch[i : i + chunk]
+        if not piece:
+            continue
+        try:
+            supabase_admin.table("learning_objectives").insert(piece).execute()
+            inserted += len(piece)
+        except Exception as e:
+            logger.error("LO batch insert failed: %s", e)
+            errors.append(str(e))
+            break
+    return inserted, skipped, errors
 
 
 def _merge_lo_row(lo_lookup, lo_id, embed):
@@ -152,7 +377,10 @@ def api_instructor_required(f):
     """Return 401 JSON if the user is not a logged-in instructor."""
     @wraps(f)
     def decorated(*args, **kwargs):
-        if 'user_id' not in session or session.get('role') != 'instructor':
+        if "user_id" not in session:
+            return jsonify({"success": False, "error": "Unauthorized"}), 401
+        role = (session.get("role") or "").strip().lower()
+        if role != "instructor":
             return jsonify({"success": False, "error": "Unauthorized"}), 401
         return f(*args, **kwargs)
     return decorated
@@ -185,17 +413,28 @@ def organize_by_learning_objectives(students, learning_objectives):
                 if top == 'M': m_count += 1
                 if sec == 'M': m_count += 1
                 
+                raw_fn = (student.get("full_name") or "").strip()
                 student_data = {
-                    'id': student['id'],
-                    'name': student.get('full_name', 'Unknown Student'),
-                    'top_score': top,
-                    'second_score': sec
+                    "id": student["id"],
+                    "full_name": raw_fn,
+                    "name": student.get("name")
+                    or _student_display_name(
+                        {"id": student.get("id"), "full_name": student.get("full_name")}
+                    ),
+                    "top_score": top,
+                    "second_score": sec,
                 }
 
                 if m_count == 2: lo_dict[lo_id]['students_with_2m'].append(student_data)
                 elif m_count == 1: lo_dict[lo_id]['students_with_1m'].append(student_data)
                 else: lo_dict[lo_id]['students_with_0m'].append(student_data)
-    
+
+    for lo in lo_dict.values():
+        for col in ("students_with_2m", "students_with_1m", "students_with_0m"):
+            lo[col].sort(
+                key=lambda sd: _student_sort_key_last_name(sd.get("full_name") or sd.get("name"))
+            )
+
     return list(lo_dict.values())
 
 
@@ -219,6 +458,67 @@ def normalize_profile(enrollment):
     if isinstance(prof, list):
         prof = prof[0] if prof else {}
     return prof or {}
+
+
+def _format_name_last_first(raw: str) -> str:
+    """Display roster-style as ``Lastname Firstname`` (single space, no comma).
+
+    Assumes stored ``full_name`` is ``First ... Last`` or ``Last, First ...``.
+    Single-token names are returned unchanged.
+    """
+    s = (raw or "").strip()
+    if not s:
+        return s
+    if "," in s:
+        left, right = s.split(",", 1)
+        last = left.strip()
+        rest = right.strip()
+        if not last:
+            return s
+        if rest:
+            return f"{last} {rest}".strip()
+        return last
+    parts = s.split()
+    if len(parts) == 1:
+        return parts[0]
+    last = parts[-1]
+    first = " ".join(parts[:-1])
+    return f"{last} {first}".strip()
+
+
+def _student_display_name(prof: Dict[str, Any]) -> str:
+    """Label for UI; avoids showing raw UUID when full_name is missing or was corrupted."""
+    pid = str(prof.get("id") or "").strip()
+    fn = (prof.get("full_name") or "").strip()
+    if not fn or (pid and fn == pid):
+        return "Unnamed student"
+    return _format_name_last_first(fn)
+
+
+def _student_sort_key_last_name(display_name: Optional[str]) -> Tuple[str, str]:
+    """Return (primary, secondary) for ordering students by family name.
+
+    If the label contains a comma (e.g. ``Washington, George``), the substring
+    before the comma is the last name. Otherwise the last whitespace-separated
+    token is used (``Mary Jane Smith`` → ``smith``). Tie-break on full string.
+    """
+    raw = (display_name or "").strip()
+    if not raw:
+        return ("\uffff", "")
+    lower_full = raw.lower()
+    if "," in raw:
+        last = raw.split(",", 1)[0].strip().lower()
+        return (last or "\uffff", lower_full)
+    parts = raw.split()
+    if len(parts) >= 2:
+        return (parts[-1].lower(), lower_full)
+    return (parts[0].lower(), lower_full)
+
+
+def _student_row_sort_key(student: Dict[str, Any]) -> Tuple[str, str]:
+    """Prefer stored ``full_name`` (roster order) so sorting stays correct when ``name`` is Last-first display."""
+    label = (student.get("full_name") or student.get("name") or "").strip()
+    return _student_sort_key_last_name(label)
 
 
 def _batch_get_free_passes(student_ids, class_id):
@@ -258,23 +558,35 @@ def _load_students_from_grades(class_id):
         if not student_id:
             continue
         if student_id not in students_by_id:
-            students_by_id[student_id] = {'id': student_id, 'name': student_id, 'raw_grades': []}
+            students_by_id[student_id] = {'id': student_id, 'name': None, 'raw_grades': []}
         students_by_id[student_id]['raw_grades'].append(g)
 
-    # Batch-fetch profile names for all students in one query (fixes N+1)
+    # Batch-fetch profile names (never write UUID into full_name — that corrupts profiles)
     if students_by_id:
         unique_ids = list(students_by_id.keys())
-        for sid in unique_ids:
-            ensure_profile_exists(sid, full_name=sid, role='student')
         try:
-            profiles_resp = supabase_admin.table("profiles") \
-                .select("id, full_name").in_("id", unique_ids).execute()
+            try:
+                profiles_resp = supabase_admin.table("profiles") \
+                    .select("id, full_name, email").in_("id", unique_ids).execute()
+            except Exception:
+                profiles_resp = supabase_admin.table("profiles") \
+                    .select("id, full_name").in_("id", unique_ids).execute()
             for p in (profiles_resp.data or []):
                 pid = p.get('id')
                 if pid in students_by_id:
-                    students_by_id[pid]['name'] = p.get('full_name') or pid
+                    raw_fn = (p.get("full_name") or "").strip()
+                    students_by_id[pid]["full_name"] = raw_fn
+                    students_by_id[pid]["email"] = (p.get("email") or "").strip()
+                    students_by_id[pid]["name"] = _student_display_name(
+                        {"id": pid, "full_name": p.get("full_name")}
+                    )
         except Exception:
-            pass  # Names fall back to student_id
+            pass
+        for row in students_by_id.values():
+            pid = str(row.get('id') or '')
+            nm = (row.get('name') or '').strip()
+            if not nm or nm == pid:
+                row['name'] = 'Unknown student'
 
     # Seed from canonical class LOs so names resolve even when grade embeds are missing
     lo_lookup = {}
@@ -302,7 +614,9 @@ def _load_students_from_grades(class_id):
     for student in students_by_id.values():
         student['learning_objectives'] = _aggregate_lo_grades(student.pop('raw_grades'), lo_lookup)
 
-    return list(students_by_id.values())
+    out = list(students_by_id.values())
+    out.sort(key=_student_row_sort_key)
+    return out
 
 
 def _aggregate_lo_grades(raw_grades, lo_lookup):
@@ -357,18 +671,20 @@ def _process_enrollments(class_data):
     active_students = []
     all_students = []
     for e in class_data.get('enrollments', []):
-        prof = e.get('profiles', {})
-        if not prof or not isinstance(prof, dict):
+        prof = normalize_profile(e)
+        if not prof or not prof.get('id'):
             continue
         prof['learning_objectives'] = _aggregate_lo_grades(
             prof.get('grades', []) or [], lo_lookup
         )
-        if 'name' not in prof:
-            prof['name'] = prof.get('full_name', 'Unnamed Student')
+        prof['name'] = _student_display_name(prof)
+        prof['email'] = (prof.get('email') or '').strip()
         prof['muted'] = e.get('muted', False)
         all_students.append(prof)
         if not prof['muted']:
             active_students.append(prof)
+    active_students.sort(key=_student_row_sort_key)
+    all_students.sort(key=_student_row_sort_key)
     return active_students, all_students, lo_lookup
 
 
@@ -514,7 +830,16 @@ def instructor_dashboard():
     if session.get('role') != 'instructor':
         return redirect(url_for('main.login_page'))
     db_classes = Course.get_all_for_instructor(session['user_id'])
-    return render_template("instructor_select_class.html", classes=db_classes)
+    create_class_token = str(uuid4())
+    session['create_class_token'] = create_class_token
+    copy_class_token = str(uuid4())
+    session['copy_class_token'] = copy_class_token
+    return render_template(
+        "instructor_select_class.html",
+        classes=db_classes,
+        create_class_token=create_class_token,
+        copy_class_token=copy_class_token,
+    )
 
 # ============================================================================
 # CLASS MANAGEMENT ROUTES
@@ -540,16 +865,31 @@ def class_detail(class_id):
             rev['student_name'] = student_name_map[rev['student_id']]
             overdue_revisions.append(rev)
 
+    try:
+        all_los = Course.get_learning_objectives(class_id)
+    except Exception as e:
+        logger.error("Error loading LOs for dashboard %s: %s", class_id, e)
+        all_los = []
+
+    lo_ctx = build_lo_csv_mobile_upload_context(
+        class_id, session.get("user_id"), session.get("role")
+    )
+    lo_ctx.setdefault("lo_mobile_upload_token", "")
+    lo_ctx.setdefault("lo_mobile_upload_url", "")
+    lo_ctx.setdefault("lo_mobile_upload_url_is_loopback", False)
+
     return render_template('class_detail.html', 
                             class_id=class_id, 
                             class_name=class_data.get('name'), 
                             students=students_for_template, 
                             all_students=all_students_for_modal,
                             learning_objectives=summary,
+                            all_los=all_los,
                             assignments=assignments,
                             overdue_revisions=overdue_revisions,
                             auto_convert_m=class_data.get('auto_convert_m', False),
-                            min_masteries=class_data.get('min_masteries', 2))
+                            min_masteries=class_data.get('min_masteries', 2),
+                            **lo_ctx)
 
 @main_bp.route("/class/<class_id>/add_student", methods=["POST"])
 @api_instructor_required
@@ -565,12 +905,23 @@ def add_student(class_id):
         # Always create a new student profile with a unique UUID
         # (students don't log in; professors add them, so same-name students are different people)
         student_id = str(uuid4())
-        supabase_admin.table("profiles").insert({
+        insert_row = {
             "id": student_id,
             "full_name": name,
-            "role": "student"
-        }).execute()
-        
+            "role": "student",
+            "email": email,
+        }
+        try:
+            supabase_admin.table("profiles").insert(insert_row).execute()
+        except Exception as ins_err:
+            insert_row.pop("email", None)
+            logger.warning(
+                "profiles insert with email failed (%s); retrying without email. "
+                "If this persists, run scripts/add_profiles_email.sql on the database.",
+                ins_err,
+            )
+            supabase_admin.table("profiles").insert(insert_row).execute()
+
         # Check if already enrolled
         existing_enrollment = supabase_admin.table("enrollments").select("id").eq("class_id", class_id).eq("student_id", student_id).execute()
         
@@ -646,6 +997,123 @@ def delete_class(class_id):
         logger.error("Error deleting class %s: %s", class_id, e)
         return jsonify({"success": False, "error": str(e)}), 500
 
+
+@main_bp.route("/class/<class_id>/copy", methods=["POST"])
+@login_required
+def copy_class(class_id):
+    """Duplicate a class for the same instructor: same course settings and LOs; no students or assignments."""
+    if session.get("role") != "instructor":
+        return redirect(url_for("main.login_page"))
+
+    form_token = (request.form.get("copy_class_token") or "").strip()
+    session_token = (session.get("copy_class_token") or "").strip()
+    if not form_token or form_token != session_token:
+        return redirect(url_for("main.instructor_dashboard"))
+    if not _consume_one_time_form_token("copy_class", form_token):
+        return redirect(url_for("main.instructor_dashboard"))
+    session["copy_class_token"] = str(uuid4())
+
+    new_name = (request.form.get("name") or "").strip()
+    new_days = (request.form.get("days") or "").strip()
+    if not new_name:
+        return redirect(url_for("main.instructor_dashboard"))
+
+    user_id = session["user_id"]
+
+    try:
+        src_resp = (
+            supabase_admin.table("classes")
+            .select("*")
+            .eq("id", class_id)
+            .eq("instructor_id", user_id)
+            .execute()
+        )
+        if not src_resp.data:
+            return redirect(url_for("main.instructor_dashboard"))
+        source = src_resp.data[0]
+
+        lo_resp = (
+            supabase_admin.table("learning_objectives")
+            .select("name, vendor_code, description, required_ms")
+            .eq("class_id", class_id)
+            .execute()
+        )
+        los = lo_resp.data or []
+        lo_specs = []
+        for lo in los:
+            nm = (lo.get("name") or "").strip()
+            if not nm:
+                continue
+            spec = {
+                "name": nm,
+                "vendor_code": lo.get("vendor_code"),
+                "required_ms": int(lo.get("required_ms") or DEFAULT_REQUIRED_MS),
+            }
+            desc = lo.get("description")
+            if desc is not None:
+                spec["description"] = desc
+            lo_specs.append(spec)
+
+        new_class_data = {
+            "name": new_name,
+            "semester": source.get("semester") or "",
+            "instructor_id": user_id,
+        }
+        optional_fields = {
+            "days": new_days,
+            "num_learning_objectives": len(lo_specs) if lo_specs else int(source.get("num_learning_objectives") or 0),
+            "min_masteries": int(source.get("min_masteries") or 2),
+            "is_online": bool(source.get("is_online")),
+            "auto_convert_m": bool(source.get("auto_convert_m")),
+        }
+        if source.get("hw_passes_enabled") is not None:
+            optional_fields["hw_passes_enabled"] = bool(source.get("hw_passes_enabled"))
+        if source.get("hw_passes_allowed") is not None:
+            optional_fields["hw_passes_allowed"] = int(source.get("hw_passes_allowed") or 2)
+
+        def _insert_class_row(data: dict):
+            return supabase_admin.table("classes").insert(data).execute()
+
+        new_id = None
+        try:
+            full_data = {**new_class_data, **optional_fields}
+            ins = _insert_class_row(full_data)
+            if ins.data:
+                new_id = ins.data[0].get("id")
+        except Exception as col_err:
+            if "PGRST204" in str(col_err) or "schema cache" in str(col_err):
+                reduced = {**new_class_data, **optional_fields}
+                for k in ("is_online", "hw_passes_enabled", "hw_passes_allowed", "auto_convert_m"):
+                    reduced.pop(k, None)
+                try:
+                    ins = _insert_class_row(reduced)
+                    if ins.data:
+                        new_id = ins.data[0].get("id")
+                except Exception as err2:
+                    if "PGRST204" in str(err2) or "schema cache" in str(err2):
+                        ins = _insert_class_row(new_class_data)
+                        if ins.data:
+                            new_id = ins.data[0].get("id")
+                    else:
+                        raise
+            else:
+                raise
+
+        if not new_id:
+            return redirect(url_for("main.instructor_dashboard"))
+
+        if lo_specs:
+            lo_rows = [{**spec, "class_id": new_id} for spec in lo_specs]
+            chunk = 100
+            for i in range(0, len(lo_rows), chunk):
+                supabase_admin.table("learning_objectives").insert(lo_rows[i : i + chunk]).execute()
+
+        return redirect(url_for("main.instructor_dashboard"))
+    except Exception as e:
+        logger.error("Error copying class %s: %s", class_id, e)
+        return f"Failed to copy class: {str(e)}", 500
+
+
 @main_bp.route("/class/<class_id>/students/<student_id>")
 @login_required
 def class_student_detail(class_id, student_id):
@@ -659,20 +1127,34 @@ def class_student_detail(class_id, student_id):
     for e in class_data.get('enrollments', []):
         if e.get('muted', False):
             continue
-        prof = e.get('profiles', {})
-        if prof.get('id') == student_id:
-            # Aggregate grades per LO across assignments
-            prof['learning_objectives'] = _aggregate_lo_grades(prof.get('grades', []), lo_lookup)
-            if 'name' not in prof:
-                prof['name'] = prof.get('full_name', 'Unnamed Student')
-            student = prof
-            break
+        prof = normalize_profile(e)
+        if str(prof.get('id') or '') != str(student_id):
+            continue
+        prof['learning_objectives'] = _aggregate_lo_grades(prof.get('grades', []), lo_lookup)
+        prof['name'] = _student_display_name(prof)
+        prof['email'] = (prof.get('email') or '').strip()
+        student = prof
+        break
 
     if not student:
         for s in _load_students_from_grades(class_id):
             if s.get('id') == student_id:
                 student = s
                 break
+
+    if student and not (student.get('email') or '').strip():
+        try:
+            pe = (
+                supabase_admin.table("profiles")
+                .select("email")
+                .eq("id", student_id)
+                .limit(1)
+                .execute()
+            )
+            if pe.data:
+                student['email'] = (pe.data[0].get('email') or '').strip()
+        except Exception:
+            pass
 
     if not student:
         return redirect(url_for('main.class_students', class_id=class_id))
@@ -695,11 +1177,19 @@ def class_assignments(class_id):
         logger.error("Error loading LOs for class %s: %s", class_id, e)
         all_los = []
 
+    lo_ctx = build_lo_csv_mobile_upload_context(
+        class_id, session.get("user_id"), session.get("role")
+    )
+    lo_ctx.setdefault("lo_mobile_upload_token", "")
+    lo_ctx.setdefault("lo_mobile_upload_url", "")
+    lo_ctx.setdefault("lo_mobile_upload_url_is_loopback", False)
+
     return render_template("class_assignments.html", 
                             class_id=class_id, 
                             class_name=class_data['name'], 
                             assignments=assignments,
-                            all_los=all_los)
+                            all_los=all_los,
+                            **lo_ctx)
 
 @main_bp.route("/class/<class_id>/create_assignment", methods=["POST"])
 @api_instructor_required
@@ -776,20 +1266,221 @@ def delete_assignment(class_id, assignment_id):
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
 
+def _instructor_owns_class(class_id: str) -> bool:
+    uid = session.get("user_id")
+    owner = _class_instructor_id(class_id)
+    return bool(uid and owner and _user_ids_equal(owner, uid))
+
+
+def _lo_vendor_code_conflict(class_id: str, vendor_code: str, exclude_lo_id: str) -> bool:
+    """True if another LO in this class already uses this vendor_code (case-insensitive)."""
+    vc = (vendor_code or "").strip()
+    if not vc:
+        return False
+    try:
+        resp = (
+            supabase_admin.table("learning_objectives")
+            .select("id, vendor_code")
+            .eq("class_id", class_id)
+            .execute()
+        )
+    except Exception:
+        return True
+    ex = str(exclude_lo_id).strip()
+    vcl = vc.lower()
+    for row in resp.data or []:
+        if str(row.get("id") or "").strip() == ex:
+            continue
+        other = (row.get("vendor_code") or "").strip()
+        if other and other.lower() == vcl:
+            return True
+    return False
+
+
 @main_bp.route("/class/<class_id>/delete_lo/<lo_id>", methods=["POST"])
 @api_instructor_required
 def delete_lo(class_id, lo_id):
-    
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     try:
+        chk = (
+            supabase_admin.table("learning_objectives")
+            .select("id")
+            .eq("id", lo_id)
+            .eq("class_id", class_id)
+            .limit(1)
+            .execute()
+        )
+        if not chk.data:
+            return jsonify({"success": False, "error": "Learning objective not found"}), 404
         # First delete assignment_objectives links
         supabase_admin.table("assignment_objectives").delete().eq("learning_objective_id", lo_id).execute()
         # Then delete grades
         supabase_admin.table("grades").delete().eq("learning_objective_id", lo_id).execute()
         # Then delete the LO
-        supabase_admin.table("learning_objectives").delete().eq("id", lo_id).execute()
+        supabase_admin.table("learning_objectives").delete().eq("id", lo_id).eq("class_id", class_id).execute()
         return jsonify({"success": True})
     except Exception as e:
+        logger.exception("delete_lo failed class_id=%s lo_id=%s", class_id, lo_id)
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@main_bp.route("/api/class/<class_id>/update-lo/<lo_id>", methods=["POST"])
+@api_instructor_required
+def api_update_learning_objective(class_id, lo_id):
+    """Update display fields on an existing LO (same row id — grades and links stay intact)."""
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+    data = request.get_json(silent=True) or {}
+    try:
+        cur = (
+            supabase_admin.table("learning_objectives")
+            .select("id, name, vendor_code, description, required_ms")
+            .eq("id", lo_id)
+            .eq("class_id", class_id)
+            .limit(1)
+            .execute()
+        )
+        if not cur.data:
+            return jsonify({"success": False, "error": "Learning objective not found"}), 404
+        row = cur.data[0]
+        name = (data.get("name") if data.get("name") is not None else row.get("name") or "").strip()
+        if not name:
+            return jsonify({"success": False, "error": "Objective name is required"}), 400
+        vendor_raw = data.get("vendor_code")
+        if vendor_raw is None:
+            vendor_code = (row.get("vendor_code") or "").strip() or None
+        else:
+            vendor_code = str(vendor_raw).strip() or None
+        if vendor_code and _lo_vendor_code_conflict(class_id, vendor_code, lo_id):
+            return jsonify(
+                {"success": False, "error": "Another objective in this class already uses that code."}
+            ), 400
+        desc_raw = data.get("description")
+        if desc_raw is None:
+            description = row.get("description")
+        else:
+            description = str(desc_raw).strip() or None
+        if data.get("required_ms") is None:
+            req = int(row.get("required_ms") or DEFAULT_REQUIRED_MS)
+        else:
+            try:
+                req = int(data.get("required_ms"))
+            except (TypeError, ValueError):
+                req = DEFAULT_REQUIRED_MS
+        req = max(1, min(5, req))
+        supabase_admin.table("learning_objectives").update(
+            {
+                "name": name,
+                "vendor_code": vendor_code,
+                "description": description,
+                "required_ms": req,
+            }
+        ).eq("id", lo_id).eq("class_id", class_id).execute()
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.exception("api_update_learning_objective failed class_id=%s lo_id=%s", class_id, lo_id)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+def _parse_lo_csv_upload() -> Tuple[Optional[str], Optional[List[Dict[str, Any]]], List[str]]:
+    """Read CSV from request.files['file']; return (error_message or None, rows or None, warnings)."""
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return "No file uploaded", None, []
+    if not f.filename.lower().endswith(".csv"):
+        return "Upload a .csv file", None, []
+    try:
+        raw = f.read()
+        if len(raw) > 5 * 1024 * 1024:
+            return "CSV must be 5MB or smaller", None, []
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return "CSV must be UTF-8 encoded", None, []
+    rows, parse_warnings = parse_learning_objectives_csv_text(text)
+    if not rows:
+        return parse_warnings[0] if parse_warnings else "No objectives to import", None, parse_warnings
+    return None, rows, parse_warnings
+
+
+@main_bp.route("/api/class/<class_id>/preview-learning-objectives", methods=["POST"])
+@api_instructor_required
+def api_preview_learning_objectives(class_id):
+    """Parse CSV (title, description, calculation_int only); return rows for confirm UI."""
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+
+    err, rows, parse_warnings = _parse_lo_csv_upload()
+    if err:
+        return jsonify({"success": False, "error": err, "warnings": parse_warnings}), 400
+
+    preview_rows = annotate_learning_objective_rows_for_preview(class_id, rows or [])
+    return jsonify(
+        {
+            "success": True,
+            "rows": preview_rows,
+            "warnings": parse_warnings,
+            "count": len(preview_rows),
+        }
+    )
+
+
+@main_bp.route("/api/class/<class_id>/import-learning-objectives", methods=["POST"])
+@api_instructor_required
+def api_import_learning_objectives(class_id):
+    """Commit LO rows after user confirms (JSON body: { \"rows\": [...] })."""
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+
+    data = request.get_json(silent=True) or {}
+    raw_rows = data.get("rows")
+    if not isinstance(raw_rows, list) or len(raw_rows) == 0:
+        return jsonify({"success": False, "error": "Missing or empty rows array"}), 400
+
+    rows: List[Dict[str, Any]] = []
+    for item in raw_rows:
+        if not isinstance(item, dict):
+            continue
+        vc = (item.get("vendor_code") or "").strip()
+        if not vc:
+            continue
+        name = (item.get("name") or "").strip() or vc
+        try:
+            req = int(item.get("required_ms", DEFAULT_REQUIRED_MS))
+        except (TypeError, ValueError):
+            req = DEFAULT_REQUIRED_MS
+        req = max(1, min(5, req))
+        rows.append(
+            {
+                "vendor_code": vc,
+                "name": name,
+                "required_ms": req,
+                "description": None,
+            }
+        )
+
+    if not rows:
+        return jsonify({"success": False, "error": "No valid rows to import"}), 400
+
+    inserted, skipped, errors = import_learning_objectives_rows(class_id, rows)
+    if errors and inserted == 0:
+        return jsonify(
+            {
+                "success": False,
+                "error": errors[0],
+                "inserted": 0,
+                "skipped": skipped,
+            }
+        ), 500
+
+    return jsonify(
+        {
+            "success": True,
+            "inserted": inserted,
+            "skipped": skipped,
+            "errors": errors,
+        }
+    )
 
 
 @main_bp.route("/class/<class_id>/reports")
@@ -824,20 +1515,28 @@ def student_history(class_id, student_id):
         return redirect(url_for('main.instructor_dashboard'))
 
     # Get student enrollment and profile info
+    enrollment_data = None
     try:
         enrollment = supabase_admin.table("enrollments").select(
-            "student_id, profiles(id, full_name)"
+            "student_id, profiles(id, full_name, email)"
         ).eq("class_id", class_id).eq("student_id", student_id).single().execute()
         enrollment_data = enrollment.data
-    except Exception as e:
-        logger.error("Error loading student enrollment: %s", e)
-        return redirect(url_for('main.class_reports', class_id=class_id))
+    except Exception:
+        try:
+            enrollment = supabase_admin.table("enrollments").select(
+                "student_id, profiles(id, full_name)"
+            ).eq("class_id", class_id).eq("student_id", student_id).single().execute()
+            enrollment_data = enrollment.data
+        except Exception as e:
+            logger.error("Error loading student enrollment: %s", e)
+            return redirect(url_for('main.class_reports', class_id=class_id))
 
     if not enrollment_data:
         return redirect(url_for('main.class_reports', class_id=class_id))
 
-    profile = enrollment_data.get('profiles', {})
-    student_name = profile.get('full_name', 'Unknown Student')
+    profile = normalize_profile({'profiles': enrollment_data.get('profiles')})
+    student_name = _student_display_name(profile) if profile.get('id') else 'Unknown student'
+    student_email = (profile.get("email") or "").strip()
     profile_id = profile.get('id')
 
     # Get all grades for this student with assignment names
@@ -875,12 +1574,15 @@ def student_history(class_id, student_id):
         }
         lo_grade_data.append(lo_info)
 
-    return render_template("student_history.html",
-                          class_id=class_id,
-                          class_name=class_data['name'],
-                          student_id=student_id,
-                          student_name=student_name,
-                          learning_objectives=lo_grade_data)
+    return render_template(
+        "student_history.html",
+        class_id=class_id,
+        class_name=class_data['name'],
+        student_id=student_id,
+        student_name=student_name,
+        student_email=student_email,
+        learning_objectives=lo_grade_data,
+    )
 
 @main_bp.route("/class/<class_id>/speed_grader", endpoint='class_speed_grader')
 @login_required
@@ -900,10 +1602,9 @@ def class_speed_grader(class_id):
     students = []
     for enrollment in raw_enrollments:
         prof = normalize_profile(enrollment)
-        if not prof:
+        if not prof.get('id'):
             continue
-        if 'name' not in prof:
-            prof['name'] = prof.get('full_name', 'Unnamed Student')
+        prof['name'] = _student_display_name(prof)
         if enrollment.get('muted', False):
             continue
         students.append(prof)
@@ -913,6 +1614,7 @@ def class_speed_grader(class_id):
 
     # Batch-fetch free passes for all students in one query (fixes N+1)
     if students:
+        students.sort(key=_student_row_sort_key)
         student_ids = [s['id'] for s in students if s.get('id')]
         passes_map = _batch_get_free_passes(student_ids, class_id)
         for prof in students:
@@ -988,10 +1690,17 @@ def mobile_upload_page(class_id, token):
     p = _pending_get(token)
     if not p or p["class_id"] != class_id:
         return (
-            render_template("mobile_upload.html", error="This link is invalid or has expired."),
+            render_template("mobile_upload.html", error="This link is invalid or has expired.", upload_kind="grades"),
             404,
         )
-    return render_template("mobile_upload.html", class_id=class_id, token=token, error=None)
+    upload_kind = p.get("upload_kind", "grades")
+    return render_template(
+        "mobile_upload.html",
+        class_id=class_id,
+        token=token,
+        error=None,
+        upload_kind=upload_kind,
+    )
 
 
 @main_bp.route("/api/mobile-upload/<token>", methods=["POST"])
@@ -1008,14 +1717,22 @@ def mobile_upload_receive(token):
     if not f or not f.filename:
         return jsonify({"success": False, "error": "No file selected"}), 400
 
-    allowed_extensions = (".pdf", ".jpg", ".jpeg", ".png")
-    if not f.filename.lower().endswith(allowed_extensions):
-        return jsonify({"success": False, "error": "Use a PDF, JPG, or PNG"}), 400
+    upload_kind = p.get("upload_kind", "grades")
+    fn_lower = f.filename.lower()
+    if upload_kind == "lo_outcomes":
+        allowed_extensions = (".csv",)
+        if not fn_lower.endswith(allowed_extensions):
+            return jsonify({"success": False, "error": "Use a CSV file"}), 400
+        max_size = 5 * 1024 * 1024
+    else:
+        allowed_extensions = (".pdf", ".jpg", ".jpeg", ".png")
+        if not fn_lower.endswith(allowed_extensions):
+            return jsonify({"success": False, "error": "Use a PDF, JPG, or PNG"}), 400
+        max_size = 10 * 1024 * 1024
 
     data = f.read()
-    max_size = 10 * 1024 * 1024
     if len(data) > max_size:
-        return jsonify({"success": False, "error": "File must be 10MB or smaller"}), 400
+        return jsonify({"success": False, "error": "File is too large"}), 400
 
     content_type = f.mimetype or "application/octet-stream"
     with _mobile_upload_lock:
@@ -1144,6 +1861,8 @@ def create_lo_handler(class_id):
                 except Exception as e:
                     logger.error("Error creating LO: %s", e)
 
+            if request.form.get("return_to", "").strip() == "dashboard":
+                return redirect(url_for("main.class_detail", class_id=class_id))
             return redirect(url_for('main.class_assignments', class_id=class_id))
 
     # GET requests just redirect back to the objectives page (modal handles creation)
@@ -1163,6 +1882,15 @@ def add_class():
 
     if not request.form.get("name"):
         return "Class name is required.", 400
+
+    form_token = (request.form.get("create_class_token") or "").strip()
+    session_token = (session.get("create_class_token") or "").strip()
+    if not form_token or form_token != session_token:
+        return redirect(url_for('main.instructor_dashboard'))
+    if not _consume_one_time_form_token("create_class", form_token):
+        return redirect(url_for('main.instructor_dashboard'))
+    # Rotate token immediately so refresh/back cannot replay this post.
+    session['create_class_token'] = str(uuid4())
 
     user_id = session['user_id']
 
@@ -1189,6 +1917,7 @@ def add_class():
             "days": request.form.get("days", ""),
             "num_learning_objectives": int(request.form.get("num_learning_objectives") or 0),
             "min_masteries": int(request.form.get("min_masteries") or 2),
+            "is_online": request.form.get("is_online") == "1",
         }
         if request.form.get("auto_convert_m") == "1":
             optional_fields["auto_convert_m"] = True
@@ -1199,8 +1928,21 @@ def add_class():
             supabase_admin.table("classes").insert(full_data).execute()
         except Exception as col_err:
             if 'PGRST204' in str(col_err) or 'schema cache' in str(col_err):
-                # Fallback: insert only core columns
-                supabase_admin.table("classes").insert(new_class_data).execute()
+                # If the new online flag column doesn't exist yet, retry without it first
+                if "is_online" in full_data:
+                    reduced_data = dict(full_data)
+                    reduced_data.pop("is_online", None)
+                    try:
+                        supabase_admin.table("classes").insert(reduced_data).execute()
+                    except Exception as reduced_err:
+                        if 'PGRST204' in str(reduced_err) or 'schema cache' in str(reduced_err):
+                            # Last fallback: insert only core columns
+                            supabase_admin.table("classes").insert(new_class_data).execute()
+                        else:
+                            raise
+                else:
+                    # Fallback: insert only core columns
+                    supabase_admin.table("classes").insert(new_class_data).execute()
             else:
                 raise
         return redirect(url_for('main.instructor_dashboard'))
@@ -1401,8 +2143,14 @@ def get_available_students(class_id):
         enrolled_ids = {e['student_id'] for e in
                         supabase_admin.table("enrollments").select("student_id")
                         .eq("class_id", class_id).execute().data or []}
-        available = sorted([s for s in all_students if s['id'] not in enrolled_ids],
-                           key=lambda s: s['full_name'])
+        available = sorted(
+            [s for s in all_students if s['id'] not in enrolled_ids],
+            key=lambda s: _student_sort_key_last_name(s.get("full_name")),
+        )
+        for s in available:
+            s["name"] = _student_display_name(
+                {"id": s.get("id"), "full_name": s.get("full_name")}
+            )
         return jsonify({"success": True, "students": available}), 200
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1417,9 +2165,23 @@ def api_add_student_to_class(class_id):
         if not student_name:
             return jsonify({"success": False, "error": "student_name is required"}), 400
         student_id = str(uuid4())
-        supabase_admin.table("profiles").insert({
-            "id": student_id, "full_name": student_name, "role": "student"
-        }).execute()
+        student_email = (data.get("student_email") or data.get("email") or "").strip()
+        insert_row = {
+            "id": student_id,
+            "full_name": student_name,
+            "role": "student",
+        }
+        if student_email:
+            insert_row["email"] = student_email
+        try:
+            supabase_admin.table("profiles").insert(insert_row).execute()
+        except Exception as ins_err:
+            insert_row.pop("email", None)
+            logger.warning(
+                "api add_student profiles insert with email failed (%s); retrying without email.",
+                ins_err,
+            )
+            supabase_admin.table("profiles").insert(insert_row).execute()
         supabase_admin.table("enrollments").insert({
             "class_id": class_id, "student_id": student_id
         }).execute()

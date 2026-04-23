@@ -18,6 +18,17 @@
         </svg>
         Print full report
       </button>
+      {% if student_email %}
+      <button type="button" onclick="emailStudentHistoryReport()"
+        class="flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-sm bg-emerald-600 text-white hover:bg-emerald-700 transition-colors shadow-sm"
+        title="Email this report to {{ student_email }}"
+        aria-label="Email student history report to student">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+        </svg>
+        Email student
+      </button>
+      {% endif %}
       <a href="{{ url_for('main.class_reports', class_id=class_id) }}"
         class="flex items-center gap-2 px-5 py-2.5 bg-slate-600 hover:bg-slate-700 text-white rounded-lg font-medium text-sm transition-colors shadow-sm">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -92,6 +103,57 @@
   </div>
 
 </div>
+
+<script id="studentHistoryEmailPayload" type="application/json">{{ {
+  'email': student_email or '',
+  'student_name': student_name,
+  'class_name': class_name,
+  'objectives': learning_objectives
+} | tojson }}</script>
+<script>
+function emailStudentHistoryReport() {
+  var el = document.getElementById('studentHistoryEmailPayload');
+  if (!el) return;
+  var p = JSON.parse(el.textContent);
+  var addr = (p.email || '').trim();
+  if (!addr) {
+    alert('No email address is saved for this student.');
+    return;
+  }
+  var lines = [
+    'Hello,',
+    '',
+    'Here is your student history report (same information as the printable page).',
+    '',
+    'Class: ' + (p.class_name || ''),
+    'Student: ' + (p.student_name || ''),
+    'Date: ' + new Date().toLocaleDateString(),
+    '',
+  ];
+  (p.objectives || []).forEach(function (lo) {
+    lines.push('--- ' + (lo.name || 'Objective') + (lo.vendor_code ? ' (' + lo.vendor_code + ')' : '') + ' ---');
+    var grades = lo.grades || [];
+    if (grades.length === 0) {
+      lines.push('  (no grades yet)');
+    } else {
+      grades.forEach(function (g) {
+        var an = (g.assignments && g.assignments.name) ? g.assignments.name : 'Assignment';
+        var s1 = g.top_score != null ? String(g.top_score) : '—';
+        var s2 = g.second_score != null && g.second_score !== g.top_score ? String(g.second_score) : '';
+        lines.push('  ' + an + ': ' + s1 + (s2 ? ' / ' + s2 : ''));
+      });
+    }
+    lines.push('');
+  });
+  lines.push('— Your instructor (via Project Clarity)');
+  var body = lines.join('\n');
+  if (body.length > 2000) {
+    body = body.slice(0, 1970) + '\n\n[Message trimmed. Use Print full report for the complete view.]';
+  }
+  var subject = 'Your student history report — ' + (p.class_name || 'Class');
+  window.location.href = 'mailto:' + encodeURI(addr) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+}
+</script>
 
 <style>
 .mastery-m  { background: #dcfce7; color: #15803d; border-color: #86efac; }

@@ -129,15 +129,26 @@
             {% for student in students %}
             <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors student-row group" data-student-name="{{ student.name|lower }}" data-student-id="{{ student.id }}">
               <td class="px-6 py-3 font-medium text-slate-900 dark:text-white">
-                <div class="flex items-center gap-2">
+                <div class="flex items-center gap-1">
                   <span>{{ student.name }}</span>
                   <button type="button" onclick="printStudentReport('{{ student.id }}')"
                     class="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 transition-all flex-shrink-0"
-                    title="Print report for {{ student.name }}">
+                    title="Print report for {{ student.name }}"
+                    aria-label="Print report for {{ student.name }}">
                     <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
                     </svg>
                   </button>
+                  {% if student.email %}
+                  <button type="button" onclick="emailStudentReport('{{ student.id }}')"
+                    class="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-emerald-600 dark:hover:text-emerald-400 transition-all flex-shrink-0"
+                    title="Email this report to {{ student.email }}"
+                    aria-label="Email progress report to student">
+                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"/>
+                    </svg>
+                  </button>
+                  {% endif %}
                 </div>
               </td>
               <td class="px-4 py-3 text-center">
@@ -410,11 +421,8 @@ function clearAllFilters() {
   clearStudentSelection();
 }
 
-// --- Print individual student report ---
-function printStudentReport(studentId) {
-  const student = studentsData.find(s => String(s.id) === String(studentId));
-  if (!student) return;
-
+// --- Individual student report (same data for print + email-to-student) ---
+function getIndividualReportParts(student) {
   const visibleLoThs = [...document.querySelectorAll('th[data-lo-id]:not(.hidden)')];
   const visibleLoIds = visibleLoThs.map(th => th.getAttribute('data-lo-id'));
   const visibleLoNames = visibleLoThs.map(th => th.textContent.trim());
@@ -425,26 +433,79 @@ function printStudentReport(studentId) {
 
   const los = student.learning_objectives || [];
   const className = document.querySelector('#view-all p.text-sm')?.textContent.trim() || '';
-
-  let tbodyRows = '';
+  const rows = [];
   if (visibleLoIds.length > 0) {
     visibleLoIds.forEach((loId, i) => {
       const slo = los.find(lo => String(lo.learning_objective_id) === String(loId));
       const grade = slo ? (slo.top_score || '—') : '—';
-      tbodyRows += `<tr style="border-bottom:1px solid #f1f5f9;">
-        <td style="padding:8px 12px;font-size:13px;">${visibleLoNames[i]}</td>
-        <td style="padding:8px 12px;text-align:center;font-size:13px;font-family:monospace;font-weight:700;">${grade}</td>
-      </tr>`;
+      rows.push({ title: visibleLoNames[i] || '', grade: grade });
     });
   } else {
     los.forEach(lo => {
-      const grade = lo.top_score || '—';
-      tbodyRows += `<tr style="border-bottom:1px solid #f1f5f9;">
-        <td style="padding:8px 12px;font-size:13px;">${lo.name || ''}</td>
-        <td style="padding:8px 12px;text-align:center;font-size:13px;font-family:monospace;font-weight:700;">${grade}</td>
-      </tr>`;
+      rows.push({ title: lo.name || '', grade: lo.top_score || '—' });
     });
   }
+  const hwEl = document.querySelector('.hw-score-display[data-student-id="' + String(student.id) + '"]');
+  const homeworkPct = hwEl ? hwEl.textContent.trim() : '';
+  return { student, assignmentLabel, className, rows, homeworkPct };
+}
+
+function emailStudentReport(studentId) {
+  const student = studentsData.find(s => String(s.id) === String(studentId));
+  if (!student) return;
+  const addr = (student.email || '').trim();
+  if (!addr) {
+    alert('No email address is saved for this student. Add it from Students (or the class dashboard), then try again.');
+    return;
+  }
+  const parts = getIndividualReportParts(student);
+  const lines = [
+    'Hello,',
+    '',
+    'Here is the same progress summary that prints from the class Reports page.',
+    '',
+    'Class: ' + (parts.className || ''),
+    'Report: ' + parts.assignmentLabel,
+    'Date: ' + new Date().toLocaleDateString(),
+    'Student: ' + (parts.student.name || ''),
+    '',
+  ];
+  if (parts.homeworkPct && parts.homeworkPct !== '—') {
+    lines.push('Homework % (this assignment view): ' + parts.homeworkPct);
+    lines.push('');
+  }
+  lines.push('Learning objectives and scores shown in this report:');
+  lines.push('----------------------------------------');
+  parts.rows.forEach(function (r) {
+    const t = String(r.title || '').replace(/\s+/g, ' ').trim();
+    lines.push(t + '  |  ' + String(r.grade));
+  });
+  lines.push('');
+  lines.push('— Your instructor (via Project Clarity)');
+  var body = lines.join('\n');
+  if (body.length > 2000) {
+    body = body.slice(0, 1970) + '\n\n[Message trimmed. Ask your instructor for the full printed report if needed.]';
+  }
+  var subject = 'Your progress report — ' + (parts.className || 'Class');
+  var href = 'mailto:' + encodeURI(addr) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+  window.location.href = href;
+}
+
+// --- Print individual student report ---
+function printStudentReport(studentId) {
+  const student = studentsData.find(s => String(s.id) === String(studentId));
+  if (!student) return;
+
+  const parts = getIndividualReportParts(student);
+  const { assignmentLabel, className, rows } = parts;
+
+  let tbodyRows = '';
+  rows.forEach(function (r) {
+    tbodyRows += `<tr style="border-bottom:1px solid #f1f5f9;">
+        <td style="padding:8px 12px;font-size:13px;">${r.title}</td>
+        <td style="padding:8px 12px;text-align:center;font-size:13px;font-family:monospace;font-weight:700;">${r.grade}</td>
+      </tr>`;
+  });
 
   const html = `<!DOCTYPE html>
 <html>
@@ -462,6 +523,7 @@ function printStudentReport(studentId) {
       <div>
         <h1 style="font-size:22px;font-weight:700;margin-bottom:4px;">${student.name}</h1>
         <p style="font-size:14px;color:#64748b;">${className}</p>
+        ${parts.homeworkPct && parts.homeworkPct !== '—' ? `<p style="font-size:13px;color:#475569;margin-top:6px;">Homework: <strong>${parts.homeworkPct}</strong></p>` : ''}
       </div>
       <div style="text-align:right;">
         <p style="font-size:14px;font-weight:600;color:#1d4ed8;margin-bottom:2px;">${assignmentLabel}</p>

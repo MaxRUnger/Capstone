@@ -109,6 +109,116 @@
                 menuDropdown?.classList.add('hidden');
             });
         })();
+
+        function copyTextShowFeedback(button) {
+            if (!button) return;
+            var label = button.getAttribute('data-label-copied') || 'Copied';
+            var prev = button.getAttribute('aria-label');
+            button.setAttribute('aria-label', label);
+            clearTimeout(button._copyResetTimer);
+            button._copyResetTimer = setTimeout(function () {
+                if (prev) button.setAttribute('aria-label', prev);
+            }, 1600);
+        }
+
+        /** Read email from data-email (avoids broken strings in inline onclick). */
+        function copyEmailFromBtn(button) {
+            if (!button) return;
+            var text = button.getAttribute('data-email');
+            if (text == null) text = '';
+            copyTextToClipboard(String(text), button);
+        }
+
+        function copyTextClipboardApi(text, button) {
+            if (!navigator.clipboard || typeof navigator.clipboard.writeText !== 'function') return;
+            var h = (location.hostname || '').toLowerCase();
+            var allow = window.isSecureContext || h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h.endsWith('.localhost');
+            if (!allow) return;
+            navigator.clipboard.writeText(text).then(function () {
+                copyTextShowFeedback(button);
+            }).catch(function () {});
+        }
+
+        /** Synchronous execCommand copy (must run in same stack as the click). */
+        function copyTextViaExecCommand(text) {
+            text = String(text || '');
+            if (!text) return false;
+
+            function tryOne(makeEl, selectFn) {
+                var el = makeEl();
+                document.body.appendChild(el);
+                var ok = false;
+                try {
+                    selectFn(el);
+                    ok = document.execCommand('copy');
+                } catch (err) {}
+                if (el.parentNode) el.parentNode.removeChild(el);
+                return ok;
+            }
+
+            var style = 'position:fixed;top:0;left:0;width:24px;height:24px;padding:4px;margin:0;border:1px solid transparent;outline:0;opacity:0.02;z-index:2147483647;font-size:12px;line-height:1.2;';
+
+            if (tryOne(function () {
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.cssText = style;
+                return ta;
+            }, function (el) {
+                el.focus();
+                el.select();
+                el.setSelectionRange(0, text.length);
+            })) return true;
+
+            if (tryOne(function () {
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.cssText = style;
+                return ta;
+            }, function (el) {
+                el.focus();
+                el.select();
+            })) return true;
+
+            if (tryOne(function () {
+                var div = document.createElement('div');
+                div.contentEditable = 'true';
+                div.textContent = text;
+                div.style.cssText = style + 'white-space:pre-wrap;overflow:hidden;';
+                return div;
+            }, function (el) {
+                el.focus();
+                var r = document.createRange();
+                r.selectNodeContents(el);
+                var s = window.getSelection();
+                if (s) {
+                    s.removeAllRanges();
+                    s.addRange(r);
+                }
+            })) return true;
+
+            if (tryOne(function () {
+                var ta = document.createElement('textarea');
+                ta.value = text;
+                ta.style.cssText = 'position:fixed;left:-9999px;top:0;width:1px;height:1px;padding:0;margin:0;border:0;opacity:0;';
+                return ta;
+            }, function (el) {
+                el.focus();
+                el.select();
+            })) return true;
+
+            return false;
+        }
+
+        function copyTextToClipboard(text, button) {
+            text = String(text == null ? '' : text);
+            if (!text) return;
+
+            if (copyTextViaExecCommand(text)) {
+                copyTextShowFeedback(button);
+                return;
+            }
+            copyTextClipboardApi(text, button);
+        }
     </script>
     
     {% block scripts %}{% endblock %}
