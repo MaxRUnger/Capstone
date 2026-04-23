@@ -61,6 +61,7 @@
           </div>
           <div class="flex gap-2 flex-wrap">
             <a href="{{ url_for('main.upload_grades', class_id=class_id) }}" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium">Upload Grades</a>
+            <button type="button" onclick="openUploadStudentsModal()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium">Upload Students</button>
             <a href="{{ url_for('main.class_assignments', class_id=class_id) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">Manage Assignments</a>
           </div>
         </div>
@@ -188,7 +189,7 @@
         </button>
         <div id="loCsvUploadPanel" class="hidden space-y-3 pt-1">
           <p class="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wide">Import from CSV</p>
-          <p class="text-xs text-slate-500 dark:text-slate-400">Uses only <strong class="text-slate-700 dark:text-slate-300">title</strong>, <strong class="text-slate-700 dark:text-slate-300">description</strong>, and <strong class="text-slate-700 dark:text-slate-300">calculation_int</strong> (e.g. Canvas outcomes export). You will preview rows before anything is saved.</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400">Canvas-style CSV: required <strong class="text-slate-700 dark:text-slate-300">title</strong>; optional <strong class="text-slate-700 dark:text-slate-300">description</strong> and <strong class="text-slate-700 dark:text-slate-300">calculation_int</strong>. You will confirm the import next and set required <strong class="text-slate-700 dark:text-slate-300">Ms</strong> (1–5) per new row before anything is saved.</p>
           <input type="file" id="loCsvInput" accept=".csv,text/csv,application/csv" class="hidden">
           <button type="button" id="loCsvChooseBtn" onclick="document.getElementById('loCsvInput').click()"
             class="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100 rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2">
@@ -259,7 +260,7 @@
       <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700 flex items-start justify-between gap-3 shrink-0">
         <div>
           <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Confirm import</h3>
-          <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Review what was read from your file. Only <strong class="text-slate-700 dark:text-slate-300">new</strong> codes are added; rows already in this class are skipped.</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Review codes and objectives from your file. Set <strong class="text-slate-700 dark:text-slate-300">Ms</strong> (1–5) for each new row. Only <strong class="text-slate-700 dark:text-slate-300">new</strong> codes are imported; rows already in this class are skipped.</p>
         </div>
         <button type="button" onclick="closeLoCsvPreviewModal()" class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0" aria-label="Close">
           <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -272,7 +273,7 @@
             <tr>
               <th class="px-2 py-2 font-medium">Code (title)</th>
               <th class="px-2 py-2 font-medium">Objective</th>
-              <th class="px-2 py-2 font-medium w-12">Ms</th>
+              <th class="px-2 py-2 font-medium w-24">Ms (1–5)</th>
               <th class="px-2 py-2 font-medium">Status</th>
             </tr>
           </thead>
@@ -438,9 +439,78 @@
   </div>
 </div>
 
+<div id="uploadStudentsModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onclick="if(event.target===this) closeUploadStudentsModal()">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-xl w-full" onclick="event.stopPropagation()">
+    <div class="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900 dark:text-white">Upload Students CSV</h2>
+      </div>
+      <button type="button" onclick="closeUploadStudentsModal()" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <div class="p-6 space-y-4">
+      <input type="file" id="uploadStudentsInput" accept=".csv,text/csv,application/csv" class="block w-full text-sm text-slate-700 dark:text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 dark:file:bg-slate-700 file:px-3 file:py-2 file:text-sm file:font-medium hover:file:bg-slate-200 dark:hover:file:bg-slate-600">
+      <p id="uploadStudentsError" class="hidden text-sm text-red-600 dark:text-red-400"></p>
+      <div class="flex gap-3 pt-1">
+        <button type="button" onclick="closeUploadStudentsModal()" class="flex-1 px-4 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-colors">Cancel</button>
+        <button type="button" id="uploadStudentsSubmitBtn" onclick="submitUploadStudents()" class="flex-1 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm shadow-emerald-500/20">Preview Import</button>
+      </div>
+    </div>
+  </div>
+</div>
 
+<div id="studentUploadPreviewModal" class="hidden fixed inset-0 z-[61] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+     role="dialog" aria-modal="true"
+     onclick="if (event.target === this) closeStudentUploadPreviewModal()">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+    <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700 flex items-start justify-between gap-3 shrink-0">
+      <div>
+        <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Confirm student import</h3>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Review each row before saving. Nothing is imported until you confirm.</p>
+      </div>
+      <button type="button" onclick="closeStudentUploadPreviewModal()" class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0" aria-label="Close">
+        <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="studentUploadPreviewWarnings" class="hidden px-5 py-2.5 text-xs bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-100 border-b border-amber-100 dark:border-amber-900/40 whitespace-pre-wrap"></div>
+    <div class="flex-1 min-h-0 overflow-auto p-4">
+      <table class="w-full text-sm text-left border-collapse">
+        <thead class="text-xs uppercase text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-700/50">
+          <tr>
+            <th class="px-2 py-2 font-medium">Student Name</th>
+            <th class="px-2 py-2 font-medium">Email</th>
+            <th class="px-2 py-2 font-medium">Status</th>
+          </tr>
+        </thead>
+        <tbody id="studentUploadPreviewTbody" class="divide-y divide-slate-100 dark:divide-slate-700 text-slate-800 dark:text-slate-200"></tbody>
+      </table>
+    </div>
+    <div id="studentUploadPreviewError" class="hidden px-5 py-2 text-sm text-red-600 dark:text-red-400 border-t border-red-100 dark:border-red-900/40"></div>
+    <div class="px-5 py-3 border-t border-slate-200 dark:border-slate-700 flex flex-wrap gap-2 justify-end shrink-0 bg-slate-50/90 dark:bg-slate-900/50">
+      <button type="button" onclick="closeStudentUploadPreviewModal(); openUploadStudentsModal();" class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">Back</button>
+      <button type="button" id="studentUploadPreviewConfirm" onclick="confirmStudentUploadImport()" class="px-4 py-2 text-sm font-medium rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Import confirmed rows</button>
+    </div>
+  </div>
+</div>
 
 <script>
+function maybeOpenManageStudentsModalFromQuery() {
+  const modal = document.getElementById('studentManagementModal');
+  if (!modal) return;
+
+  const currentUrl = new URL(window.location.href);
+  if (currentUrl.searchParams.get('manage_students') !== '1') return;
+
+  modal.classList.remove('hidden');
+
+  // Clean up the URL after restoring modal state.
+  currentUrl.searchParams.delete('manage_students');
+  window.history.replaceState({}, '', currentUrl.toString());
+}
+
+maybeOpenManageStudentsModalFromQuery();
+
 function filterModalStudents() {
   const q = document.getElementById('modalSearchInput')?.value.toLowerCase() || '';
   document.querySelectorAll('.modal-student').forEach(el => {
@@ -562,6 +632,240 @@ function handleSearch() {
     const name = item.dataset.assignmentName || '';
     item.style.display = (!q || name.includes(q)) ? '' : 'none';
   });
+}
+
+function openUploadStudentsModal() {
+  const modal = document.getElementById('uploadStudentsModal');
+  if (!modal) return;
+  const err = document.getElementById('uploadStudentsError');
+  if (err) {
+    err.classList.add('hidden');
+    err.textContent = '';
+  }
+  modal.classList.remove('hidden');
+}
+
+function closeUploadStudentsModal(clearFile = true) {
+  const modal = document.getElementById('uploadStudentsModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  const fileInput = document.getElementById('uploadStudentsInput');
+  if (clearFile && fileInput) fileInput.value = '';
+  const err = document.getElementById('uploadStudentsError');
+  if (err) {
+    err.classList.add('hidden');
+    err.textContent = '';
+  }
+}
+
+let studentUploadPreviewRows = [];
+
+function renderStudentUploadPreviewTable(rows) {
+  const tbody = document.getElementById('studentUploadPreviewTbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  (rows || []).forEach((row) => {
+    const tr = document.createElement('tr');
+    if (row.action === 'skip') tr.className = 'bg-slate-50/90 dark:bg-slate-800/40';
+
+    const nameTd = document.createElement('td');
+    nameTd.className = 'px-2 py-2 align-top';
+    nameTd.textContent = String(row.full_name || '');
+    tr.appendChild(nameTd);
+
+    const emailTd = document.createElement('td');
+    emailTd.className = 'px-2 py-2 align-top break-all';
+    emailTd.textContent = String(row.email || '');
+    tr.appendChild(emailTd);
+
+    const statusTd = document.createElement('td');
+    statusTd.className = 'px-2 py-2 align-top text-xs font-medium';
+    statusTd.textContent = String(row.status || '');
+    if (row.action === 'skip') statusTd.classList.add('text-slate-500', 'dark:text-slate-400');
+    else if (row.action === 'update_missing_email') statusTd.classList.add('text-blue-700', 'dark:text-blue-300');
+    else statusTd.classList.add('text-green-700', 'dark:text-green-300');
+    tr.appendChild(statusTd);
+
+    tbody.appendChild(tr);
+  });
+}
+
+function openStudentUploadPreviewModal() {
+  const m = document.getElementById('studentUploadPreviewModal');
+  if (m) m.classList.remove('hidden');
+}
+
+function closeStudentUploadPreviewModal() {
+  const m = document.getElementById('studentUploadPreviewModal');
+  if (m) m.classList.add('hidden');
+  const err = document.getElementById('studentUploadPreviewError');
+  if (err) {
+    err.classList.add('hidden');
+    err.textContent = '';
+  }
+}
+
+function submitUploadStudents() {
+  const fileInput = document.getElementById('uploadStudentsInput');
+  const errorEl = document.getElementById('uploadStudentsError');
+  const submitBtn = document.getElementById('uploadStudentsSubmitBtn');
+  if (!fileInput || !fileInput.files || !fileInput.files.length) {
+    if (errorEl) {
+      errorEl.textContent = 'Please choose a CSV file.';
+      errorEl.classList.remove('hidden');
+    }
+    return;
+  }
+
+  const file = fileInput.files[0];
+  if (!file.name.toLowerCase().endsWith('.csv')) {
+    if (errorEl) {
+      errorEl.textContent = 'Only .csv files are supported.';
+      errorEl.classList.remove('hidden');
+    }
+    return;
+  }
+
+  if (errorEl) {
+    errorEl.classList.add('hidden');
+    errorEl.textContent = '';
+  }
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  const previousText = submitBtn ? submitBtn.textContent : 'Preview Import';
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.classList.add('opacity-60', 'cursor-not-allowed');
+    submitBtn.textContent = 'Preparing preview...';
+  }
+
+  fetch('/api/class/{{ class_id }}/preview-upload-students', {
+    method: 'POST',
+    body: fd,
+    credentials: 'same-origin'
+  })
+    .then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      return { ok: response.ok, data: data };
+    })
+    .then(({ ok, data }) => {
+      if (!ok || !data.success) {
+        if (errorEl) {
+          errorEl.textContent = data.error || 'Student upload failed.';
+          errorEl.classList.remove('hidden');
+        }
+        return;
+      }
+
+      studentUploadPreviewRows = data.rows || [];
+      renderStudentUploadPreviewTable(studentUploadPreviewRows);
+
+      const warnEl = document.getElementById('studentUploadPreviewWarnings');
+      if (warnEl) {
+        const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+        if (warnings.length) {
+          warnEl.textContent = warnings.join('\n');
+          warnEl.classList.remove('hidden');
+        } else {
+          warnEl.classList.add('hidden');
+          warnEl.textContent = '';
+        }
+      }
+
+      closeUploadStudentsModal(false);
+      openStudentUploadPreviewModal();
+    })
+    .catch(() => {
+      if (errorEl) {
+        errorEl.textContent = 'Unexpected error preparing preview.';
+        errorEl.classList.remove('hidden');
+      }
+    })
+    .finally(() => {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+        submitBtn.textContent = previousText || 'Upload Students';
+      }
+    });
+}
+
+function confirmStudentUploadImport() {
+  const fileInput = document.getElementById('uploadStudentsInput');
+  const errorEl = document.getElementById('studentUploadPreviewError');
+  const confirmBtn = document.getElementById('studentUploadPreviewConfirm');
+  if (!fileInput || !fileInput.files || !fileInput.files.length) {
+    if (errorEl) {
+      errorEl.textContent = 'Please re-select your CSV file.';
+      errorEl.classList.remove('hidden');
+    }
+    closeStudentUploadPreviewModal();
+    openUploadStudentsModal();
+    return;
+  }
+
+  if (errorEl) {
+    errorEl.classList.add('hidden');
+    errorEl.textContent = '';
+  }
+
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+
+  const previousText = confirmBtn ? confirmBtn.textContent : 'Import confirmed rows';
+  if (confirmBtn) {
+    confirmBtn.disabled = true;
+    confirmBtn.classList.add('opacity-60', 'cursor-not-allowed');
+    confirmBtn.textContent = 'Importing...';
+  }
+
+  fetch('/api/class/{{ class_id }}/upload_students', {
+    method: 'POST',
+    body: fd,
+    credentials: 'same-origin'
+  })
+    .then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      return { ok: response.ok, data: data };
+    })
+    .then(({ ok, data }) => {
+      if (!ok || !data.success) {
+        if (errorEl) {
+          errorEl.textContent = data.error || 'Student import failed.';
+          errorEl.classList.remove('hidden');
+        }
+        return;
+      }
+      const stats = data.stats || {};
+      const warningCount = Array.isArray(data.warnings) ? data.warnings.length : 0;
+      alert(
+        'Student upload complete.\n\n' +
+        `Rows processed: ${data.total_rows || 0}\n` +
+        `Created students: ${stats.created_profiles || 0}\n` +
+        `Enrolled existing profiles: ${stats.enrolled_existing_profiles || 0}\n` +
+        `Updated missing emails: ${stats.updated_missing_emails || 0}\n` +
+        `Skipped existing rows: ${stats.skipped_existing || 0}\n` +
+        `Warnings: ${warningCount}`
+      );
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set('manage_students', '1');
+      window.location.assign(nextUrl.toString());
+    })
+    .catch(() => {
+      if (errorEl) {
+        errorEl.textContent = 'Unexpected error importing students.';
+        errorEl.classList.remove('hidden');
+      }
+    })
+    .finally(() => {
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+        confirmBtn.textContent = previousText || 'Import confirmed rows';
+      }
+    });
 }
 
 function dashboardCreateLO() {
@@ -754,7 +1058,9 @@ function addStudent(event) {
     if (data.success) {
       document.getElementById('addStudentModal').classList.add('hidden');
       document.getElementById('addStudentForm').reset();
-      location.reload(); // Refresh to show the new student
+      const returnUrl = new URL(window.location.href);
+      returnUrl.searchParams.set('manage_students', '1');
+      window.location.assign(returnUrl.toString());
     } else {
       alert('Error adding student: ' + data.error);
     }
@@ -825,6 +1131,7 @@ function renderLoCsvPreviewTable(rows) {
   (rows || []).forEach(function (r) {
     var dup = !!r.duplicate;
     var tr = document.createElement('tr');
+    if (dup) tr.setAttribute('data-duplicate', '1');
     if (dup) tr.className = 'bg-slate-50/90 dark:bg-slate-800/40';
     var codeTd = document.createElement('td');
     codeTd.className = 'px-2 py-2 align-top break-all max-w-[140px]';
@@ -835,8 +1142,26 @@ function renderLoCsvPreviewTable(rows) {
     nameTd.textContent = String(r.name || '');
     tr.appendChild(nameTd);
     var msTd = document.createElement('td');
-    msTd.className = 'px-2 py-2 align-top whitespace-nowrap';
-    msTd.textContent = r.required_ms != null ? String(r.required_ms) : '';
+    msTd.className = 'px-2 py-2 align-top';
+    if (dup) {
+      var msSpan = document.createElement('span');
+      msSpan.className = 'text-xs text-slate-500 dark:text-slate-400 tabular-nums';
+      msSpan.textContent = r.required_ms != null ? String(r.required_ms) : '—';
+      msTd.appendChild(msSpan);
+    } else {
+      var v = r.required_ms != null ? parseInt(r.required_ms, 10) : NaN;
+      if (isNaN(v) || v < 1 || v > 5) v = 2;
+      var inp = document.createElement('input');
+      inp.type = 'number';
+      inp.min = '1';
+      inp.max = '5';
+      inp.step = '1';
+      inp.value = String(v);
+      inp.className =
+        'lo-csv-ms-input w-full max-w-[4.5rem] rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-2 py-1 text-sm text-center text-slate-900 dark:text-slate-100';
+      inp.setAttribute('aria-label', 'Required Ms for ' + String(r.vendor_code || ''));
+      msTd.appendChild(inp);
+    }
     tr.appendChild(msTd);
     var stTd = document.createElement('td');
     stTd.className = 'px-2 py-2 align-top text-xs font-medium';
@@ -915,16 +1240,22 @@ async function assignmentsPreviewLoCsv(file) {
 }
 
 async function assignmentsConfirmLoCsvImport() {
-  if (!loCsvPendingRows || !loCsvPendingRows.length) return;
-  var toSend = loCsvPendingRows
-    .filter(function (r) { return !r.duplicate; })
-    .map(function (r) {
-      return {
-        vendor_code: String(r.vendor_code || '').trim(),
-        name: String(r.name != null ? r.name : '').trim() || String(r.vendor_code || '').trim(),
-        required_ms: r.required_ms
-      };
-    });
+  var tbody = document.getElementById('loCsvPreviewTbody');
+  if (!tbody) return;
+  var toSend = [];
+  tbody.querySelectorAll('tr').forEach(function (tr) {
+    if (tr.getAttribute('data-duplicate') === '1') return;
+    var msInp = tr.querySelector('input.lo-csv-ms-input');
+    if (!msInp) return;
+    var cells = tr.cells;
+    if (!cells || cells.length < 2) return;
+    var vendor_code = String(cells[0].textContent || '').trim();
+    if (!vendor_code) return;
+    var name = String(cells[1].textContent || '').trim() || vendor_code;
+    var ms = parseInt(msInp.value, 10);
+    if (isNaN(ms) || ms < 1 || ms > 5) ms = 2;
+    toSend.push({ vendor_code: vendor_code, name: name, required_ms: ms });
+  });
   if (!toSend.length) {
     alert('No new objectives to import — every code in this file already exists in the class.');
     return;

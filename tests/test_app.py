@@ -30,6 +30,7 @@ from app.routes import (
     organize_by_learning_objectives,
     normalize_profile,
     DEFAULT_REQUIRED_MS,
+    parse_students_csv_text,
     _student_row_sort_key,
     _student_sort_key_last_name,
     _format_name_last_first,
@@ -250,6 +251,32 @@ class TestNormalizeProfile(unittest.TestCase):
 
     def test_missing_key_returns_empty_dict(self):
         self.assertEqual(normalize_profile({}), {})
+
+
+class TestStudentCsvUploadHelpers(unittest.TestCase):
+    def test_parse_students_csv_supports_last_first_name(self):
+        text = "name,email\n\"Smith, John\",JSmith1234@student\n"
+        rows, warnings = parse_students_csv_text(text)
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["full_name"], "John Smith")
+        self.assertEqual(rows[0]["email"], "jsmith1234@student")
+
+    def test_parse_students_csv_supports_first_last_columns(self):
+        text = "first_name,last_name\nJane,Doe\n"
+        rows, warnings = parse_students_csv_text(text)
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["full_name"], "Jane Doe")
+        self.assertEqual(rows[0]["email"], "")
+
+    def test_parse_students_csv_supports_spaced_headers(self):
+        text = "First Name,Last Name,Email\nJohn,Smith,jsmith@student.palomar.edu\n"
+        rows, warnings = parse_students_csv_text(text)
+        self.assertEqual(warnings, [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["full_name"], "John Smith")
+        self.assertEqual(rows[0]["email"], "jsmith@student.palomar.edu")
 
 
 # ==========================================================================

@@ -119,7 +119,7 @@
         </button>
         <div id="loCsvUploadPanel" class="hidden space-y-3 pt-1">
           <p class="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wide">Import from CSV</p>
-          <p class="text-xs text-slate-500 dark:text-slate-400">Canvas-style export: columns <strong class="text-slate-700 dark:text-slate-300">title</strong>, <strong class="text-slate-700 dark:text-slate-300">description</strong>, <strong class="text-slate-700 dark:text-slate-300">calculation_int</strong> only. You will preview rows before anything is saved.</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400">Canvas-style CSV: required <strong class="text-slate-700 dark:text-slate-300">title</strong>; optional <strong class="text-slate-700 dark:text-slate-300">description</strong> and <strong class="text-slate-700 dark:text-slate-300">calculation_int</strong>. You will confirm the import next and set required <strong class="text-slate-700 dark:text-slate-300">Ms</strong> (1–5) per new row before anything is saved.</p>
           <input type="file" id="loCsvInput" accept=".csv,text/csv,application/csv" class="hidden">
           <button type="button" id="loCsvChooseBtn" onclick="document.getElementById('loCsvInput').click()"
             class="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100 rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2">
@@ -189,7 +189,7 @@
       <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700 flex items-start justify-between gap-3 shrink-0">
         <div>
           <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Confirm import</h3>
-          <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Review what was read from your file. Only <strong class="text-slate-700 dark:text-slate-300">new</strong> codes are added; rows already in this class are skipped.</p>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Review codes and objectives from your file. Set <strong class="text-slate-700 dark:text-slate-300">Ms</strong> (1–5) for each new row. Only <strong class="text-slate-700 dark:text-slate-300">new</strong> codes are imported; rows already in this class are skipped.</p>
         </div>
         <button type="button" onclick="closeLoCsvPreviewModal()" class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0" aria-label="Close">
           <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -202,7 +202,7 @@
             <tr>
               <th class="px-2 py-2 font-medium">Code (title)</th>
               <th class="px-2 py-2 font-medium">Objective</th>
-              <th class="px-2 py-2 font-medium w-12">Ms</th>
+              <th class="px-2 py-2 font-medium w-24">Ms (1–5)</th>
               <th class="px-2 py-2 font-medium">Status</th>
             </tr>
           </thead>
@@ -735,6 +735,7 @@ function renderLoCsvPreviewTable(rows) {
   (rows || []).forEach(function (r) {
     var dup = !!r.duplicate;
     var tr = document.createElement('tr');
+    if (dup) tr.setAttribute('data-duplicate', '1');
     if (dup) tr.className = 'bg-slate-50/90 dark:bg-slate-800/40';
     var codeTd = document.createElement('td');
     codeTd.className = 'px-2 py-2 align-top break-all max-w-[140px]';
@@ -745,8 +746,26 @@ function renderLoCsvPreviewTable(rows) {
     nameTd.textContent = String(r.name || '');
     tr.appendChild(nameTd);
     var msTd = document.createElement('td');
-    msTd.className = 'px-2 py-2 align-top whitespace-nowrap';
-    msTd.textContent = r.required_ms != null ? String(r.required_ms) : '';
+    msTd.className = 'px-2 py-2 align-top';
+    if (dup) {
+      var msSpan = document.createElement('span');
+      msSpan.className = 'text-xs text-slate-500 dark:text-slate-400 tabular-nums';
+      msSpan.textContent = r.required_ms != null ? String(r.required_ms) : '—';
+      msTd.appendChild(msSpan);
+    } else {
+      var v = r.required_ms != null ? parseInt(r.required_ms, 10) : NaN;
+      if (isNaN(v) || v < 1 || v > 5) v = 2;
+      var inp = document.createElement('input');
+      inp.type = 'number';
+      inp.min = '1';
+      inp.max = '5';
+      inp.step = '1';
+      inp.value = String(v);
+      inp.className =
+        'lo-csv-ms-input w-full max-w-[4.5rem] rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-2 py-1 text-sm text-center text-slate-900 dark:text-slate-100';
+      inp.setAttribute('aria-label', 'Required Ms for ' + String(r.vendor_code || ''));
+      msTd.appendChild(inp);
+    }
     tr.appendChild(msTd);
     var stTd = document.createElement('td');
     stTd.className = 'px-2 py-2 align-top text-xs font-medium';
@@ -825,16 +844,22 @@ async function assignmentsPreviewLoCsv(file) {
 }
 
 async function assignmentsConfirmLoCsvImport() {
-  if (!loCsvPendingRows || !loCsvPendingRows.length) return;
-  var toSend = loCsvPendingRows
-    .filter(function (r) { return !r.duplicate; })
-    .map(function (r) {
-      return {
-        vendor_code: String(r.vendor_code || '').trim(),
-        name: String(r.name != null ? r.name : '').trim() || String(r.vendor_code || '').trim(),
-        required_ms: r.required_ms
-      };
-    });
+  var tbody = document.getElementById('loCsvPreviewTbody');
+  if (!tbody) return;
+  var toSend = [];
+  tbody.querySelectorAll('tr').forEach(function (tr) {
+    if (tr.getAttribute('data-duplicate') === '1') return;
+    var msInp = tr.querySelector('input.lo-csv-ms-input');
+    if (!msInp) return;
+    var cells = tr.cells;
+    if (!cells || cells.length < 2) return;
+    var vendor_code = String(cells[0].textContent || '').trim();
+    if (!vendor_code) return;
+    var name = String(cells[1].textContent || '').trim() || vendor_code;
+    var ms = parseInt(msInp.value, 10);
+    if (isNaN(ms) || ms < 1 || ms > 5) ms = 2;
+    toSend.push({ vendor_code: vendor_code, name: name, required_ms: ms });
+  });
   if (!toSend.length) {
     alert('No new objectives to import — every code in this file already exists in the class.');
     return;

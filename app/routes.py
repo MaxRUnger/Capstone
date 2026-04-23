@@ -2,6 +2,7 @@ import csv
 import io
 import logging
 import os
+import re
 import socket
 import threading
 import time
@@ -131,13 +132,18 @@ def _consume_one_time_form_token(namespace: str, token: str) -> bool:
 DEFAULT_REQUIRED_MS = 2
 
 
+def _normalize_csv_key(key: Any) -> str:
+    nk = str(key or "").strip().lower().lstrip("\ufeff")
+    return re.sub(r"[^a-z0-9]+", "_", nk).strip("_")
+
+
 def _csv_row_norm_keys(row: Dict[str, Any]) -> Dict[str, str]:
     """Lowercase + strip CSV header keys (handles UTF-8 BOM on first column)."""
     out: Dict[str, str] = {}
     for k, v in row.items():
         if k is None:
             continue
-        nk = str(k).strip().lower().lstrip("\ufeff")
+        nk = _normalize_csv_key(k)
         if isinstance(v, str):
             out[nk] = v.strip()
         elif v is None:
@@ -148,7 +154,11 @@ def _csv_row_norm_keys(row: Dict[str, Any]) -> Dict[str, str]:
 
 
 def parse_learning_objectives_csv_text(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
-    """Parse CSV using only title, description, and calculation_int (e.g. Canvas outcomes export)."""
+    """Parse CSV for Canvas-style outcomes: required title; optional description and calculation_int.
+
+    Initial required_ms is derived from calculation_int when valid (clamped 1–5); otherwise defaults.
+    Instructors adjust Ms on the confirm-import UI, so calculation_int issues are handled silently.
+    """
     warnings: List[str] = []
     text = (text or "").strip()
     if not text:
@@ -156,12 +166,12 @@ def parse_learning_objectives_csv_text(text: str) -> Tuple[List[Dict[str, Any]],
     reader = csv.DictReader(io.StringIO(text))
     if not reader.fieldnames:
         return [], ["Missing header row"]
-    need = {"title", "description", "calculation_int"}
-    lower_fn = {(f or "").strip().lower().lstrip("\ufeff") for f in reader.fieldnames if f}
+    need = {"title"}
+    lower_fn = {_normalize_csv_key(f) for f in reader.fieldnames if f}
     missing = need - lower_fn
     if missing:
         return [], [
-            "CSV must include columns: title, description, calculation_int. "
+            "CSV must include a title column (Canvas outcomes export). "
             f"Missing: {', '.join(sorted(missing))}"
         ]
 
@@ -178,16 +188,9 @@ def parse_learning_objectives_csv_text(text: str) -> Tuple[List[Dict[str, Any]],
         if calc_raw:
             try:
                 ci = int(float(calc_raw))
-                if 1 <= ci <= 5:
-                    required_ms = ci
-                else:
-                    warnings.append(
-                        f"Row '{title}': calculation_int {ci} out of range 1–5, using {DEFAULT_REQUIRED_MS}"
-                    )
+                required_ms = max(1, min(5, ci))
             except (ValueError, TypeError):
-                warnings.append(
-                    f"Row '{title}': invalid calculation_int, using {DEFAULT_REQUIRED_MS}"
-                )
+                required_ms = DEFAULT_REQUIRED_MS
         rows_out.append(
             {
                 "vendor_code": title,
@@ -199,6 +202,78 @@ def parse_learning_objectives_csv_text(text: str) -> Tuple[List[Dict[str, Any]],
     if not rows_out:
         return [], ["No data rows with a non-empty title"]
     return rows_out, warnings
+
+
+def _normalize_spaces(value: str) -> str:
+    return " ".join((value or "").strip().split())
+
+
+def _student_name_from_csv_row(row: Dict[str, str]) -> str:
+    raw = (
+        row.get("full_name")
+        or row.get("student_name")
+        or row.get("name")
+        or row.get("student")
+        or ""
+    ).strip()
+    first = (row.get("first_name") or row.get("first") or "").strip()
+    last = (row.get("last_name") or row.get("last") or "").strip()
+    if not raw and (first or last):
+        raw = f"{first} {last}".strip()
+    raw = _normalize_spaces(raw)
+    if not raw:
+        return ""
+    if "," in raw:
+        left, right = raw.split(",", 1)
+        last_name = _normalize_spaces(left)
+        rest = _normalize_spaces(right)
+        if rest and last_name:
+            return f"{rest} {last_name}".strip()
+        return rest or last_name
+    return raw
+
+
+def _student_email_key(email: str) -> str:
+    return (email or "").strip().lower()
+
+
+def _student_name_key(name: str) -> str:
+    return _normalize_spaces((name or "").replace(",", " ").lower())
+
+
+def parse_students_csv_text(text: str) -> Tuple[List[Dict[str, str]], List[str]]:
+    warnings: List[str] = []
+    text = (text or "").strip()
+    if not text:
+        return [], ["File is empty"]
+
+    reader = csv.DictReader(io.StringIO(text))
+    if not reader.fieldnames:
+        return [], ["Missing header row"]
+
+    lower_fn = {_normalize_csv_key(f) for f in reader.fieldnames if f}
+    has_name_col = any(h in lower_fn for h in ("full_name", "student_name", "name", "student"))
+    has_first_last = ("first_name" in lower_fn and "last_name" in lower_fn)
+    if not has_name_col and not has_first_last:
+        return [], [
+            "CSV must include either a name/full_name/student_name column, "
+            "or first_name and last_name columns."
+        ]
+
+    rows: List[Dict[str, str]] = []
+    for raw in reader:
+        row = _csv_row_norm_keys(raw)
+        full_name = _student_name_from_csv_row(row)
+        if not full_name:
+            continue
+        email = _student_email_key(row.get("email") or row.get("student_email") or "")
+        rows.append({"full_name": full_name, "email": email})
+
+    if not rows:
+        return [], ["No student rows found"]
+
+    rows.sort(key=lambda r: _student_sort_key_last_name(r.get("full_name")))
+    return rows, warnings
 
 
 def _class_instructor_id(class_id: str) -> Optional[str]:
@@ -1406,7 +1481,7 @@ def _parse_lo_csv_upload() -> Tuple[Optional[str], Optional[List[Dict[str, Any]]
 @main_bp.route("/api/class/<class_id>/preview-learning-objectives", methods=["POST"])
 @api_instructor_required
 def api_preview_learning_objectives(class_id):
-    """Parse CSV (title, description, calculation_int only); return rows for confirm UI."""
+    """Parse LO CSV; return rows for confirm UI (Ms edited client-side)."""
     if not _instructor_owns_class(class_id):
         return jsonify({"success": False, "error": "Forbidden"}), 403
 
@@ -2187,6 +2262,412 @@ def api_add_student_to_class(class_id):
         }).execute()
         return jsonify({"success": True, "student_id": student_id, "student_name": student_name}), 200
     except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@main_bp.route("/api/class/<class_id>/upload_students", methods=["POST"])
+@api_instructor_required
+def api_upload_students_to_class(class_id):
+    f = request.files.get("file")
+    if not f or not (f.filename or "").strip():
+        return jsonify({"success": False, "error": "Please choose a CSV file."}), 400
+    if not f.filename.lower().endswith(".csv"):
+        return jsonify({"success": False, "error": "Upload a .csv file"}), 400
+
+    try:
+        text = f.read().decode("utf-8-sig", errors="replace")
+    except Exception:
+        return jsonify({"success": False, "error": "Could not read CSV file"}), 400
+
+    rows, parse_warnings = parse_students_csv_text(text)
+    if not rows:
+        return jsonify({
+            "success": False,
+            "error": parse_warnings[0] if parse_warnings else "No valid student rows found",
+            "warnings": parse_warnings,
+        }), 400
+
+    try:
+        enroll_resp = (
+            supabase_admin.table("enrollments")
+            .select("student_id")
+            .eq("class_id", class_id)
+            .execute()
+        )
+        enrolled_ids = [str(r.get("student_id")) for r in (enroll_resp.data or []) if r.get("student_id")]
+        enrolled_set = set(enrolled_ids)
+
+        enrolled_profiles: List[Dict[str, Any]] = []
+        if enrolled_ids:
+            prof_resp = (
+                supabase_admin.table("profiles")
+                .select("id, full_name, email")
+                .in_("id", enrolled_ids)
+                .execute()
+            )
+            enrolled_profiles = prof_resp.data or []
+
+        enrolled_by_email: Dict[str, Dict[str, Any]] = {}
+        enrolled_by_name: Dict[str, List[Dict[str, Any]]] = {}
+        missing_email_by_name: Dict[str, List[Dict[str, Any]]] = {}
+        for p in enrolled_profiles:
+            sid = str(p.get("id") or "").strip()
+            if not sid:
+                continue
+            profile = {
+                "id": sid,
+                "full_name": _normalize_spaces((p.get("full_name") or "").strip()),
+                "email": _student_email_key((p.get("email") or "").strip()),
+            }
+            if profile["email"]:
+                enrolled_by_email[profile["email"]] = profile
+            nk = _student_name_key(profile["full_name"])
+            enrolled_by_name.setdefault(nk, []).append(profile)
+            if not profile["email"]:
+                missing_email_by_name.setdefault(nk, []).append(profile)
+
+        provided_email_keys = {
+            _student_email_key(r.get("email") or "")
+            for r in rows
+            if _student_email_key(r.get("email") or "")
+        }
+        profiles_by_email: Dict[str, Dict[str, Any]] = {}
+        if provided_email_keys:
+            global_email_resp = (
+                supabase_admin.table("profiles")
+                .select("id, full_name, email")
+                .in_("email", list(provided_email_keys))
+                .execute()
+            )
+            for p in (global_email_resp.data or []):
+                ek = _student_email_key(p.get("email") or "")
+                if ek:
+                    profiles_by_email[ek] = p
+
+        stats = {
+            "created_profiles": 0,
+            "enrolled_existing_profiles": 0,
+            "updated_missing_emails": 0,
+            "skipped_existing": 0,
+        }
+        upload_name_seen_count: Dict[str, int] = {}
+        file_seen_emails: set = set()
+        warnings = list(parse_warnings)
+
+        for row in rows:
+            full_name = _normalize_spaces(row.get("full_name") or "")
+            if not full_name:
+                continue
+            name_key = _student_name_key(full_name)
+
+            email = _student_email_key(row.get("email") or "")
+            if email:
+                if email in file_seen_emails:
+                    warnings.append(f"Duplicate email in file skipped: {email}")
+                    continue
+                file_seen_emails.add(email)
+
+                existing_in_class = enrolled_by_email.get(email)
+                if existing_in_class:
+                    stats["skipped_existing"] += 1
+                    continue
+
+                missing_candidates = missing_email_by_name.get(name_key) or []
+                if missing_candidates:
+                    target = missing_candidates.pop(0)
+                    target_id = target.get("id")
+                    if target_id:
+                        supabase_admin.table("profiles").update({"email": email}).eq("id", target_id).execute()
+                        target["email"] = email
+                        enrolled_by_email[email] = target
+                        profiles_by_email[email] = {
+                            "id": target_id,
+                            "full_name": target.get("full_name") or full_name,
+                            "email": email,
+                        }
+                        stats["updated_missing_emails"] += 1
+                        continue
+
+                existing_profile = profiles_by_email.get(email)
+                if existing_profile and existing_profile.get("id"):
+                    existing_id = str(existing_profile.get("id"))
+                    if existing_id not in enrolled_set:
+                        supabase_admin.table("enrollments").insert({
+                            "class_id": class_id,
+                            "student_id": existing_id,
+                        }).execute()
+                        enrolled_set.add(existing_id)
+                        stats["enrolled_existing_profiles"] += 1
+                    else:
+                        stats["skipped_existing"] += 1
+                    enrolled_by_email[email] = {
+                        "id": existing_id,
+                        "full_name": _normalize_spaces(
+                            (existing_profile.get("full_name") or full_name).strip()
+                        ),
+                        "email": email,
+                    }
+                    continue
+
+                student_id = str(uuid4())
+                insert_profile = {
+                    "id": student_id,
+                    "full_name": full_name,
+                    "role": "student",
+                    "email": email,
+                }
+                try:
+                    supabase_admin.table("profiles").insert(insert_profile).execute()
+                except Exception:
+                    lookup = (
+                        supabase_admin.table("profiles")
+                        .select("id, full_name, email")
+                        .eq("email", email)
+                        .limit(1)
+                        .execute()
+                    )
+                    if lookup.data:
+                        found = lookup.data[0]
+                        existing_id = str(found.get("id"))
+                        if existing_id not in enrolled_set:
+                            supabase_admin.table("enrollments").insert({
+                                "class_id": class_id,
+                                "student_id": existing_id,
+                            }).execute()
+                            enrolled_set.add(existing_id)
+                            stats["enrolled_existing_profiles"] += 1
+                        else:
+                            stats["skipped_existing"] += 1
+                        enrolled_by_email[email] = {
+                            "id": existing_id,
+                            "full_name": _normalize_spaces((found.get("full_name") or full_name).strip()),
+                            "email": email,
+                        }
+                        continue
+                    raise
+
+                supabase_admin.table("enrollments").insert({
+                    "class_id": class_id,
+                    "student_id": student_id,
+                }).execute()
+                enrolled_set.add(student_id)
+                enrolled_profile = {"id": student_id, "full_name": full_name, "email": email}
+                enrolled_by_email[email] = enrolled_profile
+                enrolled_by_name.setdefault(name_key, []).append(enrolled_profile)
+                profiles_by_email[email] = enrolled_profile
+                stats["created_profiles"] += 1
+                continue
+
+            seen_count = upload_name_seen_count.get(name_key, 0)
+            upload_name_seen_count[name_key] = seen_count + 1
+            existing_with_name = enrolled_by_name.get(name_key) or []
+            if seen_count < len(existing_with_name):
+                stats["skipped_existing"] += 1
+                continue
+
+            student_id = str(uuid4())
+            supabase_admin.table("profiles").insert({
+                "id": student_id,
+                "full_name": full_name,
+                "role": "student",
+            }).execute()
+            supabase_admin.table("enrollments").insert({
+                "class_id": class_id,
+                "student_id": student_id,
+            }).execute()
+            enrolled_set.add(student_id)
+            created = {"id": student_id, "full_name": full_name, "email": ""}
+            enrolled_by_name.setdefault(name_key, []).append(created)
+            missing_email_by_name.setdefault(name_key, []).append(created)
+            stats["created_profiles"] += 1
+
+        return jsonify({
+            "success": True,
+            "message": "Student upload complete",
+            "stats": stats,
+            "warnings": warnings,
+            "total_rows": len(rows),
+        })
+    except Exception as e:
+        logger.error("Error uploading students for class %s: %s", class_id, e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@main_bp.route("/api/class/<class_id>/preview-upload-students", methods=["POST"])
+@api_instructor_required
+def api_preview_upload_students(class_id):
+    f = request.files.get("file")
+    if not f or not (f.filename or "").strip():
+        return jsonify({"success": False, "error": "Please choose a CSV file."}), 400
+    if not f.filename.lower().endswith(".csv"):
+        return jsonify({"success": False, "error": "Upload a .csv file"}), 400
+
+    try:
+        text = f.read().decode("utf-8-sig", errors="replace")
+    except Exception:
+        return jsonify({"success": False, "error": "Could not read CSV file"}), 400
+
+    rows, parse_warnings = parse_students_csv_text(text)
+    if not rows:
+        return jsonify({
+            "success": False,
+            "error": parse_warnings[0] if parse_warnings else "No valid student rows found",
+            "warnings": parse_warnings,
+        }), 400
+
+    try:
+        enroll_resp = (
+            supabase_admin.table("enrollments")
+            .select("student_id")
+            .eq("class_id", class_id)
+            .execute()
+        )
+        enrolled_ids = [str(r.get("student_id")) for r in (enroll_resp.data or []) if r.get("student_id")]
+
+        enrolled_profiles: List[Dict[str, Any]] = []
+        if enrolled_ids:
+            prof_resp = (
+                supabase_admin.table("profiles")
+                .select("id, full_name, email")
+                .in_("id", enrolled_ids)
+                .execute()
+            )
+            enrolled_profiles = prof_resp.data or []
+
+        enrolled_by_email: Dict[str, Dict[str, Any]] = {}
+        enrolled_by_name: Dict[str, List[Dict[str, Any]]] = {}
+        missing_email_by_name: Dict[str, List[Dict[str, Any]]] = {}
+        for p in enrolled_profiles:
+            sid = str(p.get("id") or "").strip()
+            if not sid:
+                continue
+            profile = {
+                "id": sid,
+                "full_name": _normalize_spaces((p.get("full_name") or "").strip()),
+                "email": _student_email_key((p.get("email") or "").strip()),
+            }
+            if profile["email"]:
+                enrolled_by_email[profile["email"]] = profile
+            nk = _student_name_key(profile["full_name"])
+            enrolled_by_name.setdefault(nk, []).append(profile)
+            if not profile["email"]:
+                missing_email_by_name.setdefault(nk, []).append(profile)
+
+        provided_email_keys = {
+            _student_email_key(r.get("email") or "")
+            for r in rows
+            if _student_email_key(r.get("email") or "")
+        }
+        profiles_by_email: Dict[str, Dict[str, Any]] = {}
+        if provided_email_keys:
+            global_email_resp = (
+                supabase_admin.table("profiles")
+                .select("id, full_name, email")
+                .in_("email", list(provided_email_keys))
+                .execute()
+            )
+            for p in (global_email_resp.data or []):
+                ek = _student_email_key(p.get("email") or "")
+                if ek:
+                    profiles_by_email[ek] = p
+
+        preview_rows: List[Dict[str, Any]] = []
+        stats = {
+            "will_create": 0,
+            "will_enroll_existing": 0,
+            "will_update_missing_email": 0,
+            "will_skip": 0,
+        }
+        upload_name_seen_count: Dict[str, int] = {}
+        file_seen_emails: set = set()
+        warnings = list(parse_warnings)
+
+        for row in rows:
+            full_name = _normalize_spaces(row.get("full_name") or "")
+            if not full_name:
+                continue
+            name_key = _student_name_key(full_name)
+            email = _student_email_key(row.get("email") or "")
+
+            action = "skip"
+            status = "Already in class"
+
+            if email:
+                if email in file_seen_emails:
+                    action = "skip"
+                    status = "Duplicate email in upload"
+                    warnings.append(f"Duplicate email in file skipped: {email}")
+                    stats["will_skip"] += 1
+                else:
+                    file_seen_emails.add(email)
+                    if enrolled_by_email.get(email):
+                        action = "skip"
+                        status = "Already in class (email match)"
+                        stats["will_skip"] += 1
+                    else:
+                        missing_candidates = missing_email_by_name.get(name_key) or []
+                        if missing_candidates:
+                            target = missing_candidates.pop(0)
+                            target["email"] = email
+                            enrolled_by_email[email] = target
+                            action = "update_missing_email"
+                            status = "Will attach email to existing student"
+                            stats["will_update_missing_email"] += 1
+                        else:
+                            existing_profile = profiles_by_email.get(email)
+                            if existing_profile and existing_profile.get("id"):
+                                action = "enroll_existing"
+                                status = "Will enroll existing profile by email"
+                                stats["will_enroll_existing"] += 1
+                                enrolled_by_email[email] = {
+                                    "id": str(existing_profile.get("id")),
+                                    "full_name": _normalize_spaces(
+                                        (existing_profile.get("full_name") or full_name).strip()
+                                    ),
+                                    "email": email,
+                                }
+                            else:
+                                action = "create"
+                                status = "Will create and enroll"
+                                stats["will_create"] += 1
+                                placeholder = {"id": f"new-{len(preview_rows)}", "full_name": full_name, "email": email}
+                                enrolled_by_email[email] = placeholder
+                                enrolled_by_name.setdefault(name_key, []).append(placeholder)
+                                profiles_by_email[email] = placeholder
+            else:
+                seen_count = upload_name_seen_count.get(name_key, 0)
+                upload_name_seen_count[name_key] = seen_count + 1
+                existing_with_name = enrolled_by_name.get(name_key) or []
+                if seen_count < len(existing_with_name):
+                    action = "skip"
+                    status = "Already in class (name match)"
+                    stats["will_skip"] += 1
+                else:
+                    action = "create"
+                    status = "Will create and enroll (no email)"
+                    stats["will_create"] += 1
+                    placeholder = {"id": f"new-{len(preview_rows)}", "full_name": full_name, "email": ""}
+                    enrolled_by_name.setdefault(name_key, []).append(placeholder)
+                    missing_email_by_name.setdefault(name_key, []).append(placeholder)
+
+            preview_rows.append(
+                {
+                    "full_name": full_name,
+                    "email": email,
+                    "action": action,
+                    "status": status,
+                }
+            )
+
+        return jsonify({
+            "success": True,
+            "rows": preview_rows,
+            "stats": stats,
+            "warnings": warnings,
+            "count": len(preview_rows),
+        })
+    except Exception as e:
+        logger.error("Error previewing student upload for class %s: %s", class_id, e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
