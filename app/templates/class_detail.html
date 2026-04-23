@@ -217,7 +217,15 @@
       </div>
 
       <div class="mt-8">
-        <h3 class="font-medium text-slate-900 dark:text-white mb-3">Existing objectives</h3>
+        <button type="button"
+          class="w-full flex items-center justify-between gap-2 rounded-lg px-1 py-2 -mx-1 mb-2 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors text-left"
+          onclick="toggleExistingLosSection(this)" aria-expanded="false" aria-controls="existingLosListWrapper">
+          <span class="font-medium text-slate-900 dark:text-white">Existing objectives</span>
+          <svg class="w-5 h-5 text-slate-400 chevron transition-transform shrink-0 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+        <div id="existingLosListWrapper" class="hidden">
         <div id="existingLosList" class="space-y-2 max-h-56 overflow-y-auto pr-1">
           {% for lo in all_los %}
           <div class="lo-row flex items-center gap-1 px-3 py-2 bg-slate-50 dark:bg-slate-700 rounded-lg"
@@ -237,6 +245,7 @@
           {% else %}
           <p class="text-sm text-slate-500 dark:text-slate-400 py-2">No objectives yet. Create one above.</p>
           {% endfor %}
+        </div>
         </div>
       </div>
     </aside>
@@ -531,6 +540,17 @@ function toggleAssignment(el) {
   const chevron = el.querySelector('.chevron');
   content.classList.toggle('hidden');
   chevron.classList.toggle('rotate-180');
+}
+
+function toggleExistingLosSection(btn) {
+  var wrap = document.getElementById('existingLosListWrapper');
+  if (!wrap || !btn) return;
+  var chev = btn.querySelector('.chevron');
+  wrap.classList.toggle('hidden');
+  if (chev) {
+    chev.classList.toggle('rotate-180', wrap.classList.contains('hidden'));
+  }
+  btn.setAttribute('aria-expanded', wrap.classList.contains('hidden') ? 'false' : 'true');
 }
 function handleSearch() {
   const q = document.getElementById('searchInput').value.toLowerCase();

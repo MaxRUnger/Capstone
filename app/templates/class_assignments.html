@@ -148,7 +148,15 @@
 
       <!-- Existing LOs for Assignment -->
       <div class="mt-8">
-        <h3 class="font-medium text-slate-900 dark:text-white mb-3">Existing Objectives</h3>
+        <button type="button"
+          class="w-full flex items-center justify-between gap-2 rounded-lg px-1 py-2 -mx-1 mb-2 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors text-left"
+          onclick="toggleAssignmentsExistingLosSection(this)" aria-expanded="false" aria-controls="assignmentsExistingLosListWrapper">
+          <span class="font-medium text-slate-900 dark:text-white">Existing Objectives</span>
+          <svg class="w-5 h-5 text-slate-400 chevron transition-transform shrink-0 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+        <div id="assignmentsExistingLosListWrapper" class="hidden">
         <div id="assignmentsExistingLosList" class="space-y-2 max-h-40 overflow-y-auto">
           {% for lo in all_los %}
           <div class="lo-row flex items-center gap-1 px-3 py-2 bg-slate-50 dark:bg-slate-700 rounded-lg"
@@ -166,6 +174,7 @@
             </button>
           </div>
           {% endfor %}
+        </div>
         </div>
       </div>
     </div>
@@ -629,6 +638,17 @@ function deleteLO(id, name) {
       alert('Error: ' + error);
     });
   }
+}
+
+function toggleAssignmentsExistingLosSection(btn) {
+  var wrap = document.getElementById('assignmentsExistingLosListWrapper');
+  if (!wrap || !btn) return;
+  var chev = btn.querySelector('.chevron');
+  wrap.classList.toggle('hidden');
+  if (chev) {
+    chev.classList.toggle('rotate-180', wrap.classList.contains('hidden'));
+  }
+  btn.setAttribute('aria-expanded', wrap.classList.contains('hidden') ? 'false' : 'true');
 }
 
 document.addEventListener('DOMContentLoaded', function () {
