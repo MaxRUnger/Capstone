@@ -495,7 +495,7 @@ def organize_by_learning_objectives(students, learning_objectives):
     """Maps student grades to the relevant Learning Objectives for the UI."""
     lo_dict = {str(lo['id']): {
         'id': str(lo['id']),
-        'name': _lo_display_title(lo),
+        'name': (lo.get('name') or _lo_display_title(lo)),
         'students_with_2m': [],
         'students_with_1m': [],
         'students_with_0m': [],
@@ -510,10 +510,12 @@ def organize_by_learning_objectives(students, learning_objectives):
                 m_count = 0
                 top = grade.get('top_score')
                 sec = grade.get('second_score')
-                
-                if top == 'M': m_count += 1
-                if sec == 'M': m_count += 1
-                
+
+                if Grade.is_mastery_mark(top):
+                    m_count += 1
+                if Grade.is_mastery_mark(sec):
+                    m_count += 1
+
                 raw_fn = (student.get("full_name") or "").strip()
                 student_data = {
                     "id": student["id"],
@@ -526,9 +528,12 @@ def organize_by_learning_objectives(students, learning_objectives):
                     "second_score": sec,
                 }
 
-                if m_count == 2: lo_dict[lo_id]['students_with_2m'].append(student_data)
-                elif m_count == 1: lo_dict[lo_id]['students_with_1m'].append(student_data)
-                else: lo_dict[lo_id]['students_with_0m'].append(student_data)
+                if m_count == 2:
+                    lo_dict[lo_id]['students_with_2m'].append(student_data)
+                elif m_count == 1:
+                    lo_dict[lo_id]['students_with_1m'].append(student_data)
+                else:
+                    lo_dict[lo_id]['students_with_0m'].append(student_data)
 
     for lo in lo_dict.values():
         for col in ("students_with_2m", "students_with_1m", "students_with_0m"):
@@ -743,11 +748,14 @@ def _aggregate_lo_grades(raw_grades, lo_lookup):
                 'vendor_code': (lo_info.get('vendor_code') or '').strip(),
                 'required_ms': lo_info.get('required_ms') or DEFAULT_REQUIRED_MS,
                 'm_count': 0,
+                'mr_count': 0,
                 'grades_list': [],
             }
         top = g.get('top_score')
-        if top == 'M':
+        if Grade.is_mastery_mark(top):
             lo_grades[lo_id]['m_count'] += 1
+        if top == 'MR':
+            lo_grades[lo_id]['mr_count'] += 1
         lo_grades[lo_id]['grades_list'].append(top)
 
     results = []

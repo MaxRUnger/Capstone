@@ -59,11 +59,24 @@ function startMobileUploadPoll() {
 const gradeHistory = [];
 const GRADE_KEYS = ['M', 'R', 'Q', 'P', 'X', 'A'];
 const GRADE_MAP  = { 'Q': 'RQ' };  // Q key types RQ
-const VALID_GRADES = new Set(['M', 'R', 'RQ', 'P', 'X', 'A']);
+const VALID_GRADES = new Set(['M', 'MR', 'R', 'RQ', 'P', 'X', 'A']);
 
 // LO comparison state
 let assignmentLOs   = [];          // vendor_codes from selected assignment
 let approvedExtraLOs = new Set();  // extra LOs the user approved
+let lastExtraLOList = [];          // from latest runLOComparison (for Select all)
+
+function isHomeworkHeader(lo) {
+  if (lo == null || typeof lo !== 'string') return false;
+  const raw = lo.trim();
+  if (!raw) return false;
+  const n = raw.toUpperCase().replace(/[%_]+/g, ' ').replace(/\s+/g, ' ').trim();
+  if (/^HW[-\d]*$/i.test(raw.trim()) || /^HW\d{1,3}$/i.test(raw.trim())) return true;
+  if (['H', 'HW', 'H W', 'HOMEWORK', 'HOME WORK', 'HOME-WORK', 'H WORK', 'HW %', 'HW SCORE', 'HW PCT', 'HW PCTG', 'HWPCT', 'HWPCTG'].includes(n)) return true;
+  if (n.startsWith('HOMEWORK') || n.includes('HOMEWORK')) return true;
+  if (n.startsWith('HW ')) return true;
+  return false;
+}
 
 // ============================================================================
 // FILE UPLOAD HANDLING
@@ -283,15 +296,26 @@ function runLOComparison() {
     html += '</div>';
   }
   if (extra.length) {
-    html += '<p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Extra (found by Gemini but not in assignment)</p><div class="flex flex-wrap gap-2 mb-3">';
+    lastExtraLOList = extra.slice();
+    html += '<div class="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1 mb-1">';
+    html += '<p class="text-xs font-medium text-slate-500 dark:text-slate-400">Extra (found by Gemini but not in assignment)</p>';
+    html += '<div class="flex items-center gap-2 shrink-0 text-xs">';
+    html += '<button type="button" class="font-medium text-amber-600 dark:text-amber-400 hover:underline" onclick="setAllExtraLOs(true)">Select all</button>';
+    html += '<span class="text-slate-400" aria-hidden="true">|</span>';
+    html += '<button type="button" class="font-medium text-slate-500 dark:text-slate-400 hover:underline" onclick="setAllExtraLOs(false)">Deselect all</button>';
+    html += '</div></div>';
+    html += '<div class="flex flex-wrap gap-2 mb-3">';
     extra.forEach(lo => {
       const checked = approvedExtraLOs.has(lo) ? 'checked' : '';
+      const safe = escapeHTML(lo);
       html += `<label class="lo-extra px-2.5 py-1 rounded-full text-xs font-semibold cursor-pointer flex items-center gap-1.5">
-        <input type="checkbox" class="accent-amber-600" ${checked} onchange="toggleExtraLO('${escapeHTML(lo)}', this.checked)">
-        ${escapeHTML(lo)}
+        <input type="checkbox" class="accent-amber-600" ${checked} onchange='toggleExtraLO(${JSON.stringify(lo)}, this.checked)'>
+        ${safe}
       </label>`;
     });
     html += '</div>';
+  } else {
+    lastExtraLOList = [];
   }
   if (missing.length) {
     html += '<p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1">Missing (in assignment but not scanned)</p><div class="flex flex-wrap gap-2 mb-3">';
@@ -310,6 +334,15 @@ function runLOComparison() {
 function toggleExtraLO(lo, checked) {
   if (checked) approvedExtraLOs.add(lo);
   else approvedExtraLOs.delete(lo);
+}
+
+function setAllExtraLOs(checked) {
+  if (checked) {
+    lastExtraLOList.forEach(function (lo) { approvedExtraLOs.add(lo); });
+  } else {
+    lastExtraLOList.forEach(function (lo) { approvedExtraLOs.delete(lo); });
+  }
+  runLOComparison();
 }
 
 // ============================================================================
@@ -368,10 +401,19 @@ async function analyzePDF() {
 function displayExtractedLOs(data) {
   const loContainer = document.getElementById('extractedLOs');
   if (!loContainer || !data.learning_objectives) return;
+  const parts = [];
+  if (data.homework_column) {
+    parts.push(
+      `<span class="inline-block bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 px-3 py-1 rounded-full text-sm font-medium" title="Stored as class homework %, not a learning objective">${escapeHTML(data.homework_column)} (homework %)</span>`
+    );
+  }
   if (data.learning_objectives.length > 0) {
-    loContainer.innerHTML = data.learning_objectives
-      .map(lo => `<span class="inline-block bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 px-3 py-1 rounded-full text-sm font-medium">${escapeHTML(lo)}</span>`)
-      .join('');
+    data.learning_objectives.forEach(function (lo) {
+      parts.push(`<span class="inline-block bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 px-3 py-1 rounded-full text-sm font-medium">${escapeHTML(lo)}</span>`);
+    });
+  }
+  if (parts.length) {
+    loContainer.innerHTML = parts.join('');
   } else {
     loContainer.innerHTML = '<p class="text-slate-500 dark:text-slate-400 text-sm">No learning objectives detected.</p>';
   }
@@ -393,6 +435,23 @@ function displayExtractedData(data) {
 
   const table = document.getElementById('extractedStudentsTable');
   if (!table || !data.students) return;
+
+  // Legacy: move HW-style columns from grades into homework_pct (older Gemini output)
+  (data.students || []).forEach(s => {
+    if (!s.grades) return;
+    Object.keys(s.grades).forEach(h => {
+      if (!isHomeworkHeader(h)) return;
+      const raw = s.grades[h];
+      if (s.homework_pct == null || String(s.homework_pct).trim() === '') {
+        if (raw != null && String(raw).trim() !== '') s.homework_pct = String(raw).replace(/%$/, '').trim();
+      }
+      delete s.grades[h];
+    });
+  });
+
+  if (Array.isArray(data.learning_objectives)) {
+    data.learning_objectives = data.learning_objectives.filter(lo => !isHomeworkHeader(lo));
+  }
 
   // Build the set of approved LO codes: assignment-matched + user-approved extras
   const assignSet = new Set(assignmentLOs.map(v => v.toUpperCase()));
@@ -432,30 +491,52 @@ function displayExtractedData(data) {
     }
   });
 
+  const showHomework =
+    !!data.homework_column ||
+    (data.students || []).some(
+      s => s.homework_pct != null && String(s.homework_pct).trim() !== ''
+    );
+  const hwLabel = data.homework_column || 'Homework %';
+  const colOffset = showHomework ? 1 : 0;
+
   let html = `<table class="w-full border-collapse text-sm">
     <thead><tr class="bg-slate-100 dark:bg-slate-700">
       <th class="border border-slate-300 dark:border-slate-600 px-4 py-2 text-left font-semibold text-slate-900 dark:text-white" style="min-width:240px">Student Name</th>
+      ${showHomework
+        ? `<th class="border border-slate-300 dark:border-slate-600 px-2 py-2 text-center font-semibold text-slate-900 dark:text-white text-xs bg-emerald-50 dark:bg-emerald-900/20" title="Updates homework % for this assignment's homework group (same as speed grader)">${escapeHTML(hwLabel)}</th>`
+        : ''}
       ${loHeaders.map(lo => `<th class="border border-slate-300 dark:border-slate-600 px-2 py-2 text-center font-semibold text-slate-900 dark:text-white text-xs">${escapeHTML(lo)}</th>`).join('')}
     </tr></thead><tbody>`;
 
   data.students.forEach((student, rowIdx) => {
     const name = student.name || '';
+    const rawHw = (student.homework_pct != null && String(student.homework_pct).trim() !== '')
+      ? String(student.homework_pct).replace(/%$/, '').trim()
+      : '';
     html += `<tr>
       <td class="border border-slate-300 dark:border-slate-600 px-2 py-1">
         <input type="text" class="name-input" value="${escapeHTML(name)}" data-row="${rowIdx}" oninput="updateExtractedStudentName(${rowIdx}, this.value)">
       </td>`;
 
+    if (showHomework) {
+      const hwAttrs = 'min="0" max="100" step="0.1"';
+      html += `<td class="border border-slate-300 dark:border-slate-600 px-1 py-1 text-center">
+        <input type="number" class="grade-input-hw w-full max-w-[5rem] mx-auto text-center border border-slate-200 dark:border-slate-600 rounded bg-white dark:bg-slate-800 text-slate-900 dark:text-white" ${hwAttrs} value="${escapeHTML(rawHw)}" placeholder="\u2014" data-row="${rowIdx}" data-col="0" title="0 to 100; same stored value as the speed grader. Re-import updates it." oninput="updateExtractedHomeworkPct(${rowIdx}, this.value)">
+      </td>`;
+    }
+
     loHeaders.forEach((lo, colIdx) => {
+      const ac = colIdx + colOffset;
       const raw = (student.grades && student.grades[lo]) ? student.grades[lo] : '';
       if (numericCols.has(lo)) {
         html += `<td class="border border-slate-300 dark:border-slate-600 px-1 py-1 text-center">
-          <input type="text" class="grade-input-numeric" value="${escapeHTML(raw)}" data-row="${rowIdx}" data-col="${colIdx}" data-lo="${escapeHTML(lo)}"
+          <input type="text" class="grade-input-numeric" value="${escapeHTML(raw)}" data-row="${rowIdx}" data-col="${ac}" data-lo="${escapeHTML(lo)}"
             oninput="updateExtractedGrade(${rowIdx}, '${escapeHTML(lo)}', this.value)">
         </td>`;
       } else {
-        const grade = VALID_GRADES.has(raw.toUpperCase()) ? raw.toUpperCase() : raw;
+        const grade = VALID_GRADES.has(String(raw).toUpperCase()) ? String(raw).toUpperCase() : raw;
         html += `<td class="border border-slate-300 dark:border-slate-600 px-1 py-1 text-center">
-          <div class="grade-cell" tabindex="0" data-grade="${escapeHTML(grade)}" data-row="${rowIdx}" data-col="${colIdx}" data-lo="${escapeHTML(lo)}" data-student-index="${rowIdx}">
+          <div class="grade-cell" tabindex="0" data-grade="${escapeHTML(grade)}" data-row="${rowIdx}" data-col="${ac}" data-lo="${escapeHTML(lo)}" data-student-index="${rowIdx}">
             ${escapeHTML(grade) || '<span class="text-slate-300 dark:text-slate-600 text-xs select-none">\u2014</span>'}
           </div>
         </td>`;
@@ -490,7 +571,11 @@ function attachGradeCellHandlers() {
       const row = parseInt(cell.dataset.row);
       const col = parseInt(cell.dataset.col);
 
-      if (GRADE_KEYS.includes(k)) {
+      if (e.shiftKey && k === 'M') {
+        e.preventDefault();
+        setCellGrade(cell, 'MR');
+        moveFocus(row, col + 1);
+      } else if (GRADE_KEYS.includes(k)) {
         e.preventDefault();
         const grade = GRADE_MAP[k] || k;
         setCellGrade(cell, grade);
@@ -553,8 +638,9 @@ function undoLastGrade() {
 }
 
 function moveFocus(row, col) {
-  // Try grade-cell first, then numeric input
+  // Try grade-cell first, then HW %, then other numeric inputs
   let next = document.querySelector(`#extractedStudentsTable .grade-cell[data-row="${row}"][data-col="${col}"]`);
+  if (!next) next = document.querySelector(`#extractedStudentsTable .grade-input-hw[data-row="${row}"][data-col="${col}"]`);
   if (!next) next = document.querySelector(`#extractedStudentsTable .grade-input-numeric[data-row="${row}"][data-col="${col}"]`);
   if (next) { next.focus(); next.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
 }
@@ -575,6 +661,21 @@ function updateExtractedGrade(idx, lo, value) {
   s.grades[lo] = value.trim().toUpperCase();
 }
 
+function updateExtractedHomeworkPct(idx, value) {
+  if (!uploadedPDFData || !uploadedPDFData.students || !uploadedPDFData.students[idx]) return;
+  const t = (value == null) ? '' : String(value).trim();
+  if (t === '') {
+    uploadedPDFData.students[idx].homework_pct = null;
+    return;
+  }
+  const n = parseFloat(t);
+  if (Number.isFinite(n)) {
+    uploadedPDFData.students[idx].homework_pct = String(Math.max(0, Math.min(100, Math.round(n * 10) / 10)));
+  } else {
+    uploadedPDFData.students[idx].homework_pct = t;
+  }
+}
+
 // ============================================================================
 // CONFIRM SUMMARY  (Step 4)
 // ============================================================================
@@ -593,8 +694,15 @@ function populateConfirmSummary() {
   const los      = uploadedPDFData.learning_objectives || [];
   let totalGrades = 0;
   students.forEach(s => { totalGrades += Object.keys(s.grades || {}).length; });
+  const hwCount = students.filter(
+    s => s.homework_pct != null && String(s.homework_pct).trim() !== ''
+  ).length;
+  const hwLine =
+    hwCount > 0
+      ? ` &middot; <strong>${hwCount}</strong> homework % value${hwCount === 1 ? '' : 's'} (updates speed grader HW for this group)`
+      : '';
 
-  summary.innerHTML = `<p><strong>${students.length}</strong> students &middot; <strong>${los.length}</strong> learning objectives &middot; <strong>${totalGrades}</strong> grade entries</p>`;
+  summary.innerHTML = `<p><strong>${students.length}</strong> students &middot; <strong>${los.length}</strong> learning objectives &middot; <strong>${totalGrades}</strong> grade entries${hwLine}</p>`;
   if (approvedExtraLOs.size > 0) {
     summary.innerHTML += `<p class="mt-1 text-amber-600 dark:text-amber-400 text-xs">Including <strong>${approvedExtraLOs.size}</strong> extra LO(s) you approved.</p>`;
   }
@@ -620,11 +728,17 @@ async function handleFormSubmit(e) {
 
   const includeLOs = new Set(assignmentLOs.map(v => v.toUpperCase()));
   approvedExtraLOs.forEach(v => includeLOs.add(v.toUpperCase()));
-  if (includeLOs.size === 0) {
+  const hasHomework = (uploadedPDFData.students || []).some(
+    s => s.homework_pct != null && String(s.homework_pct).trim() !== ''
+  );
+  if (includeLOs.size === 0 && !hasHomework) {
     alert(
-      'No learning objectives are selected for import. Link objectives to this assignment on the Assignments tab, ' +
-        'or check the extra columns you want in step 2, then try again.'
+      'Nothing to import: add learning objectives to this assignment (or approve extra columns in step 2), and/or enter homework % values, then try again.'
     );
+    return;
+  }
+  if (hasHomework && !assignmentId) {
+    alert('Select an assignment so homework % can be saved (it is shared for the assignment’s homework group, like the speed grader).');
     return;
   }
 
@@ -636,15 +750,20 @@ async function handleFormSubmit(e) {
     importBtn.classList.add('opacity-75', 'cursor-not-allowed');
   }
 
-  // Filter each student's grades to only include the approved LOs
+  // Filter each student's grades to only include the approved LOs (not homework)
   const filteredStudents = uploadedPDFData.students.map(s => {
     const grades = {};
     Object.keys(s.grades || {}).forEach(lo => {
+      if (isHomeworkHeader(lo)) return;
       if (includeLOs.has(lo.toUpperCase())) {
         grades[lo] = s.grades[lo];
       }
     });
-    return { name: s.name, grades };
+    const out = { name: s.name, grades };
+    if (s.homework_pct != null && String(s.homework_pct).trim() !== '') {
+      out.homework_pct = s.homework_pct;
+    }
+    return out;
   });
 
   const filteredLOs = (uploadedPDFData.learning_objectives || []).filter(lo =>

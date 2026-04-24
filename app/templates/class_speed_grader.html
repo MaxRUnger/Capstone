@@ -74,6 +74,10 @@
         <span>Mastered</span>
       </div>
       <div class="flex items-center gap-3">
+        <kbd class="kbd">⇧M</kbd>
+        <span>Mastered (revision) — <span class="font-mono">MR</span></span>
+      </div>
+      <div class="flex items-center gap-3">
         <kbd class="kbd">R</kbd>
         <span>Revise for Mastery</span>
       </div>
@@ -120,12 +124,16 @@
             </th>
             <!-- HW % col -->
             <th class="px-4 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[90px]">
-              HW %
+              <span class="block">HW %</span>
+              {% if instructor_mode == 'mark' %}
+              <span class="block text-[10px] font-normal text-slate-400 mt-0.5 leading-tight">Green: can revise · Amber: in-class grade eligible · Red: not eligible</span>
+              {% endif %}
             </th>
             <!-- LO columns -->
             {% for lo in lo_names %}
-            <th class="px-3 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[120px]" data-lo="{{ lo.vendor_code }}" data-lo-id="{{ lo.id }}">
-              <div class="text-xs font-bold text-slate-800 dark:text-white">{{ lo.vendor_code }}</div>
+            <th class="px-3 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[120px]" data-lo="{{ lo.name }}" data-lo-id="{{ lo.id }}">
+              <div class="text-xs font-bold text-slate-800 dark:text-white">{{ lo.vendor_code or lo.name }}</div>
+              <div class="text-xs font-normal text-slate-400 dark:text-slate-500 mt-0.5 leading-tight">{{ lo.name }}</div>
             </th>
             {% endfor %}
           </tr>
@@ -153,7 +161,7 @@
                        placeholder="—"
                        style="background:#64748b">
                 <div class="hw-pass-text hidden mt-0.5">
-                  <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-green-500 text-white">HW Pass</span>
+                  <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-sky-600 text-white" title="Free pass: in-class exam marks only, not M/MR">HW Pass (exam only)</span>
                 </div>
                 <div class="revision-status mark-only mt-0.5 hidden" data-student-id="{{ student.id }}"></div>
                 {% if instructor_mode == 'mark' %}
@@ -168,7 +176,7 @@
             </td>
             <!-- Grade cells -->
             {% for lo in lo_names %}
-            <td class="px-1 py-1" data-lo="{{ lo.vendor_code }}" data-lo-id="{{ lo.id }}">
+            <td class="px-1 py-1" data-lo="{{ lo.name }}" data-lo-id="{{ lo.id }}">
               <div class="grade-cell w-full min-h-[44px] flex items-center justify-center rounded-lg border-2 border-transparent hover:bg-slate-100 dark:hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-300 transition-all cursor-pointer"
                    data-student-id="{{ student.id }}"
                    data-lo-id="{{ lo.id }}"
@@ -225,6 +233,7 @@
 }
 
 .mastery-m  { background: #dcfce7; color: #15803d; border-color: #86efac; }
+.mastery-mr { background: #ecfdf5; color: #047857; border-color: #34d399; }
 .mastery-r  { background: #fef9c3; color: #a16207; border-color: #fde047; }
 .mastery-rq { background: #ffedd5; color: #c2410c; border-color: #fdba74; }
 .mastery-p  { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
@@ -243,6 +252,61 @@ const gradeHistory = [];
 const grades = {};
 const classId = "{{ class_id }}";
 let currentAssignmentId = null;
+/** HW % thresholds: in-class exam marks vs revision to M (M/MR) */
+const EXAM_HW_MIN = 65;
+const REVISION_M_MIN = 75;
+const examGradeEligible = {};
+const revisionEligible = {};
+
+function setHwEligibilityFromState(studentId, scoreNum, isPass) {
+  if (INSTRUCTOR_MODE !== 'mark') {
+    examGradeEligible[studentId] = true;
+    revisionEligible[studentId] = true;
+    return;
+  }
+  if (isPass) {
+    examGradeEligible[studentId] = true;
+    revisionEligible[studentId] = false;
+  } else if (scoreNum === null || scoreNum === undefined || (typeof scoreNum === 'number' && isNaN(scoreNum))) {
+    examGradeEligible[studentId] = false;
+    revisionEligible[studentId] = false;
+  } else {
+    const n = typeof scoreNum === 'number' ? scoreNum : parseInt(String(scoreNum), 10);
+    if (isNaN(n)) {
+      examGradeEligible[studentId] = false;
+      revisionEligible[studentId] = false;
+    } else {
+      examGradeEligible[studentId] = n >= EXAM_HW_MIN;
+      revisionEligible[studentId] = n >= REVISION_M_MIN;
+    }
+  }
+  updateRevisionStatus(studentId);
+}
+
+function hwInputBackground(scoreNum, isPass) {
+  if (INSTRUCTOR_MODE !== 'mark') return '#64748b';
+  if (isPass) return '#0ea5e9';
+  if (scoreNum === null || scoreNum === undefined || (typeof scoreNum === 'number' && isNaN(scoreNum))) return '#64748b';
+  const n = parseInt(String(scoreNum), 10);
+  if (isNaN(n)) return '#64748b';
+  if (n >= REVISION_M_MIN) return '#22c55e';
+  if (n >= EXAM_HW_MIN) return '#f59e0b';
+  return '#ef4444';
+}
+
+function updateRevisionStatus(studentId) {
+  if (INSTRUCTOR_MODE !== 'mark') return;
+  const el = document.querySelector(`.revision-status[data-student-id="${studentId}"]`);
+  if (!el) return;
+  el.classList.remove('hidden');
+  if (revisionEligible[studentId]) {
+    el.innerHTML = '<span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300">Can revise</span>';
+  } else if (examGradeEligible[studentId]) {
+    el.innerHTML = '<span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200">In-class grade eligible</span>';
+  } else {
+    el.innerHTML = '<span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400">Not eligible</span>';
+  }
+}
 
 async function deleteStudent(studentId, studentName, btn) {
   if (!confirm(`Remove "${studentName}" from this class? This will delete all their grades.`)) return;
@@ -269,7 +333,11 @@ document.querySelectorAll('.grade-cell').forEach(cell => {
     const row = parseInt(cell.dataset.row);
     const col = parseInt(cell.dataset.col);
 
-    if (GRADES.includes(k)) {
+    if (e.shiftKey && k === 'M') {
+      e.preventDefault();
+      updateCellValue(cell, 'MR');
+      moveFocusForward(row, col);
+    } else if (GRADES.includes(k)) {
       e.preventDefault();
       const grade = GRADE_MAP[k] || k;
       updateCellValue(cell, grade);
@@ -293,6 +361,17 @@ document.querySelectorAll('.grade-cell').forEach(cell => {
 });
 
 function updateCellValue(cell, newGrade) {
+  const sid = cell.dataset.studentId;
+  if (newGrade && INSTRUCTOR_MODE === 'mark') {
+    if (!examGradeEligible[sid]) {
+      alert('This student has no in-class exam credit (homework under 65% and no free pass for this group).');
+      return;
+    }
+    if ((newGrade === 'M' || newGrade === 'MR') && !revisionEligible[sid]) {
+      alert('M and MR need homework at 75% or above. (65–74%: in-class marks only. A free pass only unlocks in-class exam marks, not M/MR.)');
+      return;
+    }
+  }
   const key = `${cell.dataset.studentId}|${cell.dataset.loId}`;
   const prev = grades[key];
   if (prev === newGrade) return;
@@ -494,44 +573,31 @@ function filterByAssignment() {
         const passCb = cell ? cell.querySelector('.hw-pass-check') : null;
 
         if (sid in hwScores && hwScores[sid] === -1) {
-          // HW Pass was used for this assignment
+          // HW Pass was used for this assignment (in-class exam marks only, not M/MR)
           input.classList.add('hidden');
           input.value = '';
           input.style.background = '#64748b';
           if (passText) passText.classList.remove('hidden');
           if (passCb) passCb.checked = true;
-          updateRevisionStatus(sid, true);
+          setHwEligibilityFromState(sid, null, true);
         } else if (sid in hwScores) {
           input.classList.remove('hidden');
           input.value = hwScores[sid];
-          input.style.background = INSTRUCTOR_MODE === 'shelbi' ? '#64748b' : (hwScores[sid] >= 65 ? '#22c55e' : '#ef4444');
+          input.style.background = hwInputBackground(hwScores[sid], false);
           if (passText) passText.classList.add('hidden');
           if (passCb) passCb.checked = false;
-          updateRevisionStatus(sid, hwScores[sid] >= 65);
+          setHwEligibilityFromState(sid, hwScores[sid], false);
         } else {
           input.classList.remove('hidden');
           input.value = '';
           input.style.background = '#64748b';
           if (passText) passText.classList.add('hidden');
           if (passCb) passCb.checked = false;
-          updateRevisionStatus(sid, false);
+          setHwEligibilityFromState(sid, null, false);
         }
       });
     })
     .catch(e => console.error('Error loading assignment grades:', e));
-}
-
-// Revision eligibility indicator
-function updateRevisionStatus(studentId, eligible) {
-  if (INSTRUCTOR_MODE === 'shelbi') return;
-  const el = document.querySelector(`.revision-status[data-student-id="${studentId}"]`);
-  if (!el) return;
-  el.classList.remove('hidden');
-  if (eligible) {
-    el.innerHTML = '<span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300">Can Revise</span>';
-  } else {
-    el.innerHTML = '<span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400">No Revision</span>';
-  }
 }
 
 // Auto-select first assignment on load
@@ -541,15 +607,22 @@ filterByAssignment();
 document.querySelectorAll('.hw-pct-input').forEach(input => {
   function updateColor() {
     const raw = input.value.trim();
-    if (raw === '') { input.style.background = '#64748b'; return; }
+    if (raw === '') {
+      input.style.background = '#64748b';
+      return;
+    }
     const val = parseInt(raw) || 0;
-    input.style.background = INSTRUCTOR_MODE === 'shelbi' ? '#64748b' : (val >= 65 ? '#22c55e' : '#ef4444');
+    input.style.background = hwInputBackground(val, false);
   }
   input.addEventListener('input', () => {
     updateColor();
     const raw = input.value.trim();
-    const val = parseInt(raw) || 0;
-    updateRevisionStatus(input.dataset.studentId, raw !== '' && val >= 65);
+    if (raw === '') {
+      setHwEligibilityFromState(input.dataset.studentId, null, false);
+      return;
+    }
+    const val = Math.max(0, Math.min(100, parseInt(raw) || 0));
+    setHwEligibilityFromState(input.dataset.studentId, val, false);
   });
   input.addEventListener('change', async () => {
     updateColor();
@@ -559,7 +632,7 @@ document.querySelectorAll('.hw-pct-input').forEach(input => {
     const val = Math.max(0, Math.min(100, parseInt(raw) || 0));
     input.value = val;
     updateColor();
-    updateRevisionStatus(studentId, val >= 65);
+    setHwEligibilityFromState(studentId, val, false);
     try {
       const res = await fetch(`/api/class/${classId}/save-hw-percentage`, {
         method: 'POST',
@@ -615,7 +688,7 @@ document.querySelectorAll('.hw-pass-check').forEach(cb => {
 
         input.classList.add('hidden');
         passText.classList.remove('hidden');
-        updateRevisionStatus(studentId, true);
+        setHwEligibilityFromState(studentId, null, true);
       } catch (e) {
         cb.checked = false;
         alert('Error using HW pass: ' + e.message);
@@ -640,7 +713,7 @@ document.querySelectorAll('.hw-pass-check').forEach(cb => {
       input.value = '';
       input.style.background = '#64748b';
       passText.classList.add('hidden');
-      updateRevisionStatus(studentId, false);
+      setHwEligibilityFromState(studentId, null, false);
       if (currentAssignmentId) {
         // Remove the -1 by saving empty (0)
         fetch(`/api/class/${classId}/save-hw-percentage`, {

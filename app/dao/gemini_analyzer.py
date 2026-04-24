@@ -11,12 +11,12 @@ Handles:
 """
 
 from typing import Dict, List, Optional
+import io
 import os
 import json
 import re
-import logging
 
-logger = logging.getLogger(__name__)
+from app.models import Homework
 
 try:
     import fitz  # type: ignore  # PyMuPDF for PDF→image conversion
@@ -40,6 +40,7 @@ The sheet is a table with:
 
 Valid grade marks are:
 - "M" = Mastered
+- "MR" = Mastered on a revision (use when the mark reflects revised work, not the first attempt)
 - "P" = Progressing
 - "X" = Not yet / incorrect
 - "R" = Redo / Retake
@@ -63,12 +64,14 @@ Return ONLY valid JSON in this exact format (no markdown fencing, no extra text)
 }
 
 Rules:
-- "learning_objectives" is the ordered list of column headers (excluding the student name column).
+- "learning_objectives" is the ordered list of column headers (excluding the student name column), in left-to-right order.
 - Each student's "grades" object uses the column header as key and the grade mark as value.
+- Columns for homework completion percentage must use headers like HW, HW%, Homework, or HW1 — not fake learning objective codes. Put numeric homework scores only under those columns.
 - Omit empty/blank cells from the grades object entirely.
-- Normalize all grade marks to uppercase (M, P, X, R, RQ, A).
-- Convert any checkmark symbol to "P".
-- Preserve numbers as strings (e.g., "85" not 85).
+- Normalize all grade marks to uppercase (M, MR, P, X, R, RQ, A).
+- Convert any checkmark symbol to "P" for learning-objective columns only (not for homework % columns).
+- For homework % columns, preserve numbers as strings (e.g., "85" not 85).
+- Do not put a homework percentage under a learning objective code (EX1, A7, etc.); it must be under a homework-style header.
 - Student names should be in their original order as they appear on the sheet.
 - Preserve the exact spelling of student names as printed on the sheet.
 """
@@ -109,48 +112,46 @@ class GradeSheetGeminiAnalyzer:
             else:
                 file_bytes = file_obj
 
-            logger.debug("[Gemini] analyze_pdf called, %s bytes", len(file_bytes))
+            print(f"[Gemini] analyze_pdf called, {len(file_bytes)} bytes")
 
             # Convert file to image parts for Gemini
             image_parts = self._file_to_image_parts(file_bytes)
-            logger.debug(
-                "[Gemini] Prepared %s image(s) in %.1fs",
-                len(image_parts),
-                _time.time() - _t0,
-            )
+            print(f"[Gemini] Prepared {len(image_parts)} image(s) in {_time.time()-_t0:.1f}s")
 
             if not image_parts:
                 raise Exception("Could not extract images from file")
 
             # Send to Gemini for extraction
             extracted = self._call_gemini(image_parts)
-            logger.debug("[Gemini] Extraction done in %.1fs", _time.time() - _t0)
-            logger.debug(
-                "[Gemini] Found %s students, %s LOs",
-                len(extracted["students"]),
-                len(extracted["learning_objectives"]),
-            )
+            print(f"[Gemini] Extraction done in {_time.time()-_t0:.1f}s")
+            print(f"[Gemini] Found {len(extracted['students'])} students, "
+                  f"{len(extracted['learning_objectives'])} LOs")
 
             # Build raw text for display
-            raw_lines = []
-            headers = extracted['learning_objectives']
-            if headers:
-                raw_lines.append('Name | ' + ' | '.join(headers))
+            raw_lines: List[str] = []
+            headers = list(extracted['learning_objectives'])
+            hw_lbl = extracted.get('homework_column')
+            has_hw = any((s.get('homework_pct') or '').strip() for s in extracted['students'])
+            line_headers = headers + ([hw_lbl] if (hw_lbl and has_hw) else [])
+            if line_headers:
+                raw_lines.append('Name | ' + ' | '.join(line_headers))
             for s in extracted['students']:
-                grade_str = ' | '.join(
-                    str(s['grades'].get(h, '')) for h in headers
-                )
-                raw_lines.append(f"{s['name']} | {grade_str}")
+                cells = [str(s['grades'].get(h, '')) for h in headers]
+                if hw_lbl and has_hw:
+                    cells.append(str(s.get('homework_pct', '')))
+                raw_lines.append(f"{s['name']} | {' | '.join(cells)}")
 
             return {
                 'students': extracted['students'],
                 'learning_objectives': extracted['learning_objectives'],
+                'homework_column': extracted.get('homework_column'),
                 'raw_text': '\n'.join(raw_lines),
                 'success': True
             }
 
         except Exception as e:
-            logger.exception("Gemini analyze_pdf failed")
+            import traceback
+            traceback.print_exc()
             raise Exception(f"Error analyzing file: {str(e)}")
 
     def _file_to_image_parts(self, file_bytes: bytes) -> List:
@@ -198,7 +199,7 @@ class GradeSheetGeminiAnalyzer:
 
         model = self.models[0]
         try:
-            logger.debug("[Gemini] Trying model: %s", model)
+            print(f"[Gemini] Trying model: {model}")
             response = self.client.models.generate_content(
                 model=model,
                 contents=contents,
@@ -209,11 +210,11 @@ class GradeSheetGeminiAnalyzer:
             )
             response_text = response.text.strip()
             parsed = self._parse_response(response_text)
-            logger.debug("[Gemini] Success with model: %s", model)
+            print(f"[Gemini] Success with model: {model}")
             return self._normalize_data(parsed)
         except Exception as e:
             error_str = str(e)
-            logger.warning("[Gemini] Model %s failed: %s", model, error_str)
+            print(f"[Gemini] Model {model} failed: {error_str}")
             if '503' in error_str or 'UNAVAILABLE' in error_str:
                 raise Exception("The Gemini AI service is temporarily busy. Please try again in a few minutes.")
             raise Exception(f"Gemini API error: {error_str}")
@@ -234,16 +235,25 @@ class GradeSheetGeminiAnalyzer:
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            logger.warning("[Gemini] Failed to parse response: %s", e)
-            logger.debug("[Gemini] Response text snippet: %s", response_text[:500])
+            print(f"[Gemini] Failed to parse response: {e}")
+            print(f"[Gemini] Response text: {response_text[:500]}")
             raise Exception("Failed to parse grade sheet data from AI response")
 
     def _normalize_data(self, data: Dict) -> Dict:
-        """Normalize and validate the extracted data."""
-        learning_objectives = data.get('learning_objectives', [])
+        """Normalize and validate the extracted data.
+
+        Splits homework percentage columns (HW, Homework, etc.) out of the LO list so they are
+        not stored as learning objectives or coerced to mastery codes.
+        """
+        learning_objectives = list(data.get('learning_objectives', []) or [])
         students_raw = data.get('students', [])
 
-        valid_marks = {'M', 'X', 'R', 'P', 'A', 'RQ', '/'}
+        valid_marks = {'M', 'MR', 'X', 'R', 'P', 'A', 'RQ', '/'}
+
+        hw_headers = [h for h in learning_objectives if Homework.is_import_sheet_hw_column(h)]
+        lo_only = [h for h in learning_objectives if not Homework.is_import_sheet_hw_column(h)]
+
+        first_hw_label = hw_headers[0] if hw_headers else None
 
         students = []
         for s in students_raw:
@@ -251,28 +261,45 @@ class GradeSheetGeminiAnalyzer:
             if not name or len(name) < 2:
                 continue
 
-            grades = {}
-            raw_grades = s.get('grades', {})
-            for lo, mark in raw_grades.items():
-                mark_str = str(mark).strip().upper()
-                if mark_str in ('✓', '✔', 'CHECK', 'PASS', 'YES'):
-                    mark_str = 'P'
-                if mark_str in valid_marks or re.match(r'^\d+\.?\d*$', mark_str):
-                    grades[lo] = mark_str
+            grades: Dict[str, str] = {}
+            raw_grades = s.get('grades', {}) or {}
+            homework_pct: Optional[str] = None
+
+            for h in learning_objectives:
+                if h not in raw_grades:
+                    continue
+                mark = raw_grades[h]
+                if Homework.is_import_sheet_hw_column(h):
+                    parsed = Homework.parse_import_hw_pct(mark)
+                    if parsed is not None:
+                        homework_pct = str(parsed)
+                    elif str(mark).strip() != "":
+                        # Keep raw (e.g. "92.3") for UI editing if parse failed on odd formats
+                        m = str(mark).strip()
+                        if re.match(r"^\d+\.?\d*%?$", m):
+                            homework_pct = m.rstrip("%")
+                else:
+                    mark_str = str(mark).strip().upper()
+                    if mark_str in ('✓', '✔', 'CHECK', 'PASS', 'YES'):
+                        mark_str = 'P'
+                    if mark_str in valid_marks or re.match(r'^\d+\.?\d*$', mark_str):
+                        grades[h] = mark_str
 
             students.append({
                 'name': name,
-                'grades': grades
+                'grades': grades,
+                'homework_pct': homework_pct,
             })
 
         return {
-            'learning_objectives': learning_objectives,
+            'learning_objectives': lo_only,
+            'homework_column': first_hw_label,
             'students': students
         }
 
 
 _cached_analyzer = None
-_module_version = 12  # Bumped for Gemini migration
+_module_version = 13  # Bumped: homework columns split from LOs
 
 def get_gemini_analyzer() -> Optional[GradeSheetGeminiAnalyzer]:
     """
@@ -288,5 +315,5 @@ def get_gemini_analyzer() -> Optional[GradeSheetGeminiAnalyzer]:
         _cached_analyzer._version = _module_version  # type: ignore
         return _cached_analyzer
     except (ImportError, ValueError) as e:
-        logger.warning("Failed to initialize Gemini analyzer: %s", e)
+        print(f"Failed to initialize Gemini analyzer: {e}")
         return None

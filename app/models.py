@@ -1,12 +1,15 @@
 import logging
+import re
 from datetime import date
+from typing import Optional
 
 from app.authentication import supabase, supabase_admin
 
 logger = logging.getLogger(__name__)
 
 # Valid mastery grade codes used throughout the grading system
-MASTERY_GRADES = ('M', 'R', 'RQ', 'P', 'X', 'A')
+# MR = mastered on a revision (counts like M for required masteries; shown distinctly)
+MASTERY_GRADES = ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A')
 
 
 class Course:
@@ -26,7 +29,7 @@ class Course:
     def get_learning_objectives(class_id):
         """Return learning objectives for a class (includes fields needed for edit UI)."""
         resp = supabase_admin.table("learning_objectives") \
-            .select("id, vendor_code, description, required_ms") \
+            .select("id, name, vendor_code, description, required_ms") \
             .eq("class_id", class_id) \
             .execute()
         return resp.data or []
@@ -36,7 +39,7 @@ class Course:
         """Fetches a class, its learning objectives, and all enrolled students with their grades."""
         try:
             response = supabase_admin.table("classes").select(
-                "id, name, semester, learning_objectives(id, vendor_code, description, required_ms)"
+                "id, name, semester, learning_objectives(id, name, vendor_code, required_ms)"
             ).eq("id", class_id).execute()
 
             if not response.data or len(response.data) == 0:
@@ -98,7 +101,7 @@ class Course:
                 try:
                     grades_resp = supabase_admin.table("grades").select(
                         "student_id, learning_objective_id, top_score, second_score, "
-                        "learning_objectives(id, vendor_code, description, required_ms)"
+                        "learning_objectives(id, name, vendor_code, required_ms)"
                     ).in_("student_id", student_ids).execute()
                     for g in (grades_resp.data or []):
                         lo_gid = g.get("learning_objective_id")
@@ -123,22 +126,27 @@ class Course:
 
 class Grade:
     @staticmethod
+    def is_mastery_mark(mark):
+        """True for M and MR (both count as a demonstrated mastery for an assignment)."""
+        return mark in ('M', 'MR')
+
+    @staticmethod
     def get_priority(mark):
         """Maps letter grades to numerical priorities."""
-        priorities = {'M': 5, 'R': 4, 'RQ': 3, 'P': 2, 'X': 1, 'A': 0}
+        priorities = {'M': 5, 'MR': 5, 'R': 4, 'RQ': 3, 'P': 2, 'X': 1, 'A': 0}
         return priorities.get(mark, -1)
 
     @staticmethod
     def is_mastered(top_score, second_score):
-        """Logic to determine if an objective is mastered (Two 'M's)."""
-        return top_score == 'M' and second_score == 'M'
+        """True when both cells on a row are mastery-level (M or MR)."""
+        return Grade.is_mastery_mark(top_score) and Grade.is_mastery_mark(second_score)
 
     @staticmethod
     def normalize_score(score):
         """Normalize an incoming grade value to the allowed mastery codes.
 
         Accepts numeric scores (e.g. 82, 99.2) and converts them to a mastery band.
-        Also accepts already-normalized values like 'M', 'P', 'X', or 'R'.
+        Also accepts already-normalized values like 'M', 'MR', 'P', 'X', or 'R'.
         """
         if score is None:
             return None
@@ -158,7 +166,7 @@ class Grade:
         # Otherwise assume it's already one of the allowed codes
         if isinstance(score, str):
             score = score.strip().upper()
-            if score in ('M', 'R', 'RQ', 'P', 'X', 'A'):
+            if score in ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A'):
                 return score
 
         return None
@@ -192,7 +200,7 @@ class Grade:
     @staticmethod
     def get_overdue_revisions(class_id):
         """Return RQ grades where the assignment's revision_due date has passed
-        and the student was eligible for revision (HW >= 65% or used a pass)."""
+        and the student was eligible to revise to mastery (HW >= revision threshold)."""
         today = date.today().isoformat()
         try:
             lo_ids = Course.get_lo_ids_for_class(class_id)
@@ -201,7 +209,7 @@ class Grade:
             resp = supabase_admin.table("grades").select(
                 "student_id, top_score, assignment_id, "
                 "assignments(id, name, revision_due), "
-                "learning_objectives(id, vendor_code, description)"
+                "learning_objectives(id, name, vendor_code)"
             ).eq("top_score", "RQ").in_("learning_objective_id", lo_ids).execute()
 
             # Collect assignment IDs to batch-check eligibility
@@ -253,7 +261,77 @@ class Student:
         return response.data
 
 class Homework:
-    REVISION_THRESHOLD = 65
+    # In-class exam marks (R, RQ, P, X, A, …) require HW >= this %, or a free pass (-1) for exam credit only
+    EXAM_GRADE_HW_THRESHOLD = 65
+    # M / MR (revise to mastery) require HW >= this; free pass does not unlock revision to M
+    REVISION_TO_M_HW_THRESHOLD = 75
+
+    @staticmethod
+    def is_import_sheet_hw_column(name) -> bool:
+        """True for sheet headers that represent homework / assignment percentage, not a mastery LO.
+
+        Used by Gemini import and the grade-import API so a column like "HW" or "Homework %"
+        is stored in homework_scores instead of learning-objective grades.
+        """
+        if not name or not str(name).strip():
+            return False
+        s = re.sub(r"[%_]+", " ", str(name).strip(), flags=re.I)
+        s = re.sub(r"\s+", " ", s).strip()
+        n = s.upper()
+        if not n or len(n) > 64:
+            return False
+        if n in (
+            "H", "HW", "H W", "HOMEWORK", "HOME WORK", "HOME-WORK", "H WORK",
+            "HW SCORE", "HW PCT", "HW PCTG", "HWPCT", "HWPCTG", "HW %",
+        ):
+            return True
+        if n.startswith("HOMEWORK") or "HOMEWORK" in n:
+            return True
+        if re.match(r"^HW[-\d]*$", n) or re.match(r"^HW \d", n) or n.startswith("HW "):
+            return True
+        if re.match(r"^HW\d{1,3}$", n):
+            return True
+        return False
+
+    @staticmethod
+    def parse_import_hw_pct(value) -> Optional[int]:
+        """Parse a homework cell to an integer 0–100, or -1 (free pass), or None if not parseable.
+
+        Rejects non-numeric strings so a mistaken letter (e.g. a mastery mark) is not coerced
+        into a percentage.
+        """
+        if value is None:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        s = s.rstrip("%").strip()
+        if not re.match(r"^-?\d+(\.\d+)?$", s):
+            return None
+        try:
+            v = float(s)
+        except ValueError:
+            return None
+        if v == -1 or v == -1.0:
+            return -1
+        iv = int(round(v))
+        return max(0, min(100, iv))
+
+    @staticmethod
+    def is_exam_grade_eligible_hw_score(score):
+        """True if the student may receive in-class exam marks for this HW row."""
+        if score is None:
+            return False
+        if score == -1:
+            return True
+        return score >= Homework.EXAM_GRADE_HW_THRESHOLD
+
+    @staticmethod
+    def is_revision_to_m_eligible_hw_score(score):
+        """True if the student may receive M or MR (revision to mastery)."""
+        if score is None or score == -1:
+            return False
+        return score >= Homework.REVISION_TO_M_HW_THRESHOLD
 
     @staticmethod
     def resolve_hw_group_storage_key(class_id, assignment_id):
@@ -327,17 +405,16 @@ class Homework:
 
     @staticmethod
     def get_revision_eligibility(class_id, assignment_id):
-        """Return {student_id: bool} indicating revision eligibility for an assignment.
+        """Return {student_id: bool} indicating eligibility to earn M or MR (revision to mastery).
 
-        A student is eligible if their HW score >= 65% or they used a HW pass (score_pct = -1).
+        Requires HW >= REVISION_TO_M_HW_THRESHOLD. A free pass (-1) does not grant revision to M.
         Uses the shared homework-group HW % when the assignment is part of a group.
         """
         try:
             hw_map = Homework.get_hw_scores_map_for_assignment(class_id, assignment_id)
             eligibility = {}
             for sid, score in hw_map.items():
-                eligible = score == -1 or (score is not None and score >= Homework.REVISION_THRESHOLD)
-                eligibility[sid] = eligible
+                eligibility[sid] = Homework.is_revision_to_m_eligible_hw_score(score)
             return eligibility
         except Exception as e:
             logger.error("Error checking revision eligibility: %s", e)

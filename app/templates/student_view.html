@@ -53,14 +53,14 @@
       {% set show_top = lo.top_score %}
       {% set show_second = lo.second_score %}
       {% if convert_active and not is_passed %}
-        {% if lo.top_score == 'M' %}{% set show_top = 'I' %}{% endif %}
-        {% if lo.second_score == 'M' %}{% set show_second = 'I' %}{% endif %}
+        {% if lo.top_score == 'M' or lo.top_score == 'MR' %}{% set show_top = 'I' %}{% endif %}
+        {% if lo.second_score == 'M' or lo.second_score == 'MR' %}{% set show_second = 'I' %}{% endif %}
       {% endif %}
       <div class="p-6">
         <div class="flex items-start gap-6">
           <div class="flex-1">
             <div class="flex items-center gap-3 mb-2">
-              <h3 class="font-medium text-slate-900 dark:text-white">{{ lo.vendor_code }}</h3>
+              <h3 class="font-medium text-slate-900 dark:text-white">{{ lo.name }}</h3>
               {% if is_passed and not convert_active %}
               <span class="px-2 py-1 bg-green-500 text-white rounded-md text-xs font-medium">PASSED</span>
               {% endif %}
@@ -68,7 +68,7 @@
             <div class="flex items-center gap-4 text-sm">
               <span class="mastery-badge mastery-{{ show_top|lower }} px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ show_top }}</span>
               <span class="mastery-badge mastery-{{ show_second|lower }} px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ show_second }}</span>
-              <span class="text-xs text-slate-500 dark:text-slate-400">{{ lo.m_count }} / {{ lo.required_ms }} Ms</span>
+              <span class="text-xs text-slate-500 dark:text-slate-400">{{ lo.m_count }} / {{ lo.required_ms }} Ms{% if lo.mr_count %}<span class="ml-1">({{ lo.mr_count }} MR)</span>{% endif %}</span>
             </div>
           </div>
         </div>
@@ -76,7 +76,7 @@
       {% endfor %}
     </div>
   </div>
-  <style>.mastery-m { background: #dcfce7; color: #15803d; border-color: #86efac; }.mastery-r { background: #fef9c3; color: #a16207; border-color: #fde047; }.mastery-rq { background: #ffedd5; color: #c2410c; border-color: #fdba74; }.mastery-p { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }.mastery-x { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }.mastery-a { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }.mastery-i { background: #fef3c7; color: #92400e; border-color: #fcd34d; }</style>
+  <style>.mastery-m { background: #dcfce7; color: #15803d; border-color: #86efac; }.mastery-mr { background: #ecfdf5; color: #047857; border-color: #34d399; }.mastery-r { background: #fef9c3; color: #a16207; border-color: #fde047; }.mastery-rq { background: #ffedd5; color: #c2410c; border-color: #fdba74; }.mastery-p { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }.mastery-x { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }.mastery-a { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }.mastery-i { background: #fef3c7; color: #92400e; border-color: #fcd34d; }</style>
   {% else %}
   <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
     <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6">

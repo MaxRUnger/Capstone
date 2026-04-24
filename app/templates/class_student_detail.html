@@ -45,7 +45,7 @@
         <div class="flex items-start gap-6">
           <div class="flex-1">
             <div class="flex items-center gap-3 mb-3">
-              <h3 class="font-medium text-slate-900 dark:text-white">{{ lo.vendor_code }}</h3>
+              <h3 class="font-medium text-slate-900 dark:text-white">{{ lo.vendor_code or lo.name }}</h3>
               {% if is_passed %}
               <span class="px-2 py-1 bg-green-500 text-white rounded-md text-xs font-medium">PASSED</span>
               {% endif %}
@@ -57,7 +57,7 @@
                   {% for g in lo.grades_list %}
                   <span class="mastery-badge mastery-{{ g|lower }} px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ g }}</span>
                   {% endfor %}
-                  <span class="text-xs text-slate-500 dark:text-slate-400 ml-2">{{ lo.m_count }} / {{ lo.required_ms }} Ms</span>
+                  <span class="text-xs text-slate-500 dark:text-slate-400 ml-2">{{ lo.m_count }} / {{ lo.required_ms }} Ms{% if lo.mr_count %}<span class="ml-1">({{ lo.mr_count }} MR)</span>{% endif %}</span>
                 </div>
               </div>
             </div>
@@ -71,6 +71,7 @@
 
 <style>
 .mastery-m { background: #dcfce7; color: #15803d; border-color: #86efac; }
+.mastery-mr { background: #ecfdf5; color: #047857; border-color: #34d399; }
 .mastery-r { background: #fef9c3; color: #a16207; border-color: #fde047; }
 .mastery-rq { background: #ffedd5; color: #c2410c; border-color: #fdba74; }
 .mastery-p { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }

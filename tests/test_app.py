@@ -25,17 +25,16 @@ sys.modules.setdefault('app.authentication', MagicMock(
     supabase_admin=_mock_supabase_admin,
 ))
 
-from app.models import Grade, MASTERY_GRADES
+from app.models import Grade, Homework, MASTERY_GRADES
 from app.routes import (
     organize_by_learning_objectives,
     normalize_profile,
     DEFAULT_REQUIRED_MS,
-    parse_learning_objectives_csv_text,
-    parse_students_csv_text,
     _student_row_sort_key,
     _student_sort_key_last_name,
     _format_name_last_first,
     _student_display_name,
+    _aggregate_lo_grades,
 )
 from app import create_app
 
@@ -73,7 +72,7 @@ class TestGradeNormalizeScore(unittest.TestCase):
 
     # -- pass-through codes --
     def test_valid_codes_returned_as_is(self):
-        for code in ('M', 'R', 'RQ', 'P', 'X', 'A'):
+        for code in ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A'):
             self.assertEqual(Grade.normalize_score(code), code)
 
     def test_codes_are_case_insensitive(self):
@@ -94,6 +93,11 @@ class TestGradeIsMastered(unittest.TestCase):
     def test_both_M_is_mastered(self):
         self.assertTrue(Grade.is_mastered('M', 'M'))
 
+    def test_MR_counts_as_mastery_in_pair(self):
+        self.assertTrue(Grade.is_mastered('MR', 'MR'))
+        self.assertTrue(Grade.is_mastered('M', 'MR'))
+        self.assertTrue(Grade.is_mastered('MR', 'M'))
+
     def test_only_top_M_not_mastered(self):
         self.assertFalse(Grade.is_mastered('M', 'R'))
 
@@ -108,6 +112,7 @@ class TestGradeGetPriority(unittest.TestCase):
     """Tests for Grade.get_priority — used for score comparisons."""
 
     def test_known_grades_ordered_correctly(self):
+        self.assertEqual(Grade.get_priority('M'), Grade.get_priority('MR'))
         self.assertGreater(Grade.get_priority('M'), Grade.get_priority('R'))
         self.assertGreater(Grade.get_priority('R'), Grade.get_priority('RQ'))
         self.assertGreater(Grade.get_priority('RQ'), Grade.get_priority('P'))
@@ -117,6 +122,44 @@ class TestGradeGetPriority(unittest.TestCase):
     def test_unknown_grade_returns_negative(self):
         self.assertEqual(Grade.get_priority('Z'), -1)
         self.assertEqual(Grade.get_priority(None), -1)
+
+
+class TestHomeworkImportSheetColumn(unittest.TestCase):
+    """Homework % columns on scanned sheets are not learning objectives."""
+
+    def test_is_import_sheet_hw_column(self):
+        self.assertTrue(Homework.is_import_sheet_hw_column("HW"))
+        self.assertTrue(Homework.is_import_sheet_hw_column("  HW%  "))
+        self.assertTrue(Homework.is_import_sheet_hw_column("Homework"))
+        self.assertTrue(Homework.is_import_sheet_hw_column("HW1"))
+        self.assertFalse(Homework.is_import_sheet_hw_column("EX1"))
+        self.assertFalse(Homework.is_import_sheet_hw_column("A7"))
+
+    def test_parse_import_hw_pct(self):
+        self.assertEqual(Homework.parse_import_hw_pct("85"), 85)
+        self.assertEqual(Homework.parse_import_hw_pct(" 92.3% "), 92)
+        self.assertEqual(Homework.parse_import_hw_pct(-1), -1)
+        self.assertIsNone(Homework.parse_import_hw_pct("M"))
+        self.assertIsNone(Homework.parse_import_hw_pct(""))
+        self.assertIsNone(Homework.parse_import_hw_pct(None))
+
+
+class TestHomeworkEligibilityThresholds(unittest.TestCase):
+    """HW % rules: 65%+ in-class exam marks; 75%+ for M/MR; pass (-1) = exam only."""
+
+    def test_exam_grade_eligible(self):
+        self.assertFalse(Homework.is_exam_grade_eligible_hw_score(None))
+        self.assertFalse(Homework.is_exam_grade_eligible_hw_score(64))
+        self.assertTrue(Homework.is_exam_grade_eligible_hw_score(65))
+        self.assertTrue(Homework.is_exam_grade_eligible_hw_score(100))
+        self.assertTrue(Homework.is_exam_grade_eligible_hw_score(-1))
+
+    def test_revision_to_m_eligible(self):
+        self.assertFalse(Homework.is_revision_to_m_eligible_hw_score(None))
+        self.assertFalse(Homework.is_revision_to_m_eligible_hw_score(-1))
+        self.assertFalse(Homework.is_revision_to_m_eligible_hw_score(74))
+        self.assertTrue(Homework.is_revision_to_m_eligible_hw_score(75))
+        self.assertTrue(Homework.is_revision_to_m_eligible_hw_score(100))
 
 
 # ==========================================================================
@@ -134,17 +177,25 @@ class TestOrganizeByLearningObjectives(unittest.TestCase):
         students = self._build_data([
             {'learning_objective_id': '10', 'top_score': 'M', 'second_score': 'M'},
         ])
-        los = [{'id': '10', 'vendor_code': 'LO-A'}]
+        los = [{'id': '10', 'name': 'LO-A'}]
         result = organize_by_learning_objectives(students, los)
         self.assertEqual(len(result), 1)
         self.assertEqual(len(result[0]['students_with_2m']), 1)
         self.assertEqual(len(result[0]['students_with_1m']), 0)
 
+    def test_student_with_2m_via_MR(self):
+        students = self._build_data([
+            {'learning_objective_id': '10', 'top_score': 'MR', 'second_score': 'MR'},
+        ])
+        los = [{'id': '10', 'name': 'LO-A'}]
+        result = organize_by_learning_objectives(students, los)
+        self.assertEqual(len(result[0]['students_with_2m']), 1)
+
     def test_student_with_1m(self):
         students = self._build_data([
             {'learning_objective_id': '10', 'top_score': 'M', 'second_score': 'R'},
         ])
-        los = [{'id': '10', 'vendor_code': 'LO-A'}]
+        los = [{'id': '10', 'name': 'LO-A'}]
         result = organize_by_learning_objectives(students, los)
         self.assertEqual(len(result[0]['students_with_1m']), 1)
 
@@ -152,22 +203,34 @@ class TestOrganizeByLearningObjectives(unittest.TestCase):
         students = self._build_data([
             {'learning_objective_id': '10', 'top_score': 'P', 'second_score': 'X'},
         ])
-        los = [{'id': '10', 'vendor_code': 'LO-A'}]
+        los = [{'id': '10', 'name': 'LO-A'}]
         result = organize_by_learning_objectives(students, los)
         self.assertEqual(len(result[0]['students_with_0m']), 1)
 
     def test_empty_students_list(self):
-        los = [{'id': '10', 'vendor_code': 'LO-A'}]
+        los = [{'id': '10', 'name': 'LO-A'}]
         result = organize_by_learning_objectives([], los)
         self.assertEqual(result[0]['total_students'], 0)
         self.assertEqual(result[0]['students_with_2m'], [])
+
+    def test_aggregate_lo_counts_M_and_MR(self):
+        lo_lookup = {'1': {'id': '1', 'name': 'LO', 'vendor_code': 'L1'}}
+        raw = [
+            {'learning_objective_id': '1', 'top_score': 'M', 'learning_objectives': None},
+            {'learning_objective_id': '1', 'top_score': 'MR', 'learning_objectives': None},
+        ]
+        out = _aggregate_lo_grades(raw, lo_lookup)
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]['m_count'], 2)
+        self.assertEqual(out[0]['mr_count'], 1)
+        self.assertTrue(out[0]['is_passed'])
 
     def test_multiple_los(self):
         students = self._build_data([
             {'learning_objective_id': '10', 'top_score': 'M', 'second_score': 'M'},
             {'learning_objective_id': '20', 'top_score': 'P', 'second_score': 'P'},
         ])
-        los = [{'id': '10', 'vendor_code': 'LO-A'}, {'id': '20', 'vendor_code': 'LO-B'}]
+        los = [{'id': '10', 'name': 'LO-A'}, {'id': '20', 'name': 'LO-B'}]
         result = organize_by_learning_objectives(students, los)
         lo_a = next(lo for lo in result if lo['name'] == 'LO-A')
         lo_b = next(lo for lo in result if lo['name'] == 'LO-B')
@@ -209,29 +272,10 @@ class TestStudentSortKeyLastName(unittest.TestCase):
                 ],
             },
         ]
-        los = [{"id": "10", "vendor_code": "LO-A"}]
+        los = [{"id": "10", "name": "LO-A"}]
         result = organize_by_learning_objectives(students, los)
         names = [s["name"] for s in result[0]["students_with_2m"]]
         self.assertEqual(names, ["Adams Zoe", "Zenith Bob"])
-
-
-class TestLearningObjectivesCsvHelpers(unittest.TestCase):
-    def test_parse_lo_csv_uses_optional_description(self):
-        text = "title,description,calculation_int\nALG-1,Solve equations,3\n"
-        rows, warnings = parse_learning_objectives_csv_text(text)
-        self.assertEqual(warnings, [])
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["vendor_code"], "ALG-1")
-        self.assertEqual(rows[0]["description"], "Solve equations")
-        self.assertEqual(rows[0]["required_ms"], 3)
-
-    def test_parse_lo_csv_without_description(self):
-        text = "title,calculation_int\nALG-2,2\n"
-        rows, warnings = parse_learning_objectives_csv_text(text)
-        self.assertEqual(warnings, [])
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["vendor_code"], "ALG-2")
-        self.assertIsNone(rows[0]["description"])
 
 
 class TestFormatNameLastFirst(unittest.TestCase):
@@ -273,32 +317,6 @@ class TestNormalizeProfile(unittest.TestCase):
         self.assertEqual(normalize_profile({}), {})
 
 
-class TestStudentCsvUploadHelpers(unittest.TestCase):
-    def test_parse_students_csv_supports_last_first_name(self):
-        text = "name,email\n\"Smith, John\",JSmith1234@student\n"
-        rows, warnings = parse_students_csv_text(text)
-        self.assertEqual(warnings, [])
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["full_name"], "John Smith")
-        self.assertEqual(rows[0]["email"], "jsmith1234@student")
-
-    def test_parse_students_csv_supports_first_last_columns(self):
-        text = "first_name,last_name\nJane,Doe\n"
-        rows, warnings = parse_students_csv_text(text)
-        self.assertEqual(warnings, [])
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["full_name"], "Jane Doe")
-        self.assertEqual(rows[0]["email"], "")
-
-    def test_parse_students_csv_supports_spaced_headers(self):
-        text = "First Name,Last Name,Email\nJohn,Smith,jsmith@student.palomar.edu\n"
-        rows, warnings = parse_students_csv_text(text)
-        self.assertEqual(warnings, [])
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["full_name"], "John Smith")
-        self.assertEqual(rows[0]["email"], "jsmith@student.palomar.edu")
-
-
 # ==========================================================================
 # Constants Tests
 # ==========================================================================
@@ -308,6 +326,7 @@ class TestConstants(unittest.TestCase):
 
     def test_mastery_grades_contains_expected_codes(self):
         self.assertIn('M', MASTERY_GRADES)
+        self.assertIn('MR', MASTERY_GRADES)
         self.assertIn('R', MASTERY_GRADES)
         self.assertIn('RQ', MASTERY_GRADES)
         self.assertIn('P', MASTERY_GRADES)
