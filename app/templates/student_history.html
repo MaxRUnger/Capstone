@@ -19,7 +19,7 @@
         Print full report
       </button>
       {% if student_email %}
-      <button type="button" onclick="emailStudentHistoryReport()"
+      <button type="button" onclick="emailStudentHistoryReport(this)"
         class="flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-sm bg-emerald-600 text-white hover:bg-emerald-700 transition-colors shadow-sm"
         title="Email this report to {{ student_email }}"
         aria-label="Email student history report to student">
@@ -102,17 +102,25 @@
 </div>
 
 <script id="studentHistoryEmailPayload" type="application/json">{{ {
+  'class_id': class_id,
+  'student_id': student_id,
   'email': student_email or '',
   'student_name': student_name,
   'class_name': class_name,
   'objectives': learning_objectives
 } | tojson }}</script>
 <script>
-function emailStudentHistoryReport() {
+function emailStudentHistoryReport(btnEl) {
   var el = document.getElementById('studentHistoryEmailPayload');
   if (!el) return;
   var p = JSON.parse(el.textContent);
+  var classId = String(p.class_id || '').trim();
+  var studentId = String(p.student_id || '').trim();
   var addr = (p.email || '').trim();
+  if (!classId || !studentId) {
+    alert('Could not send email because report context is missing.');
+    return;
+  }
   if (!addr) {
     alert('No email address is saved for this student.');
     return;
@@ -147,8 +155,45 @@ function emailStudentHistoryReport() {
   if (body.length > 2000) {
     body = body.slice(0, 1970) + '\n\n[Message trimmed. Use Print full report for the complete view.]';
   }
-  var subject = 'Your student history report — ' + (p.class_name || 'Class');
-  window.location.href = 'mailto:' + encodeURI(addr) + '?subject=' + encodeURIComponent(subject) + '&body=' + encodeURIComponent(body);
+  var subject = 'Your student history report - ' + (p.class_name || 'Class');
+  if (!confirm('Send this report directly to ' + addr + '?')) {
+    return;
+  }
+
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.classList.add('opacity-60', 'cursor-not-allowed');
+  }
+
+  fetch('/api/class/' + encodeURIComponent(classId) + '/student/' + encodeURIComponent(studentId) + '/send-report-email', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({
+      subject: subject,
+      body: body
+    })
+  })
+    .then(async function (response) {
+      var data = await response.json().catch(function () { return {}; });
+      return { ok: response.ok, data: data };
+    })
+    .then(function (result) {
+      if (!result.ok || !result.data.success) {
+        alert('Could not send email: ' + (result.data.error || 'Unknown error'));
+        return;
+      }
+      alert('Report emailed to ' + addr + '.');
+    })
+    .catch(function () {
+      alert('Unexpected error sending report email.');
+    })
+    .finally(function () {
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
+      }
+    });
 }
 </script>
 

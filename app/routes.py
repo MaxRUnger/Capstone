@@ -4,11 +4,10 @@ import json
 import logging
 import os
 import re
+import requests
 import socket
 import threading
 import time
-import urllib.error
-import urllib.request
 from functools import wraps
 from typing import Any, Dict, List, Optional, Tuple
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session, abort, Response  # type: ignore
@@ -1621,26 +1620,19 @@ def _send_via_resend(to_email: str, subject: str, body_text: str) -> Tuple[bool,
         "subject": subject,
         "text": body_text,
     }
-    req = urllib.request.Request(
-        "https://api.resend.com/emails",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
     try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            if int(getattr(resp, "status", 200) or 200) >= 400:
-                return False, "Email provider returned an error."
+        resp = requests.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+            },
+            json=payload,
+            timeout=20,
+        )
+        if resp.status_code >= 400:
+            return False, f"Email provider rejected request: {resp.text[:400]}"
         return True, ""
-    except urllib.error.HTTPError as e:
-        try:
-            provider_msg = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            provider_msg = str(e)
-        return False, f"Email provider rejected request: {provider_msg[:400]}"
     except Exception as e:
         return False, f"Email send failed: {e}"
 

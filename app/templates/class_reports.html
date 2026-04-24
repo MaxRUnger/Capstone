@@ -103,6 +103,10 @@
         class="px-4 py-2 rounded-lg bg-slate-300 dark:bg-slate-600 text-slate-700 dark:text-slate-300 hover:bg-slate-400 dark:hover:bg-slate-500 font-medium text-sm transition-colors">
         Clear Filters
       </button>
+      <button type="button" id="emailSelectedBtn" onclick="emailSelectedAllAssignments(this)"
+        class="hidden px-4 py-2 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 font-medium text-sm transition-colors">
+        Email Selected
+      </button>
     </div>
   </div>
 
@@ -135,17 +139,15 @@
           </thead>
           <tbody class="divide-y divide-slate-50 dark:divide-slate-700">
             {% for student in students %}
-            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors student-row group" data-student-name="{{ student.name|lower }}" data-student-id="{{ student.id }}">
+            <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors student-row" data-student-name="{{ student.name|lower }}" data-student-id="{{ student.id }}">
               <td class="px-6 py-3 font-medium text-slate-900 dark:text-white">
-                <div class="flex items-center gap-1">
+                <div class="flex items-center gap-1 flex-wrap">
                   <span>{{ student.name }}</span>
                   <button type="button" onclick="printStudentReport('{{ student.id }}')"
-                    class="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 transition-all flex-shrink-0"
+                    class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors flex-shrink-0 print:hidden"
                     title="Print report for {{ student.name }}"
                     aria-label="Print report for {{ student.name }}">
-                    <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"/>
-                    </svg>
+                    Print
                   </button>
                 </div>
               </td>
@@ -268,6 +270,24 @@ const classId = JSON.parse(document.getElementById('classIdJson').textContent);
 const learningObjectiveCodeById = Object.fromEntries(
   learningObjectivesData.map((lo) => [String(lo.id), String(lo.vendor_code || '')])
 );
+const instructorFullName = {{ (session.get('full_name') or '')|tojson }};
+function toTitleCaseWord(word) {
+  const w = String(word || '').trim();
+  if (!w) return '';
+  return w.charAt(0).toUpperCase() + w.slice(1).toLowerCase();
+}
+function instructorLastName(fullName) {
+  const raw = String(fullName || '').trim();
+  if (!raw) return '';
+  if (raw.indexOf(',') >= 0) {
+    return toTitleCaseWord(raw.split(',')[0].trim());
+  }
+  const parts = raw.split(/\s+/).filter(Boolean);
+  return parts.length ? toTitleCaseWord(parts[parts.length - 1]) : '';
+}
+const instructorSignoff = instructorLastName(instructorFullName)
+  ? ('Professor ' + instructorLastName(instructorFullName))
+  : 'Your instructor';
 const chevronSvg = '<svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
 const assignmentReportEl = document.getElementById('assignmentReport');
 const studentHistoryPanelEl = document.getElementById('studentHistoryPanel');
@@ -276,6 +296,7 @@ const assignmentDropdownEl = document.getElementById('assignmentDropdown');
 const studentDropdownEl = document.getElementById('studentDropdown');
 const assignmentDropdownBtnEl = document.getElementById('assignmentDropdownBtn');
 const studentDropdownBtnEl = document.getElementById('studentDropdownBtn');
+const emailSelectedBtnEl = document.getElementById('emailSelectedBtn');
 const viewAllEl = document.getElementById('view-all');
 const viewAllAssignmentsEl = document.getElementById('view-all-assignments');
 const defaultHwBadgeClass = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
@@ -391,6 +412,7 @@ function applyAssignmentFilter() {
     renderAllAssignmentsView();
     viewAllAssignmentsEl.classList.remove('hidden');
     document.querySelectorAll('#view-all [data-lo-id]').forEach(el => el.classList.remove('hidden'));
+    updateEmailSelectedButton();
     return;
   }
   viewAllAssignmentsEl.classList.add('hidden');
@@ -404,6 +426,7 @@ function applyAssignmentFilter() {
   document.querySelectorAll('#view-all [data-lo-id]').forEach(el => {
     el.classList.toggle('hidden', !loIds.has(String(el.getAttribute('data-lo-id'))));
   });
+  updateEmailSelectedButton();
 }
 
 // --- Filter by Student ---
@@ -430,6 +453,7 @@ function applyStudentFilter() {
     const id = String(row.getAttribute('data-student-id'));
     row.classList.toggle('hidden', checkedSet.size > 0 && !checkedSet.has(id));
   });
+  updateEmailSelectedButton();
 }
 
 function selectAllStudents() {
@@ -449,6 +473,17 @@ function clearAllFilters() {
     selectAssignment(firstAssignmentItem.getAttribute('data-assignment-id'), firstAssignmentItem.textContent.trim());
   }
   clearStudentSelection();
+  updateEmailSelectedButton();
+}
+
+function updateEmailSelectedButton() {
+  if (!emailSelectedBtnEl) return;
+  const selectedCount = document.querySelectorAll('.student-checkbox:checked').length;
+  const show = !selectedAssignmentId && selectedCount > 0;
+  emailSelectedBtnEl.classList.toggle('hidden', !show);
+  if (show) {
+    emailSelectedBtnEl.textContent = 'Email Selected (' + selectedCount + ')';
+  }
 }
 
 function escapeHtml(value) {
@@ -604,10 +639,8 @@ function buildEmailPayloadForStudent(student, assignmentIdOverride) {
   const lines = [
     'Hello,',
     '',
-    'Here is the same progress summary that prints from the class Reports page.',
-    '',
     'Class: ' + (parts.className || ''),
-    'Report: ' + parts.assignmentLabel,
+    'Assignment: ' + parts.assignmentLabel,
     'Date: ' + new Date().toLocaleDateString(),
     'Student: ' + (parts.student.name || ''),
     '',
@@ -617,19 +650,67 @@ function buildEmailPayloadForStudent(student, assignmentIdOverride) {
     lines.push('');
   }
   lines.push('Learning objectives and scores shown in this report:');
-  lines.push('----------------------------------------');
+  lines.push('');
   parts.rows.forEach(function (r) {
     const t = String(r.title || '').replace(/\s+/g, ' ').trim();
     lines.push(t + '  |  ' + String(r.grade || 'Not graded'));
   });
   lines.push('');
-  lines.push('— Your instructor (via Project Clarity)');
+  lines.push('— ' + instructorSignoff + ' (via Project Clarity)');
   let body = lines.join('\n');
   if (body.length > 2000) {
     body = body.slice(0, 1970) + '\n\n[Message trimmed. Ask your instructor for the full printed report if needed.]';
   }
   const subject = 'Your progress report — ' + (parts.className || 'Class');
   return { subject, body, parts };
+}
+
+function buildAllAssignmentsEmailPayloadForStudent(student) {
+  const className = document.querySelector('#view-all p.text-sm')?.textContent.trim() || '';
+  const los = Array.isArray(student.learning_objectives) ? student.learning_objectives : [];
+  const lines = [
+    'Hello,',
+    '',
+    'Class: ' + (className || ''),
+    'Date: ' + new Date().toLocaleDateString(),
+    'Student: ' + (student.name || ''),
+    '',
+    'Assignments included in this report:',
+    ''
+  ];
+
+  assignmentsData.forEach(function (assignment) {
+    const assignmentId = String(assignment.id || '');
+    const assignmentName = String(assignment.name || 'Assignment');
+    lines.push('Assignment: ' + assignmentName);
+
+    const hwEl = document.querySelector('.hw-score-display[data-student-id="' + String(student.id) + '"][data-assignment-id="' + assignmentId + '"]');
+    const hw = hwEl ? String(hwEl.textContent || '').trim() : '';
+    if (hw && hw !== '—') {
+      lines.push('Homework % (this assignment view): ' + hw);
+    }
+
+    lines.push('Learning objectives and scores shown in this report:');
+    lines.push('');
+    const assignmentObjectives = Array.isArray(assignment.assignment_objectives) ? assignment.assignment_objectives : [];
+    assignmentObjectives.forEach(function (ao) {
+      const loId = String(ao.learning_objective_id || '');
+      if (!loId) return;
+      const loCode = loCodeForId(loId, ao);
+      const slo = los.find(function (x) { return String(x.learning_objective_id) === loId; });
+      const grade = slo ? (slo.top_score || 'Not graded') : 'Not graded';
+      lines.push(String(loCode || 'LO') + '  |  ' + String(grade || 'Not graded'));
+    });
+    lines.push('');
+  });
+
+  lines.push('— ' + instructorSignoff + ' (via Project Clarity)');
+  let body = lines.join('\n');
+  if (body.length > 2000) {
+    body = body.slice(0, 1970) + '\n\n[Message trimmed. Ask your instructor for the full printed report if needed.]';
+  }
+  const subject = 'Your progress report — ' + (className || 'Class') + ' (All Assignments)';
+  return { subject, body };
 }
 
 function emailStudentReport(studentId, btnEl, assignmentIdOverride) {
@@ -730,10 +811,7 @@ function emailAllVisibleReports(btnEl) {
         alert('Could not send email reports: ' + (data.error || 'Unknown error') + failures);
         return;
       }
-      const sent = Number(data.sent || 0);
-      const skipped = Number(data.skipped || 0);
-      const failures = Array.isArray(data.failures) ? data.failures.length : 0;
-      alert(`Email send complete.\n\nSent: ${sent}\nSkipped: ${skipped}\nFailed: ${failures}`);
+      alert('Email send complete.');
     })
     .catch(() => {
       alert('Unexpected error sending email reports.');
@@ -743,6 +821,71 @@ function emailAllVisibleReports(btnEl) {
         btnEl.disabled = false;
         btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
         btnEl.textContent = priorText || 'Email All';
+      }
+    });
+}
+
+function emailSelectedAllAssignments(btnEl) {
+  if (selectedAssignmentId) return;
+  const selectedIds = [...document.querySelectorAll('.student-checkbox:checked')].map(cb => String(cb.value || ''));
+  if (!selectedIds.length) {
+    alert('Select at least one student first.');
+    return;
+  }
+  const reports = [];
+  selectedIds.forEach((id) => {
+    const student = studentsData.find((s) => String(s.id) === id);
+    if (!student || !(student.email || '').trim()) return;
+    const payload = buildAllAssignmentsEmailPayloadForStudent(student);
+    reports.push({
+      student_id: id,
+      student_name: student.name || '',
+      subject: payload.subject,
+      body: payload.body
+    });
+  });
+  if (!reports.length) {
+    alert('None of the selected students have saved email addresses.');
+    return;
+  }
+  if (!confirm('Send all-assignment reports directly to ' + reports.length + ' selected student(s)?')) {
+    return;
+  }
+
+  const priorText = btnEl ? btnEl.textContent : 'Email Selected';
+  if (btnEl) {
+    btnEl.disabled = true;
+    btnEl.classList.add('opacity-60', 'cursor-not-allowed');
+    btnEl.textContent = 'Sending...';
+  }
+  fetch(`/api/class/${classId}/send-report-emails`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ reports })
+  })
+    .then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      return { ok: response.ok, data };
+    })
+    .then(({ ok, data }) => {
+      if (!ok || !data.success) {
+        const failures = Array.isArray(data.failures) && data.failures.length
+          ? '\n\n' + data.failures.slice(0, 5).join('\n')
+          : '';
+        alert('Could not send selected reports: ' + (data.error || 'Unknown error') + failures);
+        return;
+      }
+      alert('Email send complete.');
+    })
+    .catch(() => {
+      alert('Unexpected error sending selected reports.');
+    })
+    .finally(() => {
+      if (btnEl) {
+        btnEl.disabled = false;
+        btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
+        updateEmailSelectedButton();
       }
     });
 }
