@@ -30,7 +30,9 @@
           <div class="flex items-center justify-between">
             <div class="flex-1">
               <h3 class="font-medium text-slate-900 dark:text-white">{{ assignment.name }}</h3>
+              {% if instructor_mode == 'mark' and assignment.homework_group %}
               <p class="text-sm text-slate-500 dark:text-slate-400">{{ assignment.homework_group }}</p>
+              {% endif %}
               {% if assignment.assignment_objectives %}
               <div class="mt-2 flex flex-wrap gap-1">
                 {% for ao in assignment.assignment_objectives %}
@@ -908,37 +910,28 @@ document.getElementById('loCsvPreviewConfirm')?.addEventListener('click', assign
 function startLoCsvMobilePoll() {
   if (!window.LO_MOBILE_UPLOAD_TOKEN || !window.LO_CLASS_ID) return;
   stopLoCsvMobilePoll();
-  loCsvMobilePollInterval = setInterval(async function () {
-    try {
-      var r = await fetch(
-        '/api/class/' + encodeURIComponent(window.LO_CLASS_ID) + '/mobile-upload-status/' + encodeURIComponent(window.LO_MOBILE_UPLOAD_TOKEN),
-        { credentials: 'same-origin' }
-      );
-      if (!r.ok) return;
-      var j = await r.json();
-      if (!j.success || !j.ready) return;
-      stopLoCsvMobilePoll();
-      var fr = await fetch(
-        '/api/class/' + encodeURIComponent(window.LO_CLASS_ID) + '/mobile-upload-file/' + encodeURIComponent(window.LO_MOBILE_UPLOAD_TOKEN),
-        { credentials: 'same-origin' }
-      );
-      if (!fr.ok) {
-        alert('Could not retrieve the file from your phone. Try scanning the QR code again.');
-        return;
+  if (window.ClarityUI && typeof window.ClarityUI.startMobileCsvPoll === 'function') {
+    loCsvMobilePollInterval = window.ClarityUI.startMobileCsvPoll({
+      classId: window.LO_CLASS_ID,
+      token: window.LO_MOBILE_UPLOAD_TOKEN,
+      intervalMs: 2000,
+      stop: stopLoCsvMobilePoll,
+      onReady: async function (file) {
+        var st = document.getElementById('loCsvMobileStatus');
+        if (st) {
+          st.textContent = 'CSV received from phone — review the import preview.';
+          st.classList.remove('hidden');
+        }
+        await assignmentsPreviewLoCsv(file);
+      },
+      onError: function (msg) {
+        alert(msg);
+      },
+      onCatch: function (e) {
+        console.error('LO CSV mobile poll:', e);
       }
-      var blob = await fr.blob();
-      var name = j.filename || 'outcomes.csv';
-      var file = new File([blob], name, { type: blob.type || 'text/csv' });
-      var st = document.getElementById('loCsvMobileStatus');
-      if (st) {
-        st.textContent = 'CSV received from phone — review the import preview.';
-        st.classList.remove('hidden');
-      }
-      await assignmentsPreviewLoCsv(file);
-    } catch (e) {
-      console.error('LO CSV mobile poll:', e);
-    }
-  }, 2000);
+    });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', function () {
@@ -946,8 +939,8 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 <script>
-document.querySelectorAll('.mark-only').forEach(el => {
-  if ('{{ instructor_mode }}' === 'shelbi') el.style.display = 'none';
-});
+if (window.ClarityUI && typeof window.ClarityUI.applyInstructorModeVisibility === 'function') {
+  window.ClarityUI.applyInstructorModeVisibility('{{ instructor_mode }}');
+}
 </script>
 {% endblock %}

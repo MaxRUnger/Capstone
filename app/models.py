@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 # Valid mastery grade codes used throughout the grading system
 # MR = mastered on a revision (counts like M for required masteries; shown distinctly)
-MASTERY_GRADES = ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A')
+MASTERY_GRADES = ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A', 'I')
 
 
 class Course:
@@ -62,6 +62,16 @@ class Course:
                 if settings_resp.data:
                     class_data.update(settings_resp.data[0])
             except Exception:
+                # If one newer optional column is missing in DB schema, salvage
+                # auto_convert_m from a narrow query so conversion behavior stays correct.
+                try:
+                    ac_resp = supabase_admin.table("classes").select(
+                        "auto_convert_m"
+                    ).eq("id", class_id).execute()
+                    if ac_resp.data:
+                        class_data["auto_convert_m"] = bool(ac_resp.data[0].get("auto_convert_m"))
+                except Exception:
+                    class_data.setdefault('auto_convert_m', False)
                 class_data.setdefault('auto_convert_m', False)
                 class_data.setdefault('min_masteries', 2)
                 class_data.setdefault('num_learning_objectives', 0)
@@ -133,7 +143,7 @@ class Grade:
     @staticmethod
     def get_priority(mark):
         """Maps letter grades to numerical priorities."""
-        priorities = {'M': 5, 'MR': 5, 'R': 4, 'RQ': 3, 'P': 2, 'X': 1, 'A': 0}
+        priorities = {'M': 5, 'MR': 5, 'R': 4, 'RQ': 3, 'P': 2, 'X': 1, 'I': 1, 'A': 0}
         return priorities.get(mark, -1)
 
     @staticmethod
@@ -160,13 +170,13 @@ class Grade:
                 if val >= 50:
                     return 'R'
                 return 'P'
-            except Exception:
+            except (TypeError, ValueError):
                 pass
 
         # Otherwise assume it's already one of the allowed codes
         if isinstance(score, str):
             score = score.strip().upper()
-            if score in ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A'):
+            if score in ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A', 'I'):
                 return score
 
         return None
@@ -294,6 +304,17 @@ class Homework:
         return False
 
     @staticmethod
+    def is_import_sheet_exam_score_column(name) -> bool:
+        """True for numeric exam-score columns from scans (not mastery LO columns).
+
+        Examples: EX1, EX2, EX3, FEX.
+        """
+        if not name or not str(name).strip():
+            return False
+        n = re.sub(r"\s+", "", str(name).strip().upper())
+        return bool(re.match(r"^EX\d{1,3}$", n) or n == "FEX")
+
+    @staticmethod
     def parse_import_hw_pct(value) -> Optional[int]:
         """Parse a homework cell to an integer 0–100, or -1 (free pass), or None if not parseable.
 
@@ -316,6 +337,27 @@ class Homework:
             return -1
         iv = int(round(v))
         return max(0, min(100, iv))
+
+    @staticmethod
+    def parse_import_exam_score(value) -> Optional[float]:
+        """Parse exam score cell as a numeric score (0-100), preserving decimals."""
+        if value is None:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        s = s.rstrip("%").strip()
+        if not re.match(r"^-?\d+(\.\d+)?$", s):
+            return None
+        try:
+            v = float(s)
+        except ValueError:
+            return None
+        if v < 0:
+            v = 0.0
+        if v > 100:
+            v = 100.0
+        return round(v, 2)
 
     @staticmethod
     def is_exam_grade_eligible_hw_score(score):

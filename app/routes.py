@@ -9,7 +9,7 @@ import socket
 import threading
 import time
 from functools import wraps
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from flask import Blueprint, render_template, request, jsonify, redirect, url_for, session, abort, Response  # type: ignore
 from app.authentication import supabase, supabase_admin
 from app.models import Course, Grade, Student, Homework
@@ -239,6 +239,66 @@ def _student_email_key(email: str) -> str:
 
 def _student_name_key(name: str) -> str:
     return _normalize_spaces((name or "").replace(",", " ").lower())
+
+
+def _exam_storage_keys_for_class(class_id: str) -> Dict[str, set]:
+    """Return exam column -> homework_scores storage keys for this class."""
+    out: Dict[str, set] = {}
+    try:
+        asg_resp = (
+            supabase_admin.table("assignments")
+            .select("id, name, homework_group")
+            .eq("class_id", class_id)
+            .execute()
+        )
+        for a in (asg_resp.data or []):
+            aid = a.get("id")
+            if not aid:
+                continue
+            name_u = str(a.get("name") or "").strip().upper()
+            hg_raw = str(a.get("homework_group") or "").strip()
+            hg_u = hg_raw.upper()
+            storage_key = hg_raw if hg_raw else str(aid)
+            for candidate in (hg_u, name_u):
+                if candidate and Homework.is_import_sheet_exam_score_column(candidate):
+                    out.setdefault(candidate, set()).add(storage_key)
+    except Exception as e:
+        logger.error("Error building exam storage keys for class %s: %s", class_id, e)
+    return out
+
+
+def _class_auto_convert_m_enabled(class_id: str) -> bool:
+    try:
+        resp = (
+            supabase_admin.table("classes")
+            .select("auto_convert_m")
+            .eq("id", class_id)
+            .limit(1)
+            .execute()
+        )
+        if resp.data:
+            return bool(resp.data[0].get("auto_convert_m"))
+    except Exception as e:
+        logger.error("Error reading auto_convert_m for class %s: %s", class_id, e)
+    return False
+
+
+def _assignment_lo_ids(assignment_id: str) -> List[str]:
+    try:
+        ao_resp = (
+            supabase_admin.table("assignment_objectives")
+            .select("learning_objective_id")
+            .eq("assignment_id", assignment_id)
+            .execute()
+        )
+        return [
+            str(r.get("learning_objective_id"))
+            for r in (ao_resp.data or [])
+            if r.get("learning_objective_id")
+        ]
+    except Exception as e:
+        logger.error("Error reading assignment LOs for %s: %s", assignment_id, e)
+        return []
 
 
 def parse_students_csv_text(text: str) -> Tuple[List[Dict[str, str]], List[str]]:
@@ -725,7 +785,11 @@ def _load_students_from_grades(class_id):
     return out
 
 
-def _aggregate_lo_grades(raw_grades, lo_lookup):
+def _aggregate_lo_grades(
+    raw_grades,
+    lo_lookup,
+    mastery_row_allowed: Optional[Callable[[Dict[str, Any]], bool]] = None,
+):
     """Aggregate grades per LO across assignments.
 
     With per-assignment grading, a student may have multiple grade rows for the
@@ -752,9 +816,15 @@ def _aggregate_lo_grades(raw_grades, lo_lookup):
                 'grades_list': [],
             }
         top = g.get('top_score')
-        if Grade.is_mastery_mark(top):
+        row_allows_mastery = True
+        if mastery_row_allowed is not None:
+            try:
+                row_allows_mastery = bool(mastery_row_allowed(g))
+            except Exception:
+                row_allows_mastery = True
+        if Grade.is_mastery_mark(top) and row_allows_mastery:
             lo_grades[lo_id]['m_count'] += 1
-        if top == 'MR':
+        if top == 'MR' and row_allows_mastery:
             lo_grades[lo_id]['mr_count'] += 1
         lo_grades[lo_id]['grades_list'].append(top)
 
@@ -885,16 +955,14 @@ def signup():
         })
 
         if result.user:
-            session['user_id'] = result.user.id
-            session['role'] = 'instructor'
-            session['full_name'] = data.get("name", "")
-            # Create profile row immediately so foreign keys work right away
-            ensure_profile_exists(
-                result.user.id,
-                full_name=data.get("name"),
-                role='instructor'
-            )
-            return jsonify({"success": True, "redirect": "/instructor/dashboard"})
+            # Registration succeeds, but account access is blocked until email confirmation.
+            # Do not create an authenticated app session at signup time.
+            session.clear()
+            return jsonify({
+                "success": True,
+                "requires_email_confirmation": True,
+                "message": "Account created. Please confirm your email before signing in.",
+            })
         return jsonify({"success": False, "message": "Failed to create account. Please try again."})
 
     except Exception as e:
@@ -913,6 +981,16 @@ def student_dashboard():
     auto_convert_m = False
     class_name = None
     if data:
+        # Get class settings for auto-convert
+        enrollments = data.get('enrollments', [])
+        class_id = None
+        if enrollments:
+            cls = enrollments[0].get('classes', {})
+            if cls:
+                auto_convert_m = cls.get('auto_convert_m', False)
+                class_name = cls.get('name')
+                class_id = cls.get('id')
+
         # Build lo_lookup from embedded learning_objectives on each grade
         raw_grades = data.get('grades', []) or []
         lo_lookup = {}
@@ -921,15 +999,29 @@ def student_dashboard():
             lo_id = str(lo.get('id')) if lo.get('id') else None
             if lo_id and lo_id not in lo_lookup:
                 lo_lookup[lo_id] = lo
-        data['learning_objectives'] = _aggregate_lo_grades(raw_grades, lo_lookup)
 
-        # Get class settings for auto-convert
-        enrollments = data.get('enrollments', [])
-        if enrollments:
-            cls = enrollments[0].get('classes', {})
-            if cls:
-                auto_convert_m = cls.get('auto_convert_m', False)
-                class_name = cls.get('name')
+        # Auto-convert mastery counting rule:
+        # with auto_convert_m enabled, M/MR on rows with HW < 65 (and no pass) do not
+        # count toward mastery completion until HW meets threshold.
+        hw_map_by_assignment: Dict[str, Dict[str, Any]] = {}
+
+        def _row_allows_mastery(grade_row: Dict[str, Any]) -> bool:
+            if not auto_convert_m:
+                return True
+            aid = grade_row.get('assignment_id')
+            if not class_id or not aid:
+                return True
+            aid_str = str(aid)
+            if aid_str not in hw_map_by_assignment:
+                hw_map_by_assignment[aid_str] = Homework.get_hw_scores_map_for_assignment(class_id, aid_str)
+            score = hw_map_by_assignment[aid_str].get(session['user_id'])
+            return Homework.is_exam_grade_eligible_hw_score(score)
+
+        data['learning_objectives'] = _aggregate_lo_grades(
+            raw_grades,
+            lo_lookup,
+            mastery_row_allowed=_row_allows_mastery,
+        )
 
     return render_template("student_view.html", student=data, auto_convert_m=auto_convert_m, class_name=class_name)
 
@@ -1506,6 +1598,28 @@ def _parse_lo_csv_upload() -> Tuple[Optional[str], Optional[List[Dict[str, Any]]
     rows, parse_warnings = parse_learning_objectives_csv_text(text)
     if not rows:
         return parse_warnings[0] if parse_warnings else "No objectives to import", None, parse_warnings
+    return None, rows, parse_warnings
+
+
+def _parse_student_csv_upload() -> Tuple[Optional[str], Optional[List[Dict[str, str]]], List[str]]:
+    """Read CSV from request.files['file']; return (error_message or None, rows or None, warnings)."""
+    f = request.files.get("file")
+    if not f or not (f.filename or "").strip():
+        return "Please choose a CSV file.", None, []
+    if not f.filename.lower().endswith(".csv"):
+        return "Upload a .csv file", None, []
+    try:
+        text = f.read().decode("utf-8-sig", errors="replace")
+    except Exception:
+        return "Could not read CSV file", None, []
+
+    rows, parse_warnings = parse_students_csv_text(text)
+    if not rows:
+        return (
+            parse_warnings[0] if parse_warnings else "No valid student rows found",
+            None,
+            parse_warnings,
+        )
     return None, rows, parse_warnings
 
 
@@ -2241,6 +2355,8 @@ def save_grades(class_id):
         data = request.get_json()
         grades_dict = data.get('grades', {})
         assignment_id = data.get('assignment_id')
+        auto_convert = _class_auto_convert_m_enabled(class_id) if assignment_id else False
+        hw_map = Homework.get_hw_scores_map_for_assignment(class_id, assignment_id) if assignment_id else {}
         # Build batch of grade rows and upsert in one call
         grade_rows = []
         for key, grade_value in grades_dict.items():
@@ -2249,6 +2365,12 @@ def save_grades(class_id):
                 student_id, lo_id = parts
                 if lo_id and grade_value:
                     normalized = Grade.normalize_score(grade_value)
+                    if (
+                        auto_convert
+                        and normalized in ('M', 'MR')
+                        and not Homework.is_exam_grade_eligible_hw_score(hw_map.get(student_id))
+                    ):
+                        normalized = 'I'
                     if normalized:
                         row = {"student_id": student_id, "learning_objective_id": lo_id, "top_score": normalized}
                         if assignment_id:
@@ -2278,15 +2400,98 @@ def api_assignment_grades(class_id, assignment_id):
             key = f"{g['student_id']}|{g['learning_objective_id']}"
             grades_map[key] = g['top_score']
 
+        # Import / legacy rows often have assignment_id NULL while still targeting LOs on this
+        # assignment. Class reports load all grade rows per student, so those marks appeared
+        # there but not here when we only filtered by assignment_id. Fill gaps from unscoped rows
+        # for LOs linked to this assignment (explicit assignment-scoped rows win if both exist).
+        ao_resp = supabase_admin.table("assignment_objectives") \
+            .select("learning_objective_id") \
+            .eq("assignment_id", assignment_id) \
+            .execute()
+        lo_ids = [
+            r["learning_objective_id"]
+            for r in (ao_resp.data or [])
+            if r.get("learning_objective_id")
+        ]
+        if lo_ids:
+            unscoped = supabase_admin.table("grades") \
+                .select("student_id, learning_objective_id, top_score") \
+                .is_("assignment_id", None) \
+                .in_("learning_objective_id", lo_ids) \
+                .execute()
+            for g in (unscoped.data or []):
+                key = f"{g['student_id']}|{g['learning_objective_id']}"
+                if key not in grades_map:
+                    grades_map[key] = g["top_score"]
+
         # HW % is shared by all assignments in the same homework_group (see Homework.get_hw_scores_map_for_assignment)
         hw_map = Homework.get_hw_scores_map_for_assignment(class_id, assignment_id)
+
+        # Load imported exam-score columns (EX1/EX2/.../FEX) from homework_scores.
+        exam_keys_by_col = _exam_storage_keys_for_class(class_id)
+        # Also include namespaced keys persisted during import.
+        try:
+            ex_rows = (
+                supabase_admin.table("homework_scores")
+                .select("homework_group")
+                .eq("class_id", class_id)
+                .ilike("homework_group", "EXAM::%")
+                .execute()
+            )
+            for r in (ex_rows.data or []):
+                hg = str(r.get("homework_group") or "").strip()
+                if not hg.upper().startswith("EXAM::"):
+                    continue
+                col = hg.split("::", 1)[1].strip().upper()
+                if col and Homework.is_import_sheet_exam_score_column(col):
+                    exam_keys_by_col.setdefault(col, set()).add(hg)
+        except Exception as e:
+            logger.error("Error loading exam fallback keys for class %s: %s", class_id, e)
+
+        def _exam_col_sort_key(col: str):
+            m = re.match(r"^EX(\d+)$", str(col).upper())
+            if m:
+                return (0, int(m.group(1)))
+            if str(col).upper() == "FEX":
+                return (1, 0)
+            return (2, str(col))
+
+        exam_columns = sorted(exam_keys_by_col.keys(), key=_exam_col_sort_key)
+        exam_scores: Dict[str, Dict[str, Any]] = {c: {} for c in exam_columns}
+        for col in exam_columns:
+            keys = [k for k in exam_keys_by_col.get(col, set()) if k]
+            if not keys:
+                continue
+            try:
+                rows = (
+                    supabase_admin.table("homework_scores")
+                    .select("student_id, score_pct")
+                    .eq("class_id", class_id)
+                    .in_("homework_group", keys)
+                    .execute()
+                )
+                for r in (rows.data or []):
+                    sid = str(r.get("student_id") or "")
+                    if sid:
+                        exam_scores[col][sid] = r.get("score_pct")
+            except Exception as e:
+                logger.error("Error loading exam scores for %s: %s", col, e)
 
         # Compute revision eligibility per student (HW >= 65% or pass used)
         eligibility = {}
         for sid, score in hw_map.items():
-            eligibility[sid] = score == -1 or (score is not None and score >= Homework.REVISION_THRESHOLD)
+            eligibility[sid] = score == -1 or (
+                score is not None and score >= Homework.EXAM_GRADE_HW_THRESHOLD
+            )
 
-        return jsonify({"success": True, "grades": grades_map, "hw_scores": hw_map, "revision_eligible": eligibility})
+        return jsonify({
+            "success": True,
+            "grades": grades_map,
+            "hw_scores": hw_map,
+            "exam_scores": exam_scores,
+            "exam_columns": exam_columns,
+            "revision_eligible": eligibility,
+        })
     except Exception as e:
         logger.error("fetching assignment grades failed: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
@@ -2305,16 +2510,102 @@ def save_hw_percentage(class_id):
         score = int(score)
         if score != -1:
             score = max(0, min(100, score))
+        # Accept IDs with incidental whitespace from client-side state.
+        assignment_id = str(assignment_id).strip()
         hw_key = Homework.resolve_hw_group_storage_key(class_id, assignment_id)
         if hw_key is None:
             return jsonify({"success": False, "error": "Assignment not found for this class"}), 404
+        hw_group = str(hw_key).strip()
+        row = {
+            "student_id": student_id,
+            "class_id": class_id,
+            "homework_group": hw_group,
+            "score_pct": score,
+        }
+        # Single-row list so PostgREST gets explicit columns=… (more reliable than a bare dict).
         supabase_admin.table("homework_scores").upsert(
-            {"student_id": student_id, "class_id": class_id, "homework_group": hw_key, "score_pct": score},
-            on_conflict="student_id,class_id,homework_group"
+            [row],
+            on_conflict="student_id,class_id,homework_group",
         ).execute()
+
+        # Persisted I behavior:
+        # - If auto-convert is enabled and HW is below exam threshold (or pass), store M/MR as I
+        # - If HW rises to threshold+, restore stored I back to M
+        if assignment_id and _class_auto_convert_m_enabled(class_id):
+            lo_ids = _assignment_lo_ids(assignment_id)
+            if lo_ids:
+                mastery_allowed = Homework.is_exam_grade_eligible_hw_score(score)
+                if mastery_allowed:
+                    supabase_admin.table("grades").update({"top_score": "M"}) \
+                        .eq("student_id", student_id) \
+                        .eq("assignment_id", assignment_id) \
+                        .in_("learning_objective_id", lo_ids) \
+                        .eq("top_score", "I").execute()
+                    supabase_admin.table("grades").update({"second_score": "M"}) \
+                        .eq("student_id", student_id) \
+                        .eq("assignment_id", assignment_id) \
+                        .in_("learning_objective_id", lo_ids) \
+                        .eq("second_score", "I").execute()
+                else:
+                    supabase_admin.table("grades").update({"top_score": "I"}) \
+                        .eq("student_id", student_id) \
+                        .eq("assignment_id", assignment_id) \
+                        .in_("learning_objective_id", lo_ids) \
+                        .in_("top_score", ["M", "MR"]).execute()
+                    supabase_admin.table("grades").update({"second_score": "I"}) \
+                        .eq("student_id", student_id) \
+                        .eq("assignment_id", assignment_id) \
+                        .in_("learning_objective_id", lo_ids) \
+                        .in_("second_score", ["M", "MR"]).execute()
+
         return jsonify({"success": True})
     except Exception as e:
         logger.error("saving hw percentage failed: %s", e)
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@main_bp.route("/api/class/<class_id>/save-exam-score", methods=["POST"])
+@api_login_required
+def save_exam_score(class_id):
+    try:
+        data = request.get_json() or {}
+        student_id = data.get("student_id")
+        exam_col = str(data.get("exam_col") or "").strip().upper()
+        score = data.get("score")
+        if not student_id or not exam_col:
+            return jsonify({"success": False, "error": "student_id and exam_col required"}), 400
+        if not Homework.is_import_sheet_exam_score_column(exam_col):
+            return jsonify({"success": False, "error": "Invalid exam column"}), 400
+
+        parsed = Homework.parse_import_exam_score(score)
+        # Empty clears exam score row(s) for this student+column.
+        is_clear = parsed is None and str(score if score is not None else "").strip() == ""
+
+        keys = set(_exam_storage_keys_for_class(class_id).get(exam_col, set()))
+        keys.add(f"EXAM::{exam_col}")
+        if not keys:
+            return jsonify({"success": False, "error": "No storage keys found for exam column"}), 400
+
+        if is_clear:
+            for k in keys:
+                supabase_admin.table("homework_scores").delete().eq("student_id", student_id).eq("class_id", class_id).eq("homework_group", k).execute()
+            return jsonify({"success": True})
+
+        if parsed is None:
+            return jsonify({"success": False, "error": "Score must be numeric 0-100"}), 400
+
+        rows = [{
+            "student_id": student_id,
+            "class_id": class_id,
+            "homework_group": k,
+            "score_pct": parsed,
+        } for k in keys]
+        supabase_admin.table("homework_scores").upsert(
+            rows, on_conflict="student_id,class_id,homework_group"
+        ).execute()
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.error("saving exam score failed: %s", e)
         return jsonify({"success": False, "error": str(e)}), 500
 
 
@@ -2447,84 +2738,87 @@ def api_add_student_to_class(class_id):
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+def _build_student_upload_enrollment_indexes(class_id: str):
+    """Return class enrollment indexes used by CSV preview/import student upload flows."""
+    enroll_resp = (
+        supabase_admin.table("enrollments")
+        .select("student_id")
+        .eq("class_id", class_id)
+        .execute()
+    )
+    enrolled_ids = [str(r.get("student_id")) for r in (enroll_resp.data or []) if r.get("student_id")]
+    enrolled_set = set(enrolled_ids)
+
+    enrolled_profiles: List[Dict[str, Any]] = []
+    if enrolled_ids:
+        prof_resp = (
+            supabase_admin.table("profiles")
+            .select("id, full_name, email")
+            .in_("id", enrolled_ids)
+            .execute()
+        )
+        enrolled_profiles = prof_resp.data or []
+
+    enrolled_by_email: Dict[str, Dict[str, Any]] = {}
+    enrolled_by_name: Dict[str, List[Dict[str, Any]]] = {}
+    missing_email_by_name: Dict[str, List[Dict[str, Any]]] = {}
+    for p in enrolled_profiles:
+        sid = str(p.get("id") or "").strip()
+        if not sid:
+            continue
+        profile = {
+            "id": sid,
+            "full_name": _normalize_spaces((p.get("full_name") or "").strip()),
+            "email": _student_email_key((p.get("email") or "").strip()),
+        }
+        if profile["email"]:
+            enrolled_by_email[profile["email"]] = profile
+        nk = _student_name_key(profile["full_name"])
+        enrolled_by_name.setdefault(nk, []).append(profile)
+        if not profile["email"]:
+            missing_email_by_name.setdefault(nk, []).append(profile)
+
+    return enrolled_set, enrolled_by_email, enrolled_by_name, missing_email_by_name
+
+
+def _build_profiles_by_email_for_rows(rows: List[Dict[str, str]]) -> Dict[str, Dict[str, Any]]:
+    """Return global profile lookup by normalized email for provided CSV rows."""
+    provided_email_keys = {
+        _student_email_key(r.get("email") or "")
+        for r in rows
+        if _student_email_key(r.get("email") or "")
+    }
+    profiles_by_email: Dict[str, Dict[str, Any]] = {}
+    if provided_email_keys:
+        global_email_resp = (
+            supabase_admin.table("profiles")
+            .select("id, full_name, email")
+            .in_("email", list(provided_email_keys))
+            .execute()
+        )
+        for p in (global_email_resp.data or []):
+            ek = _student_email_key(p.get("email") or "")
+            if ek:
+                profiles_by_email[ek] = p
+    return profiles_by_email
+
+
 @main_bp.route("/api/class/<class_id>/upload_students", methods=["POST"])
 @api_instructor_required
 def api_upload_students_to_class(class_id):
-    f = request.files.get("file")
-    if not f or not (f.filename or "").strip():
-        return jsonify({"success": False, "error": "Please choose a CSV file."}), 400
-    if not f.filename.lower().endswith(".csv"):
-        return jsonify({"success": False, "error": "Upload a .csv file"}), 400
-
-    try:
-        text = f.read().decode("utf-8-sig", errors="replace")
-    except Exception:
-        return jsonify({"success": False, "error": "Could not read CSV file"}), 400
-
-    rows, parse_warnings = parse_students_csv_text(text)
-    if not rows:
+    err, rows, parse_warnings = _parse_student_csv_upload()
+    if err:
         return jsonify({
             "success": False,
-            "error": parse_warnings[0] if parse_warnings else "No valid student rows found",
+            "error": err,
             "warnings": parse_warnings,
         }), 400
 
     try:
-        enroll_resp = (
-            supabase_admin.table("enrollments")
-            .select("student_id")
-            .eq("class_id", class_id)
-            .execute()
+        enrolled_set, enrolled_by_email, enrolled_by_name, missing_email_by_name = (
+            _build_student_upload_enrollment_indexes(class_id)
         )
-        enrolled_ids = [str(r.get("student_id")) for r in (enroll_resp.data or []) if r.get("student_id")]
-        enrolled_set = set(enrolled_ids)
-
-        enrolled_profiles: List[Dict[str, Any]] = []
-        if enrolled_ids:
-            prof_resp = (
-                supabase_admin.table("profiles")
-                .select("id, full_name, email")
-                .in_("id", enrolled_ids)
-                .execute()
-            )
-            enrolled_profiles = prof_resp.data or []
-
-        enrolled_by_email: Dict[str, Dict[str, Any]] = {}
-        enrolled_by_name: Dict[str, List[Dict[str, Any]]] = {}
-        missing_email_by_name: Dict[str, List[Dict[str, Any]]] = {}
-        for p in enrolled_profiles:
-            sid = str(p.get("id") or "").strip()
-            if not sid:
-                continue
-            profile = {
-                "id": sid,
-                "full_name": _normalize_spaces((p.get("full_name") or "").strip()),
-                "email": _student_email_key((p.get("email") or "").strip()),
-            }
-            if profile["email"]:
-                enrolled_by_email[profile["email"]] = profile
-            nk = _student_name_key(profile["full_name"])
-            enrolled_by_name.setdefault(nk, []).append(profile)
-            if not profile["email"]:
-                missing_email_by_name.setdefault(nk, []).append(profile)
-
-        provided_email_keys = {
-            _student_email_key(r.get("email") or "")
-            for r in rows
-            if _student_email_key(r.get("email") or "")
-        }
-        profiles_by_email: Dict[str, Dict[str, Any]] = {}
-        if provided_email_keys:
-            global_email_resp = (
-                supabase_admin.table("profiles")
-                .select("id, full_name, email")
-                .in_("email", list(provided_email_keys))
-                .execute()
-            )
-            for p in (global_email_resp.data or []):
-                ek = _student_email_key(p.get("email") or "")
-                if ek:
-                    profiles_by_email[ek] = p
+        profiles_by_email = _build_profiles_by_email_for_rows(rows)
 
         stats = {
             "created_profiles": 0,
@@ -2678,80 +2972,19 @@ def api_upload_students_to_class(class_id):
 @main_bp.route("/api/class/<class_id>/preview-upload-students", methods=["POST"])
 @api_instructor_required
 def api_preview_upload_students(class_id):
-    f = request.files.get("file")
-    if not f or not (f.filename or "").strip():
-        return jsonify({"success": False, "error": "Please choose a CSV file."}), 400
-    if not f.filename.lower().endswith(".csv"):
-        return jsonify({"success": False, "error": "Upload a .csv file"}), 400
-
-    try:
-        text = f.read().decode("utf-8-sig", errors="replace")
-    except Exception:
-        return jsonify({"success": False, "error": "Could not read CSV file"}), 400
-
-    rows, parse_warnings = parse_students_csv_text(text)
-    if not rows:
+    err, rows, parse_warnings = _parse_student_csv_upload()
+    if err:
         return jsonify({
             "success": False,
-            "error": parse_warnings[0] if parse_warnings else "No valid student rows found",
+            "error": err,
             "warnings": parse_warnings,
         }), 400
 
     try:
-        enroll_resp = (
-            supabase_admin.table("enrollments")
-            .select("student_id")
-            .eq("class_id", class_id)
-            .execute()
+        _, enrolled_by_email, enrolled_by_name, missing_email_by_name = (
+            _build_student_upload_enrollment_indexes(class_id)
         )
-        enrolled_ids = [str(r.get("student_id")) for r in (enroll_resp.data or []) if r.get("student_id")]
-
-        enrolled_profiles: List[Dict[str, Any]] = []
-        if enrolled_ids:
-            prof_resp = (
-                supabase_admin.table("profiles")
-                .select("id, full_name, email")
-                .in_("id", enrolled_ids)
-                .execute()
-            )
-            enrolled_profiles = prof_resp.data or []
-
-        enrolled_by_email: Dict[str, Dict[str, Any]] = {}
-        enrolled_by_name: Dict[str, List[Dict[str, Any]]] = {}
-        missing_email_by_name: Dict[str, List[Dict[str, Any]]] = {}
-        for p in enrolled_profiles:
-            sid = str(p.get("id") or "").strip()
-            if not sid:
-                continue
-            profile = {
-                "id": sid,
-                "full_name": _normalize_spaces((p.get("full_name") or "").strip()),
-                "email": _student_email_key((p.get("email") or "").strip()),
-            }
-            if profile["email"]:
-                enrolled_by_email[profile["email"]] = profile
-            nk = _student_name_key(profile["full_name"])
-            enrolled_by_name.setdefault(nk, []).append(profile)
-            if not profile["email"]:
-                missing_email_by_name.setdefault(nk, []).append(profile)
-
-        provided_email_keys = {
-            _student_email_key(r.get("email") or "")
-            for r in rows
-            if _student_email_key(r.get("email") or "")
-        }
-        profiles_by_email: Dict[str, Dict[str, Any]] = {}
-        if provided_email_keys:
-            global_email_resp = (
-                supabase_admin.table("profiles")
-                .select("id, full_name, email")
-                .in_("email", list(provided_email_keys))
-                .execute()
-            )
-            for p in (global_email_resp.data or []):
-                ek = _student_email_key(p.get("email") or "")
-                if ek:
-                    profiles_by_email[ek] = p
+        profiles_by_email = _build_profiles_by_email_for_rows(rows)
 
         preview_rows: List[Dict[str, Any]] = []
         stats = {
@@ -2901,9 +3134,15 @@ def api_import_grades():
     assignment_id = data.get('assignment_id')
     students = data.get('students', []) or []
     extracted_los = data.get('learning_objectives', []) or []
-
     if not class_id:
         return jsonify({"success": False, "error": "Missing class_id"}), 400
+
+    # Keep import-only numeric columns (e.g., EX1/FEX) out of mastery LO creation/linking.
+    extracted_los = [
+        lo for lo in extracted_los
+        if not Homework.is_import_sheet_hw_column(lo)
+        and not Homework.is_import_sheet_exam_score_column(lo)
+    ]
 
     # Load existing LOs for the class (map by code and optional description text)
     try:
@@ -2939,6 +3178,8 @@ def api_import_grades():
 
     imported = 0
     grade_rows = []
+    exam_score_rows = []
+    exam_storage_keys_by_col = _exam_storage_keys_for_class(class_id)
 
     # Link all extracted LOs to the selected assignment (if not already linked)
     if assignment_id:
@@ -2984,7 +3225,7 @@ def api_import_grades():
         if not profile_id:
             profile_id = str(uuid4())
             try:
-                result = supabase_admin.table("profiles").insert({
+                supabase_admin.table("profiles").insert({
                     "id": profile_id,
                     "full_name": full_name,
                     "role": "student"
@@ -3007,6 +3248,7 @@ def api_import_grades():
 
         # Build grade rows to batch-upsert later
         grades = student.get('grades', {}) or {}
+        exam_scores = student.get('exam_scores', {}) or {}
         for lo_name, mark in grades.items():
             if not lo_name or not mark:
                 continue
@@ -3025,6 +3267,27 @@ def api_import_grades():
                 "top_score": normalized,
                 "assignment_id": assignment_id
             })
+
+        for exam_col, raw_score in exam_scores.items():
+            if not exam_col:
+                continue
+            exam_col_norm = str(exam_col).strip().upper()
+            if not Homework.is_import_sheet_exam_score_column(exam_col_norm):
+                continue
+            parsed_exam = Homework.parse_import_exam_score(raw_score)
+            if parsed_exam is None:
+                continue
+            storage_keys = set(exam_storage_keys_by_col.get(exam_col_norm, set()))
+            # Keep namespaced fallback so raw exam imports remain recoverable even if
+            # no assignment key currently matches this exam column.
+            storage_keys.add(f"EXAM::{exam_col_norm}")
+            for exam_group_key in storage_keys:
+                exam_score_rows.append({
+                    "student_id": profile_id,
+                    "class_id": class_id,
+                    "homework_group": exam_group_key,
+                    "score_pct": parsed_exam,
+                })
 
         imported += 1
 
@@ -3046,7 +3309,26 @@ def api_import_grades():
     except Exception as e:
         logger.error("Error processing grades in bulk: %s", e)
 
-    return jsonify({"success": True, "imported_students": imported, "imported_grades": len(grade_rows)}), 200
+    # Persist exam-score numeric columns in homework_scores using namespaced group keys.
+    try:
+        chunk_size = 150
+        for i in range(0, len(exam_score_rows), chunk_size):
+            chunk = exam_score_rows[i:i + chunk_size]
+            if not chunk:
+                continue
+            supabase_admin.table("homework_scores").upsert(
+                chunk, on_conflict="student_id,class_id,homework_group"
+            ).execute()
+            logger.info("Upserted %d exam numeric scores", len(chunk))
+    except Exception as e:
+        logger.error("Error processing exam numeric scores in bulk: %s", e)
+
+    return jsonify({
+        "success": True,
+        "imported_students": imported,
+        "imported_grades": len(grade_rows),
+        "imported_exam_scores": len(exam_score_rows),
+    }), 200
 
 
 @main_bp.route("/api/analyze-grade-pdf", methods=["POST"])
@@ -3109,6 +3391,7 @@ def analyze_grade_pdf():
             "data": {
                 "students": extracted_data.get('students', []),
                 "learning_objectives": extracted_data.get('learning_objectives', []),
+                "exam_score_columns": extracted_data.get('exam_score_columns', []),
                 "raw_text": extracted_data.get('raw_text', '')
             }
         }), 200

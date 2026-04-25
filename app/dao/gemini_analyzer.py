@@ -3,6 +3,22 @@ Gemini Vision module for parsing grade sheet photos/PDFs.
 Uses Google Gemini Vision API for extraction.
 Designed for photographed paper grade sheets with table structure.
 
+Model selection (see also ``GradeSheetGeminiAnalyzer.__init__``):
+    * ``GEMINI_VISION_MODEL`` — primary model id (default: ``gemini-2.5-flash``).
+    * ``GEMINI_FALLBACK_MODELS`` — optional comma-separated ids tried in order after
+      the primary exhausts transient retries (e.g. ``gemini-2.0-flash``). Only add
+      names that your API key can call: check **Google AI Studio → Models**, or
+      run a one-off ``generate_content`` in the API docs; **404 / PERMISSION_DENIED**
+      means that model is not available for your project.
+
+    * ``GEMINI_MAX_WALL_SEC`` — hard cap for the **entire** scan (PDF→images + API +
+      retry sleeps), default **58** seconds. When the limit is hit, the user sees a
+      clear timeout (try fewer pages / lower resolution export). Low billing tiers
+      (e.g. Tier 1) often need smaller inputs to finish under the cap.
+
+    * ``GEMINI_PDF_ZOOM`` — PyMuPDF render scale for PDF pages (default **1.25**;
+      was 2.0). Lower = faster upload and less vision payload; range clamped 1.0–2.0.
+
 Handles:
 - Printed tables with grid lines
 - Mixed printed text and handwritten grade marks
@@ -11,12 +27,21 @@ Handles:
 """
 
 from typing import Dict, List, Optional
-import io
+import logging
 import os
 import json
+import random
 import re
+import time
 
 from app.models import Homework
+
+logger = logging.getLogger(__name__)
+
+# Transient errors: exponential backoff between attempts (capped by wall-clock deadline).
+_GEMINI_RETRY_FIRST_SEC = 1.5
+_GEMINI_RETRY_PER_SLEEP_CAP_SEC = 12.0
+_DEFAULT_GEMINI_MAX_WALL_SEC = 58.0
 
 try:
     import fitz  # type: ignore  # PyMuPDF for PDF→image conversion
@@ -35,7 +60,10 @@ except ImportError:
 _EXTRACTION_PROMPT = """You are analyzing a photograph or scan of a paper grade sheet used in mastery-based grading.
 
 The sheet is a table with:
-- A header row containing column names. The first column is student names. The remaining columns are learning objective codes (like EX1, A7, M1, D2, LO1, LO2, etc.) or homework score columns (like HW, HW%, Score).
+- A header row containing column names. The first column is student names. The remaining columns are one of:
+  - learning objective codes (like A7, M1, D2, LO1, LO2, etc.)
+  - exam score columns (EX1, EX2, EX3, FEX) with numeric values
+  - homework score columns (like HW, HW%, Homework).
 - Each subsequent row is a student. The first cell is the student's full name. The remaining cells contain grade marks.
 
 Valid grade marks are:
@@ -67,6 +95,7 @@ Rules:
 - "learning_objectives" is the ordered list of column headers (excluding the student name column), in left-to-right order.
 - Each student's "grades" object uses the column header as key and the grade mark as value.
 - Columns for homework completion percentage must use headers like HW, HW%, Homework, or HW1 — not fake learning objective codes. Put numeric homework scores only under those columns.
+- EX1/EX2/EX3/FEX are exam score columns (numeric), not mastery learning objectives.
 - Omit empty/blank cells from the grades object entirely.
 - Normalize all grade marks to uppercase (M, MR, P, X, R, RQ, A).
 - Convert any checkmark symbol to "P" for learning-objective columns only (not for homework % columns).
@@ -83,6 +112,20 @@ class GradeSheetGeminiAnalyzer:
     Sends images to Gemini and receives structured JSON with student grades.
     """
 
+    @staticmethod
+    def _vision_model_ids_from_env() -> List[str]:
+        """Ordered model ids: primary from GEMINI_VISION_MODEL, then GEMINI_FALLBACK_MODELS."""
+        primary = (os.environ.get("GEMINI_VISION_MODEL") or "gemini-2.5-flash").strip() or "gemini-2.5-flash"
+        raw = os.environ.get("GEMINI_FALLBACK_MODELS", "")
+        extras = [m.strip() for m in raw.split(",") if m.strip()]
+        seen = set()
+        out: List[str] = []
+        for m in [primary] + extras:
+            if m not in seen:
+                seen.add(m)
+                out.append(m)
+        return out
+
     def __init__(self):
         """Initialize the analyzer with Gemini client."""
         api_key = os.environ.get("GEMINI_API_KEY")
@@ -91,7 +134,23 @@ class GradeSheetGeminiAnalyzer:
         if not HAS_GENAI:
             raise ImportError("google-genai not installed. Run: pip install google-genai")
         self.client = genai.Client(api_key=api_key)
-        self.models = ["gemini-2.5-flash"]
+        self.models = self._vision_model_ids_from_env()
+        try:
+            self.max_wall_sec = float(
+                os.environ.get(
+                    "GEMINI_MAX_WALL_SEC",
+                    str(_DEFAULT_GEMINI_MAX_WALL_SEC),
+                )
+            )
+        except ValueError:
+            self.max_wall_sec = _DEFAULT_GEMINI_MAX_WALL_SEC
+        # Whole-job ceiling: PDF raster + vision API + sleeps (seconds).
+        self.max_wall_sec = max(35.0, min(120.0, self.max_wall_sec))
+        try:
+            z = float(os.environ.get("GEMINI_PDF_ZOOM", "1.25"))
+        except ValueError:
+            z = 1.25
+        self.pdf_zoom = max(1.0, min(2.0, z))
     
     def analyze_pdf(self, file_obj) -> Dict:
         """
@@ -112,31 +171,42 @@ class GradeSheetGeminiAnalyzer:
             else:
                 file_bytes = file_obj
 
-            print(f"[Gemini] analyze_pdf called, {len(file_bytes)} bytes")
+            logger.info("[Gemini] analyze_pdf called, %d bytes", len(file_bytes))
+
+            deadline = _t0 + self.max_wall_sec
 
             # Convert file to image parts for Gemini
-            image_parts = self._file_to_image_parts(file_bytes)
-            print(f"[Gemini] Prepared {len(image_parts)} image(s) in {_time.time()-_t0:.1f}s")
+            image_parts = self._file_to_image_parts(file_bytes, deadline)
+            logger.info(
+                "[Gemini] Prepared %d image(s) in %.1fs",
+                len(image_parts),
+                _time.time() - _t0,
+            )
 
             if not image_parts:
                 raise Exception("Could not extract images from file")
 
             # Send to Gemini for extraction
-            extracted = self._call_gemini(image_parts)
-            print(f"[Gemini] Extraction done in {_time.time()-_t0:.1f}s")
-            print(f"[Gemini] Found {len(extracted['students'])} students, "
-                  f"{len(extracted['learning_objectives'])} LOs")
+            extracted = self._call_gemini(image_parts, deadline)
+            logger.info("[Gemini] Extraction done in %.1fs", _time.time() - _t0)
+            logger.info(
+                "[Gemini] Found %d students, %d LOs",
+                len(extracted["students"]),
+                len(extracted["learning_objectives"]),
+            )
 
             # Build raw text for display
             raw_lines: List[str] = []
             headers = list(extracted['learning_objectives'])
             hw_lbl = extracted.get('homework_column')
+            exam_cols = list(extracted.get('exam_score_columns') or [])
             has_hw = any((s.get('homework_pct') or '').strip() for s in extracted['students'])
-            line_headers = headers + ([hw_lbl] if (hw_lbl and has_hw) else [])
+            line_headers = headers + exam_cols + ([hw_lbl] if (hw_lbl and has_hw) else [])
             if line_headers:
                 raw_lines.append('Name | ' + ' | '.join(line_headers))
             for s in extracted['students']:
                 cells = [str(s['grades'].get(h, '')) for h in headers]
+                cells.extend([str((s.get("exam_scores") or {}).get(h, "")) for h in exam_cols])
                 if hw_lbl and has_hw:
                     cells.append(str(s.get('homework_pct', '')))
                 raw_lines.append(f"{s['name']} | {' | '.join(cells)}")
@@ -145,16 +215,25 @@ class GradeSheetGeminiAnalyzer:
                 'students': extracted['students'],
                 'learning_objectives': extracted['learning_objectives'],
                 'homework_column': extracted.get('homework_column'),
+                'exam_score_columns': extracted.get('exam_score_columns', []),
                 'raw_text': '\n'.join(raw_lines),
                 'success': True
             }
 
         except Exception as e:
-            import traceback
-            traceback.print_exc()
+            logger.exception("Error analyzing file")
             raise Exception(f"Error analyzing file: {str(e)}")
 
-    def _file_to_image_parts(self, file_bytes: bytes) -> List:
+    @staticmethod
+    def _wall_timeout_exception(cap_sec: float, detail: str) -> Exception:
+        cap = int(round(max(1.0, cap_sec)))
+        return Exception(
+            f"Grade sheet scan exceeded the {cap}s time limit ({detail}). "
+            "Try fewer PDF pages, export one page as an image, or increase GEMINI_MAX_WALL_SEC if needed. "
+            "Heavy sheets on low API tiers often need a smaller file to finish on time."
+        )
+
+    def _file_to_image_parts(self, file_bytes: bytes, deadline: float) -> List:
         """Convert PDF or image file bytes into Gemini Part objects."""
         parts = []
 
@@ -164,7 +243,12 @@ class GradeSheetGeminiAnalyzer:
                     "PyMuPDF is required for PDF files. Run: pip install pymupdf")
             doc = fitz.open(stream=file_bytes, filetype="pdf")
             for page in doc:
-                mat = fitz.Matrix(2, 2)  # 2x zoom for better quality
+                if time.time() >= deadline:
+                    doc.close()
+                    raise self._wall_timeout_exception(
+                        self.max_wall_sec, "while converting PDF pages"
+                    )
+                mat = fitz.Matrix(self.pdf_zoom, self.pdf_zoom)
                 pix = page.get_pixmap(matrix=mat)
                 img_bytes = pix.tobytes("png")
                 parts.append(types.Part.from_bytes(
@@ -191,33 +275,110 @@ class GradeSheetGeminiAnalyzer:
             return "image/webp"
         return "image/jpeg"
 
-    def _call_gemini(self, image_parts: List) -> Dict:
-        """Send image(s) to Gemini and parse the structured JSON response.
-        Tries each model in self.models, falling back on any error."""
-        contents = image_parts + [_EXTRACTION_PROMPT]
-        last_error = None
+    @staticmethod
+    def _is_retryable_gemini_error(exc: BaseException) -> bool:
+        """True for overload / rate limits / transient server errors worth sleeping and retrying."""
+        msg = str(exc).lower()
+        markers = (
+            "503",
+            "429",
+            "unavailable",
+            "resource_exhausted",
+            "deadline exceeded",
+            "try again",
+            "overloaded",
+            "capacity",
+            "temporar",
+            "rate limit",
+            "quota",
+            "econnreset",
+            "timeout",
+            "timed out",
+        )
+        return any(m in msg for m in markers)
 
-        model = self.models[0]
-        try:
-            print(f"[Gemini] Trying model: {model}")
-            response = self.client.models.generate_content(
-                model=model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    temperature=0.1,
-                )
+    @staticmethod
+    def _format_final_gemini_error(exc: BaseException) -> Exception:
+        """User-facing error after retries are exhausted (or a non-retryable failure)."""
+        msg = str(exc)
+        low = msg.lower()
+        if "time limit" in low or ("exceeded the" in low and "limit" in low):
+            return Exception(msg)
+        if "503" in msg or "unavailable" in low or "overloaded" in low or "capacity" in low:
+            return Exception(
+                "The Gemini AI service is temporarily busy. Please try again in a few minutes."
             )
-            response_text = response.text.strip()
-            parsed = self._parse_response(response_text)
-            print(f"[Gemini] Success with model: {model}")
-            return self._normalize_data(parsed)
-        except Exception as e:
-            error_str = str(e)
-            print(f"[Gemini] Model {model} failed: {error_str}")
-            if '503' in error_str or 'UNAVAILABLE' in error_str:
-                raise Exception("The Gemini AI service is temporarily busy. Please try again in a few minutes.")
-            raise Exception(f"Gemini API error: {error_str}")
+        if "429" in msg or "resource_exhausted" in low or "rate limit" in low or "quota" in low:
+            return Exception(
+                "The Gemini API rate limit was hit. Wait a minute and try again, or try a smaller file."
+            )
+        return Exception(f"Gemini API error: {msg}")
+
+    def _call_gemini(self, image_parts: List, deadline: float) -> Dict:
+        """Send image(s) to Gemini and parse the structured JSON response.
+
+        Retries on transient errors with exponential backoff until ``deadline``
+        (wall clock, shared across models). No work continues past the deadline.
+        """
+        contents = image_parts + [_EXTRACTION_PROMPT]
+        last_error: Optional[BaseException] = None
+
+        for model in self.models:
+            attempt = 0
+            while True:
+                if time.time() >= deadline:
+                    raise self._wall_timeout_exception(
+                        self.max_wall_sec, "during AI extraction (time ran out before success)"
+                    )
+                try:
+                    wall_left = max(0.0, deadline - time.time())
+                    logger.info(
+                        f"[Gemini] Trying model: {model} "
+                        f"({wall_left:.0f}s left before {int(self.max_wall_sec)}s cap)"
+                    )
+                    response = self.client.models.generate_content(
+                        model=model,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            temperature=0.1,
+                        )
+                    )
+                    response_text = response.text.strip()
+                    parsed = self._parse_response(response_text)
+                    logger.info("[Gemini] Success with model: %s", model)
+                    return self._normalize_data(parsed)
+                except Exception as e:
+                    last_error = e
+                    logger.warning("[Gemini] Model %s failed: %s", model, e)
+                    if not self._is_retryable_gemini_error(e):
+                        raise self._format_final_gemini_error(e) from e
+                    wall_left = deadline - time.time()
+                    if wall_left < 1.5:
+                        logger.info(
+                            "[Gemini] Wall clock nearly exhausted; "
+                            "switching model or failing."
+                        )
+                        break
+                    delay = min(
+                        _GEMINI_RETRY_PER_SLEEP_CAP_SEC,
+                        _GEMINI_RETRY_FIRST_SEC * (2**attempt) + random.uniform(0, 0.6),
+                        max(0.0, wall_left - 1.0),
+                    )
+                    if delay < 0.35:
+                        break
+                    logger.info(
+                        f"[Gemini] Retryable error; sleeping {delay:.1f}s "
+                        f"({wall_left:.0f}s wall remaining)"
+                    )
+                    time.sleep(delay)
+                    attempt += 1
+                    if attempt > 40:
+                        break
+
+        if last_error is not None:
+            raise self._format_final_gemini_error(last_error) from last_error
+        raise Exception("Gemini API error: unknown failure")
 
     def _parse_response(self, response_text: str) -> Dict:
         """Parse the Gemini response text into a dict."""
@@ -235,14 +396,14 @@ class GradeSheetGeminiAnalyzer:
         try:
             return json.loads(text)
         except json.JSONDecodeError as e:
-            print(f"[Gemini] Failed to parse response: {e}")
-            print(f"[Gemini] Response text: {response_text[:500]}")
+            logger.warning("[Gemini] Failed to parse response: %s", e)
+            logger.debug("[Gemini] Response text preview: %s", response_text[:500])
             raise Exception("Failed to parse grade sheet data from AI response")
 
     def _normalize_data(self, data: Dict) -> Dict:
         """Normalize and validate the extracted data.
 
-        Splits homework percentage columns (HW, Homework, etc.) out of the LO list so they are
+        Splits homework and numeric exam-score columns out of the LO list so they are
         not stored as learning objectives or coerced to mastery codes.
         """
         learning_objectives = list(data.get('learning_objectives', []) or [])
@@ -251,7 +412,15 @@ class GradeSheetGeminiAnalyzer:
         valid_marks = {'M', 'MR', 'X', 'R', 'P', 'A', 'RQ', '/'}
 
         hw_headers = [h for h in learning_objectives if Homework.is_import_sheet_hw_column(h)]
-        lo_only = [h for h in learning_objectives if not Homework.is_import_sheet_hw_column(h)]
+        exam_headers = [
+            h for h in learning_objectives
+            if Homework.is_import_sheet_exam_score_column(h)
+        ]
+        lo_only = [
+            h for h in learning_objectives
+            if not Homework.is_import_sheet_hw_column(h)
+            and not Homework.is_import_sheet_exam_score_column(h)
+        ]
 
         first_hw_label = hw_headers[0] if hw_headers else None
 
@@ -264,6 +433,7 @@ class GradeSheetGeminiAnalyzer:
             grades: Dict[str, str] = {}
             raw_grades = s.get('grades', {}) or {}
             homework_pct: Optional[str] = None
+            exam_scores: Dict[str, str] = {}
 
             for h in learning_objectives:
                 if h not in raw_grades:
@@ -278,6 +448,15 @@ class GradeSheetGeminiAnalyzer:
                         m = str(mark).strip()
                         if re.match(r"^\d+\.?\d*%?$", m):
                             homework_pct = m.rstrip("%")
+                elif Homework.is_import_sheet_exam_score_column(h):
+                    parsed_exam = Homework.parse_import_exam_score(mark)
+                    if parsed_exam is not None:
+                        # Keep as string for editable UI parity with other extracted values.
+                        exam_scores[h] = str(parsed_exam).rstrip("0").rstrip(".")
+                    elif str(mark).strip() != "":
+                        m = str(mark).strip().rstrip("%").strip()
+                        if re.match(r"^\d+\.?\d*$", m):
+                            exam_scores[h] = m
                 else:
                     mark_str = str(mark).strip().upper()
                     if mark_str in ('✓', '✔', 'CHECK', 'PASS', 'YES'):
@@ -289,17 +468,19 @@ class GradeSheetGeminiAnalyzer:
                 'name': name,
                 'grades': grades,
                 'homework_pct': homework_pct,
+                'exam_scores': exam_scores,
             })
 
         return {
             'learning_objectives': lo_only,
             'homework_column': first_hw_label,
+            'exam_score_columns': exam_headers,
             'students': students
         }
 
 
 _cached_analyzer = None
-_module_version = 13  # Bumped: homework columns split from LOs
+_module_version = 17  # Bumped: exam-score columns parsed separately from mastery LOs
 
 def get_gemini_analyzer() -> Optional[GradeSheetGeminiAnalyzer]:
     """
@@ -315,5 +496,5 @@ def get_gemini_analyzer() -> Optional[GradeSheetGeminiAnalyzer]:
         _cached_analyzer._version = _module_version  # type: ignore
         return _cached_analyzer
     except (ImportError, ValueError) as e:
-        print(f"Failed to initialize Gemini analyzer: {e}")
+        logger.error("Failed to initialize Gemini analyzer: %s", e)
         return None

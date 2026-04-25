@@ -35,7 +35,7 @@
             class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none pr-10 transition-all">
             {% for assignment in assignments %}
             <option value="{{ assignment.id }}" data-group="{{ assignment.homework_group or '' }}">
-              {{ assignment.name }}{% if assignment.homework_group %} ({{ assignment.homework_group }}){% endif %}
+              {{ assignment.name }}{% if instructor_mode == 'mark' and assignment.homework_group %} ({{ assignment.homework_group }}){% endif %}
             </option>
             {% endfor %}
           </select>
@@ -110,6 +110,25 @@
         <span>Next Student</span>
       </div>
     </div>
+    {% if instructor_mode == 'mark' %}
+    <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+      <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">HW Eligibility Key</p>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600 dark:text-slate-300">
+        <span class="inline-flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+          Can Revise
+        </span>
+        <span class="inline-flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+          In-Class Grade Eligible
+        </span>
+        <span class="inline-flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>
+          Not Eligible
+        </span>
+      </div>
+    </div>
+    {% endif %}
   </div>
 
   <!-- Grader Table -->
@@ -123,11 +142,8 @@
               Student
             </th>
             <!-- HW % col -->
-            <th class="px-4 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[90px]">
+            <th class="px-4 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[90px]" data-hw-col-header>
               <span class="block">HW %</span>
-              {% if instructor_mode == 'mark' %}
-              <span class="block text-[10px] font-normal text-slate-400 mt-0.5 leading-tight">Green: can revise · Amber: in-class grade eligible · Red: not eligible</span>
-              {% endif %}
             </th>
             <!-- LO columns -->
             {% for lo in lo_names %}
@@ -141,7 +157,7 @@
         <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
           {% for student in students %}
           {% set row_index = loop.index0 %}
-          <tr class="group hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors" data-student-row>
+          <tr class="group hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors" data-student-row data-student-id="{{ student.id }}">
             <!-- Student name -->
             <td class="px-5 py-3 text-sm font-semibold text-slate-900 dark:text-white sticky left-0 bg-white dark:bg-slate-800 group-hover:bg-slate-50 dark:group-hover:bg-slate-700/30 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)] transition-colors">
               <div class="flex items-center gap-2">
@@ -152,7 +168,7 @@
               </div>
             </td>
             <!-- HW % editable -->
-            <td class="px-4 py-3 text-center">
+            <td class="px-4 py-3 text-center" data-hw-cell>
               <div class="hw-cell" data-student-id="{{ student.id }}">
                 <input type="number" min="0" max="100"
                        class="hw-pct-input w-16 text-center text-xs font-bold rounded-full py-1 px-2 border-0 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white"
@@ -240,6 +256,25 @@
 .mastery-x  { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
 .mastery-a  { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
 .mastery-i  { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+
+/* Same circular footprint for M, MR, RQ, etc. (two-letter codes no longer stretch wide) */
+.grade-cell .mastery-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 9999px;
+  border-width: 1px;
+  border-style: solid;
+  font-size: 0.65rem;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
 </style>
 
 <script id="assignmentData" type="application/json">{{ assignments | tojson }}</script>
@@ -252,11 +287,80 @@ const gradeHistory = [];
 const grades = {};
 const classId = "{{ class_id }}";
 let currentAssignmentId = null;
+const AUTO_CONVERT_M = {{ (auto_convert_m or false)|tojson }};
 /** HW % thresholds: in-class exam marks vs revision to M (M/MR) */
 const EXAM_HW_MIN = 65;
 const REVISION_M_MIN = 75;
 const examGradeEligible = {};
 const revisionEligible = {};
+
+function getActiveAssignmentId() {
+  const sel = document.getElementById('assignmentFilter');
+  const v = sel ? String(sel.value || '').trim() : '';
+  return v || null;
+}
+
+function gradeBadgeHtml(grade) {
+  const g = String(grade);
+  return `<span class="mastery-badge mastery-${g.toLowerCase()} border">${g}</span>`;
+}
+
+function getDisplayedGradeForStudent(rawGrade, studentId) {
+  const g = String(rawGrade || '').toUpperCase();
+  const sid = String(studentId || '');
+  let masteryAllowed = !(examGradeEligible[sid] === false);
+
+  // Fallback to live DOM state so display conversion remains correct even if
+  // eligibility cache is stale or was not initialized yet.
+  const hwCell = document.querySelector(`.hw-cell[data-student-id="${sid}"]`);
+  if (hwCell) {
+    const passEl = hwCell.querySelector('.hw-pass-check');
+    const passChecked = !!(passEl && passEl.checked);
+    const input = hwCell.querySelector('.hw-pct-input');
+    const rawHw = input ? String(input.value || '').trim() : '';
+    if (passChecked) {
+      masteryAllowed = false; // pass enables in-class marks only, not M/MR
+    } else if (rawHw === '') {
+      masteryAllowed = false;
+    } else {
+      const hw = parseInt(rawHw, 10);
+      masteryAllowed = Number.isFinite(hw) && hw >= REVISION_M_MIN;
+    }
+  }
+
+  if (
+    AUTO_CONVERT_M &&
+    INSTRUCTOR_MODE === 'mark' &&
+    (g === 'M' || g === 'MR') &&
+    !masteryAllowed
+  ) {
+    return 'I';
+  }
+  return g;
+}
+
+function renderGradeInCell(cell, rawGrade) {
+  const sid = String(cell.dataset.studentId || '');
+  const shown = getDisplayedGradeForStudent(rawGrade, sid);
+  cell.innerHTML = shown ? gradeBadgeHtml(shown) : `<span class="text-slate-200 dark:text-slate-600 text-xs select-none">—</span>`;
+}
+
+function refreshDisplayedGradesForStudent(studentId) {
+  const sid = String(studentId || '');
+  if (!sid) return;
+  document.querySelectorAll(`.grade-cell[data-student-id="${sid}"]`).forEach(cell => {
+    renderGradeInCell(cell, cell.dataset.actualGrade || '');
+  });
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
 
 function setHwEligibilityFromState(studentId, scoreNum, isPass) {
   if (INSTRUCTOR_MODE !== 'mark') {
@@ -281,6 +385,7 @@ function setHwEligibilityFromState(studentId, scoreNum, isPass) {
     }
   }
   updateRevisionStatus(studentId);
+  refreshDisplayedGradesForStudent(studentId);
 }
 
 function hwInputBackground(scoreNum, isPass) {
@@ -292,6 +397,44 @@ function hwInputBackground(scoreNum, isPass) {
   if (n >= REVISION_M_MIN) return '#22c55e';
   if (n >= EXAM_HW_MIN) return '#f59e0b';
   return '#ef4444';
+}
+
+/** Persist every visible HW % field (used on Save so values commit even if input never blurred). */
+async function persistAllHwPctInputs() {
+  const activeAssignmentId = getActiveAssignmentId();
+  if (!activeAssignmentId) return;
+  const errors = [];
+  const tasks = [];
+  document.querySelectorAll('.hw-pct-input').forEach(function (input) {
+    if (input.classList.contains('hidden')) return;
+    const raw = String(input.value || '').trim();
+    if (raw === '') return;
+    const studentId = input.dataset.studentId;
+    if (!studentId) return;
+    const val = Math.max(0, Math.min(100, parseInt(raw, 10) || 0));
+    input.value = String(val);
+    tasks.push(
+      fetch('/api/class/' + classId + '/save-hw-percentage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({
+          student_id: studentId,
+          score: val,
+          assignment_id: activeAssignmentId
+        })
+      }).then(async function (res) {
+        const data = await res.json().catch(function () { return {}; });
+        if (!res.ok || !data.success) {
+          errors.push(data.error || res.statusText || 'HW save failed');
+        }
+      })
+    );
+  });
+  await Promise.all(tasks);
+  if (errors.length) {
+    throw new Error(errors[0]);
+  }
 }
 
 function updateRevisionStatus(studentId) {
@@ -379,9 +522,8 @@ function updateCellValue(cell, newGrade) {
   grades[key] = newGrade;
   gradeHistory.push({ key, prev, newGrade });
 
-  cell.innerHTML = newGrade
-    ? `<span class="mastery-badge mastery-${newGrade.toLowerCase()} px-2.5 py-0.5 text-sm font-bold font-mono rounded border">${newGrade}</span>`
-    : `<span class="text-slate-200 dark:text-slate-600 text-xs select-none">—</span>`;
+  cell.dataset.actualGrade = newGrade || '';
+  renderGradeInCell(cell, newGrade || '');
 
   updateUndoBtn();
 }
@@ -483,9 +625,8 @@ document.getElementById('undoBtn').addEventListener('click', () => {
   const cell = document.querySelector(`[data-student-id="${sid}"][data-lo-id="${loId}"]`);
   grades[last.key] = last.prev;
   if (cell) {
-    cell.innerHTML = last.prev
-      ? `<span class="mastery-badge mastery-${last.prev.toLowerCase()} px-2.5 py-0.5 text-sm font-bold font-mono rounded border">${last.prev}</span>`
-      : `<span class="text-slate-200 dark:text-slate-600 text-xs select-none">—</span>`;
+    cell.dataset.actualGrade = last.prev || '';
+    renderGradeInCell(cell, last.prev || '');
   }
   updateUndoBtn();
 });
@@ -560,12 +701,15 @@ function filterByAssignment() {
         const cell = document.querySelector(`.grade-cell[data-student-id="${sid}"][data-lo-id="${loId}"]`);
         if (cell) {
           cell.dataset.actualGrade = grade;
-          cell.innerHTML = `<span class="mastery-badge mastery-${grade.toLowerCase()} px-2.5 py-0.5 text-sm font-bold font-mono rounded border">${grade}</span>`;
+          renderGradeInCell(cell, grade);
         }
       }
 
       // Populate HW% inputs for this assignment
       const hwScores = data.hw_scores || {};
+      const examScores = data.exam_scores || {};
+      const examColumns = Array.isArray(data.exam_columns) ? data.exam_columns : [];
+      renderExamColumns(examScores, examColumns);
       document.querySelectorAll('.hw-pct-input').forEach(input => {
         const sid = input.dataset.studentId;
         const cell = input.closest('.hw-cell');
@@ -600,36 +744,108 @@ function filterByAssignment() {
     .catch(e => console.error('Error loading assignment grades:', e));
 }
 
+function renderExamColumns(examScoresByCol, examColumns) {
+  document.querySelectorAll('th.exam-score-col-header, td.exam-score-col-cell').forEach(el => el.remove());
+
+  const headerRow = document.querySelector('#graderTable thead tr');
+  const hwHeader = document.querySelector('th[data-hw-col-header]');
+  if (!headerRow || !hwHeader) return;
+
+  examColumns.forEach(col => {
+    const th = document.createElement('th');
+    th.className = 'exam-score-col-header px-3 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[100px]';
+    th.innerHTML = `<div class="text-xs font-bold text-slate-800 dark:text-white">${escapeHtml(col)}</div>`;
+    headerRow.insertBefore(th, hwHeader);
+  });
+
+  document.querySelectorAll('tr[data-student-row]').forEach(row => {
+    const sid = String(row.getAttribute('data-student-id') || '');
+    const hwCell = row.querySelector('td[data-hw-cell]');
+    if (!hwCell) return;
+    examColumns.forEach(col => {
+      const td = document.createElement('td');
+      td.className = 'exam-score-col-cell px-2 py-3 text-center';
+      const colMap = examScoresByCol[col] || {};
+      const raw = sid in colMap ? colMap[sid] : '';
+      const val = (raw == null) ? '' : String(raw);
+      td.innerHTML = `<input type="number" min="0" max="100" step="0.1" class="exam-score-input w-20 text-center text-xs font-bold rounded-full py-1 px-2 border-0 focus:outline-none focus:ring-2 focus:ring-violet-500 text-white bg-violet-600/90" data-student-id="${escapeHtml(sid)}" data-exam-col="${escapeHtml(col)}" value="${escapeHtml(val)}" placeholder="—">`;
+      row.insertBefore(td, hwCell);
+    });
+  });
+
+  bindExamScoreInputs();
+}
+
+function bindExamScoreInputs() {
+  document.querySelectorAll('.exam-score-input').forEach(input => {
+    input.addEventListener('change', async () => {
+      const studentId = input.dataset.studentId;
+      const examCol = input.dataset.examCol;
+      const raw = String(input.value || '').trim();
+      try {
+        const res = await fetch(`/api/class/${classId}/save-exam-score`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            student_id: studentId,
+            exam_col: examCol,
+            score: raw
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Failed to save exam score');
+        }
+      } catch (e) {
+        alert('Error saving exam score: ' + e.message);
+      }
+    });
+  });
+}
+
 // Auto-select first assignment on load
 filterByAssignment();
 
 // HW % editable inputs — update color on change and auto-save
 document.querySelectorAll('.hw-pct-input').forEach(input => {
-  function updateColor() {
+  function clampHwInput() {
     const raw = input.value.trim();
-    if (raw === '') {
+    if (raw === '') return null;
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n)) return null;
+    const clamped = Math.max(0, Math.min(100, n));
+    if (String(clamped) !== raw) {
+      input.value = String(clamped);
+    }
+    return clamped;
+  }
+
+  function updateColor() {
+    const valNow = clampHwInput();
+    if (valNow === null) {
       input.style.background = '#64748b';
       return;
     }
-    const val = parseInt(raw) || 0;
-    input.style.background = hwInputBackground(val, false);
+    input.style.background = hwInputBackground(valNow, false);
   }
   input.addEventListener('input', () => {
     updateColor();
-    const raw = input.value.trim();
-    if (raw === '') {
+    const valNow = clampHwInput();
+    if (valNow === null) {
       setHwEligibilityFromState(input.dataset.studentId, null, false);
       return;
     }
-    const val = Math.max(0, Math.min(100, parseInt(raw) || 0));
-    setHwEligibilityFromState(input.dataset.studentId, val, false);
+    setHwEligibilityFromState(input.dataset.studentId, valNow, false);
   });
   input.addEventListener('change', async () => {
     updateColor();
     const raw = input.value.trim();
-    if (raw === '' || !currentAssignmentId) return;
+    const activeAssignmentId = getActiveAssignmentId();
+    if (raw === '' || !activeAssignmentId) return;
     const studentId = input.dataset.studentId;
-    const val = Math.max(0, Math.min(100, parseInt(raw) || 0));
+    const val = clampHwInput();
+    if (val === null) return;
     input.value = val;
     updateColor();
     setHwEligibilityFromState(studentId, val, false);
@@ -637,9 +853,13 @@ document.querySelectorAll('.hw-pct-input').forEach(input => {
       const res = await fetch(`/api/class/${classId}/save-hw-percentage`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ student_id: studentId, score: val, assignment_id: currentAssignmentId })
+        credentials: 'same-origin',
+        body: JSON.stringify({ student_id: studentId, score: val, assignment_id: activeAssignmentId })
       });
-      if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+      const data = await res.json().catch(function () { return {}; });
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed');
+      }
     } catch (e) {
       alert('Error saving HW %: ' + e.message);
     }
@@ -662,7 +882,8 @@ document.querySelectorAll('.hw-pass-check').forEach(cb => {
         cb.checked = false;
         return;
       }
-      if (!currentAssignmentId) {
+      const activeAssignmentId = getActiveAssignmentId();
+      if (!activeAssignmentId) {
         alert('Select an assignment first.');
         cb.checked = false;
         return;
@@ -680,11 +901,16 @@ document.querySelectorAll('.hw-pass-check').forEach(cb => {
         label.textContent = data.passes_remaining + ' left';
 
         // Save -1 to homework_scores so it persists
-        await fetch(`/api/class/${classId}/save-hw-percentage`, {
+        const hwRes = await fetch(`/api/class/${classId}/save-hw-percentage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ student_id: studentId, score: -1, assignment_id: currentAssignmentId })
+          credentials: 'same-origin',
+          body: JSON.stringify({ student_id: studentId, score: -1, assignment_id: activeAssignmentId })
         });
+        const hwData = await hwRes.json().catch(function () { return {}; });
+        if (!hwRes.ok || !hwData.success) {
+          throw new Error(hwData.error || 'Could not save HW pass');
+        }
 
         input.classList.add('hidden');
         passText.classList.remove('hidden');
@@ -714,12 +940,14 @@ document.querySelectorAll('.hw-pass-check').forEach(cb => {
       input.style.background = '#64748b';
       passText.classList.add('hidden');
       setHwEligibilityFromState(studentId, null, false);
-      if (currentAssignmentId) {
+      const activeAssignmentId = getActiveAssignmentId();
+      if (activeAssignmentId) {
         // Remove the -1 by saving empty (0)
         fetch(`/api/class/${classId}/save-hw-percentage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ student_id: studentId, score: 0, assignment_id: currentAssignmentId })
+          credentials: 'same-origin',
+          body: JSON.stringify({ student_id: studentId, score: 0, assignment_id: activeAssignmentId })
         });
       }
     }
@@ -734,10 +962,14 @@ document.getElementById('saveBtn').addEventListener('click', async function () {
   btn.innerHTML = `<svg class="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Saving...`;
 
   try {
+    const activeAssignmentId = getActiveAssignmentId();
+    currentAssignmentId = activeAssignmentId;
+    await persistAllHwPctInputs();
     const res = await fetch(`/api/class/${classId}/save-grades`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ grades, assignment_id: currentAssignmentId })
+      credentials: 'same-origin',
+      body: JSON.stringify({ grades, assignment_id: activeAssignmentId })
     });
     if (res.ok) {
       btn.classList.replace('bg-blue-600', 'bg-green-600');
@@ -761,8 +993,8 @@ document.getElementById('saveBtn').addEventListener('click', async function () {
 });
 </script>
 <script>
-document.querySelectorAll('.mark-only').forEach(function (el) {
-  if ('{{ instructor_mode }}' === 'shelbi') el.style.display = 'none';
-});
+if (window.ClarityUI && typeof window.ClarityUI.applyInstructorModeVisibility === 'function') {
+  window.ClarityUI.applyInstructorModeVisibility('{{ instructor_mode }}');
+}
 </script>
 {% endblock %}

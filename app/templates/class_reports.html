@@ -129,7 +129,7 @@
                   Email All
                 </button>
               </th>
-              <th class="text-center px-4 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">Homework %</th>
+              <th class="text-center px-4 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap" data-hw-col-header>HW %</th>
               {% for lo in learning_objectives %}
               <th class="text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs" data-lo-id="{{ lo.id }}">
                 <div class="text-xs font-bold text-slate-800 dark:text-white">{{ lo.vendor_code }}</div>
@@ -163,7 +163,7 @@
                 <span class="text-slate-300 dark:text-slate-600">—</span>
                 {% endif %}
               </td>
-              <td class="px-4 py-3 text-center">
+              <td class="px-4 py-3 text-center" data-hw-cell>
                 <span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="{{ student.id }}" data-assignment-id="">—</span>
               </td>
               {% for lo in learning_objectives %}
@@ -171,7 +171,7 @@
               {% set grade = student_lo.top_score if student_lo else None %}
               <td class="px-3 py-3 text-center" data-lo-id="{{ lo.id }}">
                 {% if grade %}
-                <span class="mastery-badge mastery-{{ grade|lower }} inline-block px-2 py-0.5 text-xs font-semibold font-mono rounded border cursor-pointer hover:opacity-80" title="Click for history">{{ grade }}</span>
+                <span class="mastery-badge mastery-{{ grade|lower }} border cursor-pointer hover:opacity-80" title="Click for history">{{ grade }}</span>
                 {% else %}
                 <span class="text-slate-300 dark:text-slate-600">—</span>
                 {% endif %}
@@ -239,11 +239,33 @@
 
 <style>
 .mastery-m  { background: #dcfce7; color: #15803d; border-color: #86efac; }
+.mastery-mr { background: #ecfdf5; color: #047857; border-color: #34d399; }
 .mastery-r  { background: #fef9c3; color: #a16207; border-color: #fde047; }
 .mastery-rq { background: #ffedd5; color: #c2410c; border-color: #fdba74; }
 .mastery-p  { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
 .mastery-x  { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
 .mastery-a  { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+.mastery-i  { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+
+/* LO grade chips: same footprint as speed grader (M, MR, RQ, …) */
+td[data-lo-id] .mastery-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 2rem;
+  height: 2rem;
+  padding: 0;
+  border-radius: 9999px;
+  border-width: 1px;
+  border-style: solid;
+  font-size: 0.65rem;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+  line-height: 1;
+  letter-spacing: -0.03em;
+  vertical-align: middle;
+}
 
 .hidden { display: none; }
 
@@ -302,7 +324,6 @@ const viewAllAssignmentsEl = document.getElementById('view-all-assignments');
 const defaultHwBadgeClass = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
 const passingHwBadgeClass = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300';
 const failingHwBadgeClass = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300';
-
 function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
   var scope = (scopeAssignmentId === undefined || scopeAssignmentId === null)
     ? '.hw-score-display'
@@ -313,6 +334,7 @@ function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
     el.textContent = '—';
     el.className = defaultHwBadgeClass;
   });
+  renderExamColumnsInReports([], {}, scopeAssignmentId);
   if (!assignmentId) return;
 
   fetch(`/api/class/${classId}/assignment/${assignmentId}/grades`)
@@ -320,6 +342,9 @@ function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
     .then(data => {
       if (!data.success) return;
       const hwScores = data.hw_scores || {};
+      const examScores = data.exam_scores || {};
+      const examColumns = Array.isArray(data.exam_columns) ? data.exam_columns : [];
+      renderExamColumnsInReports(examColumns, examScores, scopeAssignmentId);
       document.querySelectorAll(scope).forEach(el => {
         const sid = el.getAttribute('data-student-id');
         if (sid in hwScores) {
@@ -339,6 +364,45 @@ function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
       });
     })
     .catch(e => console.error('Error loading HW scores:', e));
+}
+
+function renderExamColumnsInReports(examColumns, examScoresByCol, scopeAssignmentId) {
+  const scopeSuffix = (scopeAssignmentId === undefined || scopeAssignmentId === null || String(scopeAssignmentId) === '')
+    ? ''
+    : '[data-assignment-id="' + String(scopeAssignmentId) + '"]';
+  document.querySelectorAll('th.exam-score-col-header' + scopeSuffix + ', td.exam-score-col-cell' + scopeSuffix).forEach(el => el.remove());
+
+  const tableSelector = (scopeAssignmentId === undefined || scopeAssignmentId === null || String(scopeAssignmentId) === '')
+    ? '#all-students-table'
+    : '#assignmentReport table';
+  const table = document.querySelector(tableSelector);
+  if (!table) return;
+  const headerRow = table.querySelector('thead tr');
+  const hwHeader = table.querySelector('th[data-hw-col-header]');
+  if (!headerRow || !hwHeader) return;
+
+  (examColumns || []).forEach(col => {
+    const th = document.createElement('th');
+    th.className = 'exam-score-col-header text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs';
+    th.setAttribute('data-assignment-id', String(scopeAssignmentId || ''));
+    th.innerHTML = '<div class="text-xs font-bold text-slate-800 dark:text-white">' + escapeHtml(col) + '</div>';
+    headerRow.insertBefore(th, hwHeader);
+  });
+
+  table.querySelectorAll('tbody tr.student-row').forEach(row => {
+    const sid = String(row.getAttribute('data-student-id') || '');
+    const hwCell = row.querySelector('td[data-hw-cell]');
+    if (!hwCell) return;
+    (examColumns || []).forEach(col => {
+      const td = document.createElement('td');
+      td.className = 'exam-score-col-cell px-3 py-3 text-center';
+      td.setAttribute('data-assignment-id', String(scopeAssignmentId || ''));
+      const colMap = examScoresByCol[col] || {};
+      const raw = (sid in colMap) ? colMap[sid] : '';
+      td.innerHTML = '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300">' + escapeHtml(raw === '' || raw == null ? '—' : String(raw)) + '</span>';
+      row.insertBefore(td, hwCell);
+    });
+  });
 }
 
 // --- Report tab toggle ---
@@ -486,14 +550,16 @@ function updateEmailSelectedButton() {
   }
 }
 
-function escapeHtml(value) {
-  return String(value == null ? '' : value)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
-}
+const escapeHtml = (window.ClarityUI && window.ClarityUI.escapeHtml)
+  ? window.ClarityUI.escapeHtml
+  : function (value) {
+      return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    };
 
 function loCodeForId(loId, fallbackObj) {
   const fromAssignment = fallbackObj && fallbackObj.learning_objectives && fallbackObj.learning_objectives.vendor_code
@@ -538,7 +604,7 @@ function renderAllAssignmentsView() {
     html += '      <thead><tr class="border-b border-slate-200 dark:border-slate-700">';
     html += '        <th class="text-left px-6 py-3 font-medium text-slate-500 dark:text-slate-400">Student</th>';
     html += '        <th class="text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap print:hidden">Email</th>';
-    html += '        <th class="text-center px-4 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">Homework %</th>';
+    html += '        <th class="text-center px-4 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap" data-hw-col-header>HW %</th>';
     loMeta.forEach(function (lo) {
       html += '        <th class="text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs" data-lo-id="' + escapeHtml(lo.id) + '"><div class="text-xs font-bold text-slate-800 dark:text-white">' + escapeHtml(lo.code) + '</div></th>';
     });
@@ -561,12 +627,12 @@ function renderAllAssignmentsView() {
         html += '            <span class="text-slate-300 dark:text-slate-600">—</span>';
       }
       html += '          </td>';
-      html += '          <td class="px-4 py-3 text-center"><span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="' + escapeHtml(studentId) + '" data-assignment-id="' + escapeHtml(assignmentId) + '">—</span></td>';
+      html += '          <td class="px-4 py-3 text-center" data-hw-cell><span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="' + escapeHtml(studentId) + '" data-assignment-id="' + escapeHtml(assignmentId) + '">—</span></td>';
       loMeta.forEach(function (lo) {
         const slo = los.find(function (x) { return String(x.learning_objective_id) === String(lo.id); });
         const grade = slo ? (slo.top_score || '') : '';
         if (grade) {
-          html += '          <td class="px-3 py-3 text-center" data-lo-id="' + escapeHtml(lo.id) + '"><span class="mastery-badge mastery-' + escapeHtml(String(grade).toLowerCase()) + ' inline-block px-2 py-0.5 text-xs font-semibold font-mono rounded border cursor-pointer hover:opacity-80">' + escapeHtml(grade) + '</span></td>';
+          html += '          <td class="px-3 py-3 text-center" data-lo-id="' + escapeHtml(lo.id) + '"><span class="mastery-badge mastery-' + escapeHtml(String(grade).toLowerCase()) + ' border cursor-pointer hover:opacity-80">' + escapeHtml(grade) + '</span></td>';
         } else {
           html += '          <td class="px-3 py-3 text-center" data-lo-id="' + escapeHtml(lo.id) + '"><span class="text-slate-300 dark:text-slate-600">—</span></td>';
         }
@@ -729,7 +795,18 @@ function emailStudentReport(studentId, btnEl, assignmentIdOverride) {
     btnEl.disabled = true;
     btnEl.classList.add('opacity-60', 'cursor-not-allowed');
   }
-  fetch(`/api/class/${classId}/student/${encodeURIComponent(studentId)}/send-report-email`, {
+  const send = (window.ClarityUI && window.ClarityUI.apiRequest)
+    ? window.ClarityUI.apiRequest
+    : null;
+  if (!send) {
+    alert('Unexpected error sending report email.');
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
+    }
+    return;
+  }
+  send(`/api/class/${classId}/student/${encodeURIComponent(studentId)}/send-report-email`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'same-origin',
@@ -737,27 +814,18 @@ function emailStudentReport(studentId, btnEl, assignmentIdOverride) {
       subject: emailPayload.subject,
       body: emailPayload.body
     })
-  })
-    .then(async (response) => {
-      const data = await response.json().catch(() => ({}));
-      return { ok: response.ok, data };
-    })
-    .then(({ ok, data }) => {
-      if (!ok || !data.success) {
-        alert('Could not send email: ' + (data.error || 'Unknown error'));
-        return;
-      }
-      alert('Report emailed to ' + (student.email || 'student') + '.');
-    })
-    .catch(() => {
-      alert('Unexpected error sending report email.');
-    })
-    .finally(() => {
-      if (btnEl) {
-        btnEl.disabled = false;
-        btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
-      }
-    });
+  }).then((result) => {
+    if (!result.ok || !result.data.success) {
+      alert('Could not send email: ' + (result.data.error || result.errorMessage || 'Unknown error'));
+      return;
+    }
+    alert('Report emailed to ' + (student.email || 'student') + '.');
+  }).finally(() => {
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
+    }
+  });
 }
 
 function emailAllVisibleReports(btnEl) {
@@ -793,36 +861,40 @@ function emailAllVisibleReports(btnEl) {
     btnEl.classList.add('opacity-60', 'cursor-not-allowed');
     btnEl.textContent = 'Sending...';
   }
-  fetch(`/api/class/${classId}/send-report-emails`, {
+  const send = (window.ClarityUI && window.ClarityUI.apiRequest)
+    ? window.ClarityUI.apiRequest
+    : null;
+  if (!send) {
+    alert('Unexpected error sending email reports.');
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
+      btnEl.textContent = priorText || 'Email All';
+    }
+    return;
+  }
+  send(`/api/class/${classId}/send-report-emails`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'same-origin',
     body: JSON.stringify({ reports })
-  })
-    .then(async (response) => {
-      const data = await response.json().catch(() => ({}));
-      return { ok: response.ok, data };
-    })
-    .then(({ ok, data }) => {
-      if (!ok || !data.success) {
-        const failures = Array.isArray(data.failures) && data.failures.length
-          ? '\n\n' + data.failures.slice(0, 5).join('\n')
-          : '';
-        alert('Could not send email reports: ' + (data.error || 'Unknown error') + failures);
-        return;
-      }
-      alert('Email send complete.');
-    })
-    .catch(() => {
-      alert('Unexpected error sending email reports.');
-    })
-    .finally(() => {
-      if (btnEl) {
-        btnEl.disabled = false;
-        btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
-        btnEl.textContent = priorText || 'Email All';
-      }
-    });
+  }).then((result) => {
+    const data = result.data || {};
+    if (!result.ok || !data.success) {
+      const failures = Array.isArray(data.failures) && data.failures.length
+        ? '\n\n' + data.failures.slice(0, 5).join('\n')
+        : '';
+      alert('Could not send email reports: ' + (data.error || result.errorMessage || 'Unknown error') + failures);
+      return;
+    }
+    alert('Email send complete.');
+  }).finally(() => {
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
+      btnEl.textContent = priorText || 'Email All';
+    }
+  });
 }
 
 function emailSelectedAllAssignments(btnEl) {
@@ -858,36 +930,40 @@ function emailSelectedAllAssignments(btnEl) {
     btnEl.classList.add('opacity-60', 'cursor-not-allowed');
     btnEl.textContent = 'Sending...';
   }
-  fetch(`/api/class/${classId}/send-report-emails`, {
+  const send = (window.ClarityUI && window.ClarityUI.apiRequest)
+    ? window.ClarityUI.apiRequest
+    : null;
+  if (!send) {
+    alert('Unexpected error sending selected reports.');
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
+      updateEmailSelectedButton();
+    }
+    return;
+  }
+  send(`/api/class/${classId}/send-report-emails`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'same-origin',
     body: JSON.stringify({ reports })
-  })
-    .then(async (response) => {
-      const data = await response.json().catch(() => ({}));
-      return { ok: response.ok, data };
-    })
-    .then(({ ok, data }) => {
-      if (!ok || !data.success) {
-        const failures = Array.isArray(data.failures) && data.failures.length
-          ? '\n\n' + data.failures.slice(0, 5).join('\n')
-          : '';
-        alert('Could not send selected reports: ' + (data.error || 'Unknown error') + failures);
-        return;
-      }
-      alert('Email send complete.');
-    })
-    .catch(() => {
-      alert('Unexpected error sending selected reports.');
-    })
-    .finally(() => {
-      if (btnEl) {
-        btnEl.disabled = false;
-        btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
-        updateEmailSelectedButton();
-      }
-    });
+  }).then((result) => {
+    const data = result.data || {};
+    if (!result.ok || !data.success) {
+      const failures = Array.isArray(data.failures) && data.failures.length
+        ? '\n\n' + data.failures.slice(0, 5).join('\n')
+        : '';
+      alert('Could not send selected reports: ' + (data.error || result.errorMessage || 'Unknown error') + failures);
+      return;
+    }
+    alert('Email send complete.');
+  }).finally(() => {
+    if (btnEl) {
+      btnEl.disabled = false;
+      btnEl.classList.remove('opacity-60', 'cursor-not-allowed');
+      updateEmailSelectedButton();
+    }
+  });
 }
 
 // --- Print individual student report ---

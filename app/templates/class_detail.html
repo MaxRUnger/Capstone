@@ -19,7 +19,7 @@
       <div class="flex items-start justify-between">
         <div>
           <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Active Students</p>
-          <p class="text-3xl font-semibold text-slate-900 dark:text-white">{{ total_students }}</p>
+          <p id="activeStudentsCount" class="text-3xl font-semibold text-slate-900 dark:text-white">{{ total_students }}</p>
         </div>
         <div class="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-400">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
@@ -75,7 +75,7 @@
         {% for student in students %}
         {% set los = student.learning_objectives %}
         {% set passed = los|selectattr('is_passed')|list|length %}
-        <div class="student-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-name="{{ student.name|lower }} {{ (student.email or '')|lower }}">
+        <div class="student-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-student-id="{{ student.id }}" data-name="{{ student.name|lower }} {{ (student.email or '')|lower }}">
           <div class="flex items-center justify-between">
             <div class="flex items-center gap-3 min-w-0 flex-1">
               <div class="min-w-0 flex-1">
@@ -99,6 +99,9 @@
           </div>
         </div>
         {% endfor %}
+        <div id="studentsViewEmptyState" class="{% if students %}hidden {% endif %}px-6 py-10 text-center text-sm text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-700">
+          No active students. Open <strong class="text-slate-700 dark:text-slate-300">Manage Students</strong> to unmute roster members.
+        </div>
       </div>
 
       <div id="assignmentsView" class="hidden divide-y divide-slate-50 dark:divide-slate-700">
@@ -357,7 +360,7 @@
     <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
       <div>
         <h2 class="font-semibold text-slate-900 dark:text-white">Manage Students</h2>
-        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ students|length }} active students ({{ all_students|length }} total)</p>
+        <p id="modalStudentCountsLine" class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ students|length }} active students ({{ all_students|length }} total)</p>
       </div>
       <div class="flex items-center gap-3">
         <button type="button" onclick="document.getElementById('addStudentModal').classList.remove('hidden')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
@@ -484,7 +487,138 @@
   </div>
 </div>
 
+<script type="application/json" id="dashboardAllStudentsJson">{{ all_students | tojson }}</script>
+
 <script>
+(function initDashboardStudentsState() {
+  try {
+    var el = document.getElementById('dashboardAllStudentsJson');
+    if (!el || !el.textContent) {
+      window.__dashboardAllStudents = [];
+      return;
+    }
+    window.__dashboardAllStudents = JSON.parse(el.textContent);
+  } catch (e) {
+    window.__dashboardAllStudents = [];
+  }
+})();
+
+const escapeHtmlDashboard = (window.ClarityUI && window.ClarityUI.escapeHtml)
+  ? window.ClarityUI.escapeHtml
+  : function (s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    };
+
+function homeworkBadgeHtmlDashboard(mastered, total) {
+  var pct = total > 0 ? Math.round((mastered / total) * 100) : 0;
+  var cls = pct === 100
+    ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+    : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
+  return '<span class="homework-badge inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ' + cls + '">' + pct + '%</span>';
+}
+
+function copyEmailBtnHtmlDashboard(email) {
+  var e = escapeHtmlDashboard(email);
+  return '<button type="button" data-copy-email-btn data-email="' + e + '" class="shrink-0 inline-flex items-center justify-center rounded-md p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors relative z-20" onclick="event.stopPropagation(); copyEmailFromBtn(this); return false;" aria-label="Copy email" title="Copy email" data-label-copied="Copied">' +
+    '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg></button>';
+}
+
+function studentSortKeyDashboard(student) {
+  var raw = String((student.full_name || student.name || '')).trim();
+  if (!raw) return ['\uffff', ''];
+  var lowerFull = raw.toLowerCase();
+  if (raw.indexOf(',') !== -1) {
+    var last = raw.split(',', 1)[0].trim().toLowerCase();
+    return [last || '\uffff', lowerFull];
+  }
+  var parts = raw.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return [parts[parts.length - 1].toLowerCase(), lowerFull];
+  }
+  return [parts[0].toLowerCase(), lowerFull];
+}
+
+function compareStudentsDashboard(a, b) {
+  var ka = studentSortKeyDashboard(a);
+  var kb = studentSortKeyDashboard(b);
+  if (ka[0] < kb[0]) return -1;
+  if (ka[0] > kb[0]) return 1;
+  if (ka[1] < kb[1]) return -1;
+  if (ka[1] > kb[1]) return 1;
+  return 0;
+}
+
+function buildStudentRowHTMLDashboard(s, classId) {
+  var los = s.learning_objectives || [];
+  var passed = los.filter(function (lo) { return lo.is_passed; }).length;
+  var total = los.length;
+  var badge = homeworkBadgeHtmlDashboard(passed, total);
+  var email = (s.email || '').trim();
+  var searchKey = ((s.name || '') + ' ' + email).toLowerCase().trim();
+  var detailPath = '/class/' + encodeURIComponent(classId) + '/students/' + encodeURIComponent(s.id);
+  var emailBlock = email
+    ? '<div class="flex items-center gap-1 mt-0.5 min-w-0"><span class="text-xs text-slate-500 dark:text-slate-400 select-text cursor-text truncate">' + escapeHtmlDashboard(email) + '</span>' + copyEmailBtnHtmlDashboard(email) + '</div>'
+    : '';
+  return (
+    '<div class="student-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-name="' + escapeHtmlDashboard(searchKey) + '" data-student-id="' + escapeHtmlDashboard(s.id) + '">' +
+      '<div class="flex items-center justify-between">' +
+        '<div class="flex items-center gap-3 min-w-0 flex-1">' +
+          '<div class="min-w-0 flex-1">' +
+            '<a href="' + detailPath + '" class="block hover:underline"><span class="font-medium text-slate-900 dark:text-white">' + escapeHtmlDashboard(s.name) + '</span></a>' +
+            emailBlock +
+          '</div>' +
+          '<a href="' + detailPath + '" class="shrink-0 hover:opacity-90" tabindex="-1" aria-hidden="true">' + badge + '</a>' +
+        '</div>' +
+        '<button type="button" onclick="deleteStudent(' + JSON.stringify(s.id) + ', ' + JSON.stringify(s.name) + ')" class="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors flex-shrink-0" title="Delete student">' +
+          '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>' +
+        '</button>' +
+      '</div>' +
+    '</div>'
+  );
+}
+
+function insertStudentRowSortedDashboard(container, student) {
+  var html = buildStudentRowHTMLDashboard(student, '{{ class_id }}');
+  var wrap = document.createElement('div');
+  wrap.innerHTML = html.trim();
+  var newEl = wrap.firstElementChild;
+  if (!newEl) return;
+  var emptyEl = document.getElementById('studentsViewEmptyState');
+  var children = Array.from(container.querySelectorAll('.student-item'));
+  var insertBefore = null;
+  for (var i = 0; i < children.length; i++) {
+    var sid = children[i].getAttribute('data-student-id');
+    var other = (window.__dashboardAllStudents || []).find(function (x) { return String(x.id) === String(sid); });
+    if (!other) continue;
+    if (compareStudentsDashboard(student, other) < 0) {
+      insertBefore = children[i];
+      break;
+    }
+  }
+  if (insertBefore) container.insertBefore(newEl, insertBefore);
+  else if (emptyEl) container.insertBefore(newEl, emptyEl);
+  else container.appendChild(newEl);
+}
+
+function updateActiveStudentCountsDashboard() {
+  var arr = window.__dashboardAllStudents || [];
+  var total = arr.length;
+  var active = arr.filter(function (s) { return !s.muted; }).length;
+  var countEl = document.getElementById('activeStudentsCount');
+  if (countEl) countEl.textContent = String(active);
+  var modalLine = document.getElementById('modalStudentCountsLine');
+  if (modalLine) modalLine.textContent = active + ' active students (' + total + ' total)';
+  var emptyEl = document.getElementById('studentsViewEmptyState');
+  if (emptyEl) {
+    if (active === 0) emptyEl.classList.remove('hidden');
+    else emptyEl.classList.add('hidden');
+  }
+}
+
 function maybeOpenManageStudentsModalFromQuery() {
   const modal = document.getElementById('studentManagementModal');
   if (!modal) return;
@@ -516,6 +650,7 @@ function toggleMute(checkbox) {
   fetch(`/api/class/{{ class_id }}/toggle_mute`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
     body: JSON.stringify({ student_id: studentId, muted: muted })
   })
   .then(r => r.json())
@@ -525,7 +660,23 @@ function toggleMute(checkbox) {
       checkbox.checked = !muted;
       row.classList.toggle('opacity-60', !muted);
       row.querySelector('p').classList.toggle('line-through', !muted);
+      return;
     }
+    const roster = window.__dashboardAllStudents || [];
+    const s = roster.find(function (x) { return String(x.id) === String(studentId); });
+    if (s) s.muted = muted;
+
+    const listEl = document.getElementById('studentsView');
+    const dashRow = listEl && Array.from(listEl.querySelectorAll('.student-item')).find(function (el) {
+      return el.dataset.studentId === studentId;
+    });
+    if (muted) {
+      if (dashRow) dashRow.remove();
+    } else if (s && listEl) {
+      insertStudentRowSortedDashboard(listEl, s);
+    }
+    updateActiveStudentCountsDashboard();
+    if (typeof handleSearch === 'function') handleSearch();
   })
   .catch(() => {
     alert('Error toggling mute.');
@@ -1308,37 +1459,28 @@ document.getElementById('loCsvPreviewConfirm')?.addEventListener('click', assign
 function startLoCsvMobilePoll() {
   if (!window.LO_MOBILE_UPLOAD_TOKEN || !window.LO_CLASS_ID) return;
   stopLoCsvMobilePoll();
-  loCsvMobilePollInterval = setInterval(async function () {
-    try {
-      var r = await fetch(
-        '/api/class/' + encodeURIComponent(window.LO_CLASS_ID) + '/mobile-upload-status/' + encodeURIComponent(window.LO_MOBILE_UPLOAD_TOKEN),
-        { credentials: 'same-origin' }
-      );
-      if (!r.ok) return;
-      var j = await r.json();
-      if (!j.success || !j.ready) return;
-      stopLoCsvMobilePoll();
-      var fr = await fetch(
-        '/api/class/' + encodeURIComponent(window.LO_CLASS_ID) + '/mobile-upload-file/' + encodeURIComponent(window.LO_MOBILE_UPLOAD_TOKEN),
-        { credentials: 'same-origin' }
-      );
-      if (!fr.ok) {
-        alert('Could not retrieve the file from your phone. Try scanning the QR code again.');
-        return;
+  if (window.ClarityUI && typeof window.ClarityUI.startMobileCsvPoll === 'function') {
+    loCsvMobilePollInterval = window.ClarityUI.startMobileCsvPoll({
+      classId: window.LO_CLASS_ID,
+      token: window.LO_MOBILE_UPLOAD_TOKEN,
+      intervalMs: 2000,
+      stop: stopLoCsvMobilePoll,
+      onReady: async function (file) {
+        var st = document.getElementById('loCsvMobileStatus');
+        if (st) {
+          st.textContent = 'CSV received from phone — review the import preview.';
+          st.classList.remove('hidden');
+        }
+        await assignmentsPreviewLoCsv(file);
+      },
+      onError: function (msg) {
+        alert(msg);
+      },
+      onCatch: function (e) {
+        console.error('LO CSV mobile poll:', e);
       }
-      var blob = await fr.blob();
-      var name = j.filename || 'outcomes.csv';
-      var file = new File([blob], name, { type: blob.type || 'text/csv' });
-      var st = document.getElementById('loCsvMobileStatus');
-      if (st) {
-        st.textContent = 'CSV received from phone — review the import preview.';
-        st.classList.remove('hidden');
-      }
-      await assignmentsPreviewLoCsv(file);
-    } catch (e) {
-      console.error('LO CSV mobile poll:', e);
-    }
-  }, 2000);
+    });
+  }
 }
 
 document.addEventListener('DOMContentLoaded', function () {
@@ -1346,8 +1488,8 @@ document.addEventListener('DOMContentLoaded', function () {
 });
 </script>
 <script>
-document.querySelectorAll('.mark-only').forEach(el => {
-  if ('{{ instructor_mode }}' === 'shelbi') el.style.display = 'none';
-});
+if (window.ClarityUI && typeof window.ClarityUI.applyInstructorModeVisibility === 'function') {
+  window.ClarityUI.applyInstructorModeVisibility('{{ instructor_mode }}');
+}
 </script>
 {% endblock %}

@@ -10,7 +10,7 @@ Covers:
 import sys
 import os
 import unittest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 
 # ---------------------------------------------------------------------------
 # Mock Supabase clients *before* any app code is imported.                  
@@ -72,7 +72,7 @@ class TestGradeNormalizeScore(unittest.TestCase):
 
     # -- pass-through codes --
     def test_valid_codes_returned_as_is(self):
-        for code in ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A'):
+        for code in ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A', 'I'):
             self.assertEqual(Grade.normalize_score(code), code)
 
     def test_codes_are_case_insensitive(self):
@@ -118,6 +118,7 @@ class TestGradeGetPriority(unittest.TestCase):
         self.assertGreater(Grade.get_priority('RQ'), Grade.get_priority('P'))
         self.assertGreater(Grade.get_priority('P'), Grade.get_priority('X'))
         self.assertGreater(Grade.get_priority('X'), Grade.get_priority('A'))
+        self.assertEqual(Grade.get_priority('I'), Grade.get_priority('X'))
 
     def test_unknown_grade_returns_negative(self):
         self.assertEqual(Grade.get_priority('Z'), -1)
@@ -362,7 +363,7 @@ class TestAppFactory(unittest.TestCase):
 
     def test_cors_configured(self):
         # CORS extension adds after_request handlers
-        self.assertTrue(len(self.app.after_request_funcs) > 0 or True)  # CORS is applied
+        self.assertTrue(len(self.app.after_request_funcs) > 0)
 
 
 # ==========================================================================
