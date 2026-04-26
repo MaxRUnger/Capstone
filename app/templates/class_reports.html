@@ -122,14 +122,14 @@
         <table class="w-full text-sm" id="all-students-table">
           <thead>
             <tr class="border-b border-slate-200 dark:border-slate-700">
-              <th class="text-left px-6 py-3 font-medium text-slate-500 dark:text-slate-400">Student</th>
-              <th class="text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">
+              <th class="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400 w-48">Student</th>
+              <th class="text-center px-2 py-2 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap">
                 <button type="button" id="emailAllBtn" onclick="emailAllVisibleReports(this)"
                   class="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">
                   Email All
                 </button>
               </th>
-              <th class="text-center px-4 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap" data-hw-col-header>HW %</th>
+              <th class="text-center px-2 py-2 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap" data-hw-col-header>HW %</th>
               {% for lo in learning_objectives %}
               <th class="text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs" data-lo-id="{{ lo.id }}">
                 <div class="text-xs font-bold text-slate-800 dark:text-white">{{ lo.vendor_code }}</div>
@@ -140,21 +140,21 @@
           <tbody class="divide-y divide-slate-50 dark:divide-slate-700">
             {% for student in students %}
             <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors student-row" data-student-name="{{ student.name|lower }}" data-student-id="{{ student.id }}">
-              <td class="px-6 py-3 font-medium text-slate-900 dark:text-white">
-                <div class="flex items-center gap-1 flex-wrap">
-                  <span>{{ student.name }}</span>
+              <td class="px-3 py-2 font-medium text-slate-900 dark:text-white">
+                <div class="flex items-center gap-1 flex-nowrap min-w-0">
+                  <span class="truncate min-w-0">{{ student.name }}</span>
                   <button type="button" onclick="printStudentReport('{{ student.id }}')"
-                    class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors flex-shrink-0 print:hidden"
+                    class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors flex-shrink-0 print:hidden"
                     title="Print report for {{ student.name }}"
                     aria-label="Print report for {{ student.name }}">
                     Print
                   </button>
                 </div>
               </td>
-              <td class="px-3 py-3 text-center">
+              <td class="px-2 py-2 text-center">
                 {% if student.email %}
                 <button type="button" onclick="emailStudentReport('{{ student.id }}', this)"
-                  class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors"
+                  class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors"
                   title="Email this report to {{ student.email }}"
                   aria-label="Email progress report to {{ student.name }}">
                   Email
@@ -163,7 +163,7 @@
                 <span class="text-slate-300 dark:text-slate-600">—</span>
                 {% endif %}
               </td>
-              <td class="px-4 py-3 text-center" data-hw-cell>
+              <td class="px-2 py-2 text-center" data-hw-cell>
                 <span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="{{ student.id }}" data-assignment-id="">—</span>
               </td>
               {% for lo in learning_objectives %}
@@ -269,13 +269,119 @@ td[data-lo-id] .mastery-badge {
 
 .hidden { display: none; }
 
+/* Used by JS during beforeprint to measure layout as it will print. */
+#assignmentReport.measuring-print table {
+  width: 100% !important;
+  table-layout: fixed !important;
+  font-size: 13px !important;
+}
+#assignmentReport.measuring-print th,
+#assignmentReport.measuring-print td {
+  padding: 3px 3px !important;
+  line-height: 1.15 !important;
+}
+#assignmentReport.measuring-print th:nth-child(2),
+#assignmentReport.measuring-print td:nth-child(2) {
+  display: none !important;
+}
+
 @media print {
-  @page { margin: 0.5in; margin-top: 0.3in; margin-bottom: 0.3in; }
+  @page { size: letter landscape; margin: 0.2in; }
   .print\:hidden { display: none !important; }
   body { background: white !important; }
   .dark body { background: white !important; }
   #assignmentReport { display: block !important; }
   #studentHistoryPanel { display: none !important; }
+
+  /* Excel-like print table: tight cells and clear writing grid. */
+  #assignmentReport table,
+  #assignmentReport thead,
+  #assignmentReport tbody,
+  #assignmentReport tr,
+  #assignmentReport th,
+  #assignmentReport td {
+    border: 1px solid #111827 !important;
+    box-shadow: none !important;
+    border-collapse: collapse !important;
+    color: #0f172a !important;
+    background: #ffffff !important;
+  }
+  #assignmentReport .divide-y > :not([hidden]) ~ :not([hidden]) {
+    border-top-width: 1px !important;
+  }
+
+  /* Keep printable content on a single page by shrinking as needed. */
+  html, body {
+    width: 100%;
+    height: auto;
+    overflow: hidden !important;
+  }
+  #assignmentReport {
+    --print-scale: 1;
+    zoom: var(--print-scale);
+    margin: 0 !important;
+    padding: 0 !important;
+    transform: none !important;
+  }
+  #assignmentReport .overflow-x-auto {
+    overflow: visible !important;
+  }
+  #assignmentReport table {
+    width: 100% !important;
+    table-layout: fixed !important;
+    font-size: 13px !important;
+  }
+  #assignmentReport th,
+  #assignmentReport td {
+    padding: 3px 3px !important;
+    line-height: 1.15 !important;
+    letter-spacing: 0 !important;
+  }
+  #assignmentReport th:first-child,
+  #assignmentReport td:first-child {
+    width: 14% !important;
+    text-align: left !important;
+    white-space: nowrap !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+    padding-left: 4px !important;
+  }
+  #assignmentReport th:not(:first-child),
+  #assignmentReport td:not(:first-child) {
+    text-align: center !important;
+  }
+  /* Email column is not needed on printable grade sheets. */
+  #assignmentReport th:nth-child(2),
+  #assignmentReport td:nth-child(2) {
+    display: none !important;
+  }
+  #assignmentReport .text-slate-300,
+  #assignmentReport .dark\:text-slate-600 {
+    color: #334155 !important;
+  }
+  #assignmentReport .mastery-badge {
+    width: auto !important;
+    height: auto !important;
+    min-width: 0 !important;
+    min-height: 0 !important;
+    font-size: 12px !important;
+    line-height: 1 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    color: #0f172a !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  }
+  #assignmentReport .hw-score-display {
+    font-size: 12px !important;
+    padding: 0 !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: transparent !important;
+    color: #0f172a !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+  }
 }
 </style>
 
@@ -602,9 +708,9 @@ function renderAllAssignmentsView() {
     html += '  <div class="overflow-x-auto">';
     html += '    <table class="w-full text-sm">';
     html += '      <thead><tr class="border-b border-slate-200 dark:border-slate-700">';
-    html += '        <th class="text-left px-6 py-3 font-medium text-slate-500 dark:text-slate-400">Student</th>';
-    html += '        <th class="text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap print:hidden">Email</th>';
-    html += '        <th class="text-center px-4 py-3 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap" data-hw-col-header>HW %</th>';
+    html += '        <th class="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400 w-48">Student</th>';
+    html += '        <th class="text-center px-2 py-2 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap print:hidden">Email</th>';
+    html += '        <th class="text-center px-2 py-2 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap" data-hw-col-header>HW %</th>';
     loMeta.forEach(function (lo) {
       html += '        <th class="text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs" data-lo-id="' + escapeHtml(lo.id) + '"><div class="text-xs font-bold text-slate-800 dark:text-white">' + escapeHtml(lo.code) + '</div></th>';
     });
@@ -617,17 +723,17 @@ function renderAllAssignmentsView() {
       const lowered = studentName.toLowerCase();
       const los = Array.isArray(student.learning_objectives) ? student.learning_objectives : [];
       html += '        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors student-row group" data-student-name="' + escapeHtml(lowered) + '" data-student-id="' + escapeHtml(studentId) + '">';
-      html += '          <td class="px-6 py-3 font-medium text-slate-900 dark:text-white"><div class="flex items-center gap-1"><span>' + escapeHtml(studentName) + '</span>';
-      html += '            <button type="button" onclick="printStudentReport(\'' + escapeHtml(studentId) + '\', \'' + escapeHtml(assignmentId) + '\')" class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors flex-shrink-0 print:hidden">Print</button>';
+      html += '          <td class="px-3 py-2 font-medium text-slate-900 dark:text-white"><div class="flex items-center gap-1 flex-nowrap min-w-0"><span class="truncate min-w-0">' + escapeHtml(studentName) + '</span>';
+      html += '            <button type="button" onclick="printStudentReport(\'' + escapeHtml(studentId) + '\', \'' + escapeHtml(assignmentId) + '\')" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors flex-shrink-0 print:hidden">Print</button>';
       html += '          </div></td>';
-      html += '          <td class="px-3 py-3 text-center print:hidden">';
+      html += '          <td class="px-2 py-2 text-center print:hidden">';
       if (student.email) {
-        html += '            <button type="button" onclick="emailStudentReport(\'' + escapeHtml(studentId) + '\', this, \'' + escapeHtml(assignmentId) + '\')" class="inline-flex items-center gap-1 px-2 py-1 rounded-md text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">Email</button>';
+        html += '            <button type="button" onclick="emailStudentReport(\'' + escapeHtml(studentId) + '\', this, \'' + escapeHtml(assignmentId) + '\')" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">Email</button>';
       } else {
         html += '            <span class="text-slate-300 dark:text-slate-600">—</span>';
       }
       html += '          </td>';
-      html += '          <td class="px-4 py-3 text-center" data-hw-cell><span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="' + escapeHtml(studentId) + '" data-assignment-id="' + escapeHtml(assignmentId) + '">—</span></td>';
+      html += '          <td class="px-2 py-2 text-center" data-hw-cell><span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="' + escapeHtml(studentId) + '" data-assignment-id="' + escapeHtml(assignmentId) + '">—</span></td>';
       loMeta.forEach(function (lo) {
         const slo = los.find(function (x) { return String(x.learning_objective_id) === String(lo.id); });
         const grade = slo ? (slo.top_score || '') : '';
@@ -976,7 +1082,7 @@ function printStudentReport(studentId, assignmentIdOverride) {
 
   let tbodyRows = '';
   rows.forEach(function (r) {
-    tbodyRows += `<tr style="border-bottom:1px solid #f1f5f9;">
+    tbodyRows += `<tr>
         <td style="padding:8px 12px;font-size:13px;">${r.title}</td>
         <td style="padding:8px 12px;text-align:center;font-size:13px;font-family:monospace;font-weight:700;">${r.grade}</td>
       </tr>`;
@@ -994,7 +1100,7 @@ function printStudentReport(studentId, assignmentIdOverride) {
 </head>
 <body>
   <div style="max-width:680px;margin:0 auto;">
-    <div style="display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:16px;margin-bottom:24px;border-bottom:2px solid #1d4ed8;">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;padding-bottom:16px;margin-bottom:24px;">
       <div>
         <h1 style="font-size:22px;font-weight:700;margin-bottom:4px;">${student.name}</h1>
         <p style="font-size:14px;color:#64748b;">${className}</p>
@@ -1007,7 +1113,7 @@ function printStudentReport(studentId, assignmentIdOverride) {
     </div>
     <table style="width:100%;border-collapse:collapse;">
       <thead>
-        <tr style="border-bottom:2px solid #e2e8f0;">
+        <tr>
           <th style="text-align:left;padding:8px 12px;font-size:12px;color:#64748b;font-weight:600;">Learning Objective</th>
           <th style="text-align:center;padding:8px 12px;font-size:12px;color:#64748b;font-weight:600;">Score</th>
         </tr>
@@ -1041,5 +1147,49 @@ function printStudentReport(studentId, assignmentIdOverride) {
     selectAssignment(firstAssignmentItem.getAttribute('data-assignment-id'), firstAssignmentItem.textContent.trim());
   }
 })();
+
+function applySinglePagePrintScale() {
+  const assignmentReport = document.getElementById('assignmentReport');
+  if (!assignmentReport) return;
+
+  assignmentReport.style.removeProperty('--print-scale');
+
+  // Print a single assignment table to avoid multi-panel shrink.
+  const viewAll = document.getElementById('view-all');
+  if (viewAll && viewAll.classList.contains('hidden')) {
+    const firstAssignmentItem = document.querySelector('.assignment-dd-item[data-assignment-id]:not([data-assignment-id=""])');
+    if (firstAssignmentItem && typeof selectAssignment === 'function') {
+      selectAssignment(firstAssignmentItem.getAttribute('data-assignment-id'), firstAssignmentItem.textContent.trim());
+    }
+  }
+
+  const visiblePanel =
+    assignmentReport.querySelector('#view-all:not(.hidden)') ||
+    assignmentReport.querySelector('#view-all-assignments:not(.hidden)') ||
+    assignmentReport;
+
+  // Apply a temporary class that mirrors print sizing so we can measure accurately.
+  const measureClass = 'measuring-print';
+  assignmentReport.classList.add(measureClass);
+
+  const pageHeightPx = 7.9 * 96;
+  const targetTable = visiblePanel.querySelector('table');
+  const measuredHeight = (targetTable ? targetTable.getBoundingClientRect().height : visiblePanel.getBoundingClientRect().height) + 72;
+
+  assignmentReport.classList.remove(measureClass);
+
+  // Page width is naturally filled by table-layout: fixed + width: 100%.
+  // Only scale DOWN if the table is taller than one page.
+  const heightScale = pageHeightPx / Math.max(1, measuredHeight);
+  const finalScale = Math.max(0.3, Math.min(1, heightScale));
+  assignmentReport.style.setProperty('--print-scale', String(finalScale));
+}
+
+window.addEventListener('beforeprint', applySinglePagePrintScale);
+window.addEventListener('afterprint', function () {
+  const assignmentReport = document.getElementById('assignmentReport');
+  if (!assignmentReport) return;
+  assignmentReport.style.removeProperty('--print-scale');
+});
 </script>
 {% endblock %}
