@@ -39,8 +39,8 @@
     </div>
   </div>
 
-  <!-- Learning Objectives Grid (entire history: all LOs) -->
-  <div class="grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6 print:gap-4">
+  <!-- Learning Objectives Grid (screen view) -->
+  <div class="student-history-screen-grid grid grid-cols-1 md:grid-cols-2 print:grid-cols-2 gap-6 print:gap-4">
     {% for lo in learning_objectives %}
     <div class="student-history-tile bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 print:shadow-none print:break-inside-avoid">
       <div class="p-6 border-b border-slate-100 dark:border-slate-700 student-history-tile-section">
@@ -97,6 +97,58 @@
       </div>
     </div>
     {% endfor %}
+  </div>
+
+  <!-- Print-only compact table (Excel-style) -->
+  <div class="student-history-print-table hidden print:block mt-4">
+    {% set ns = namespace(assignments=[]) %}
+    {% for lo in learning_objectives %}
+      {% for g in lo.grades %}
+        {% if g.assignments and g.assignments.name %}
+          {% set aname = g.assignments.name|string %}
+          {% if aname not in ns.assignments %}
+            {% set ns.assignments = ns.assignments + [aname] %}
+          {% endif %}
+        {% endif %}
+      {% endfor %}
+    {% endfor %}
+    <table class="w-full border-collapse">
+      <thead>
+        <tr>
+          <th>Learning Objective</th>
+          {% for aname in ns.assignments %}
+          <th>{{ aname }}</th>
+          {% endfor %}
+        </tr>
+      </thead>
+      <tbody>
+        {% for lo in learning_objectives|sort(attribute='vendor_code') %}
+        <tr>
+          <td class="lo-code">{{ lo.vendor_code }}</td>
+          {% for aname in ns.assignments %}
+          {% set cell = namespace(scores=[]) %}
+          {% for g in lo.grades %}
+            {% if g.assignments and (g.assignments.name|string) == aname %}
+              {% if g.top_score %}
+                {% set cell.scores = cell.scores + [g.top_score] %}
+              {% endif %}
+              {% if g.second_score %}
+                {% set cell.scores = cell.scores + [g.second_score] %}
+              {% endif %}
+            {% endif %}
+          {% endfor %}
+          <td class="grade-cell">
+            {% if cell.scores|length > 0 %}
+              {{ cell.scores|join(', ') }}
+            {% else %}
+              —
+            {% endif %}
+          </td>
+          {% endfor %}
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
   </div>
 
 </div>
@@ -207,10 +259,14 @@ function emailStudentHistoryReport(btnEl) {
 .mastery-i  { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
 
 @media print {
-  @page { margin: 0.5in; margin-top: 0.35in; margin-bottom: 0.35in; }
+  @page { size: letter portrait; margin: 0.22in; }
   body { background: white !important; }
   .dark body { background: white !important; }
   main { background: white !important; }
+
+  .student-history-screen-grid {
+    display: none !important;
+  }
 
   /* Student name + class: always dark text on white (visible in print from light or dark UI) */
   .student-history-print-header,
@@ -221,7 +277,22 @@ function emailStudentHistoryReport(btnEl) {
     color: #475569 !important;
   }
 
-  /* LO cards and inner rows: always white tiles when printing */
+  /* Keep print header compact */
+  .student-history-page {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  .student-history-page h1 {
+    font-size: 1.1rem !important;
+    line-height: 1.25 !important;
+  }
+  .student-history-page .student-history-print-header p {
+    font-size: 0.72rem !important;
+    line-height: 1.15 !important;
+    margin: 0 !important;
+  }
+
+  /* Screen cards are hidden in print, but keep these for safety */
   .student-history-tile,
   .student-history-tile-section,
   .student-history-tile > div.p-6 {
@@ -254,9 +325,39 @@ function emailStudentHistoryReport(btnEl) {
     color: #64748b !important;
   }
 
-  .student-history-page {
-    -webkit-print-color-adjust: exact;
-    print-color-adjust: exact;
+  /* Excel-style one-page print table */
+  .student-history-print-table {
+    margin-top: 0.25rem !important;
+  }
+  .student-history-print-table table {
+    width: 100% !important;
+    table-layout: fixed !important;
+    border-collapse: collapse !important;
+    font-size: 10.5px !important;
+    line-height: 1.1 !important;
+    color: #0f172a !important;
+  }
+  .student-history-print-table th,
+  .student-history-print-table td {
+    border: 1px solid #1f2937 !important;
+    padding: 3px 5px !important;
+    background: #ffffff !important;
+    color: #0f172a !important;
+  }
+  .student-history-print-table th {
+    font-weight: 700 !important;
+    text-align: center !important;
+  }
+  .student-history-print-table th:first-child,
+  .student-history-print-table td.lo-code {
+    width: 22% !important;
+    text-align: left !important;
+    font-weight: 600 !important;
+  }
+  .student-history-print-table td.grade-cell {
+    text-align: center !important;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace !important;
+    font-weight: 700 !important;
   }
 }
 </style>
