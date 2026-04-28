@@ -136,6 +136,14 @@ class TestHomeworkImportSheetColumn(unittest.TestCase):
         self.assertFalse(Homework.is_import_sheet_hw_column("EX1"))
         self.assertFalse(Homework.is_import_sheet_hw_column("A7"))
 
+    def test_normalize_enabled_exam_score_column_list(self):
+        self.assertEqual(
+            Homework.normalize_enabled_exam_score_column_list(["FEX", "EX1", "EX1", "bad", "ex2"]),
+            ["EX1", "EX2", "FEX"],
+        )
+        self.assertEqual(Homework.normalize_enabled_exam_score_column_list([]), [])
+        self.assertEqual(Homework.normalize_enabled_exam_score_column_list(None), [])
+
     def test_parse_import_hw_pct(self):
         self.assertEqual(Homework.parse_import_hw_pct("85"), 85)
         self.assertEqual(Homework.parse_import_hw_pct(" 92.3% "), 92)

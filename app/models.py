@@ -1,7 +1,7 @@
 import logging
 import re
 from datetime import date
-from typing import Optional
+from typing import List, Optional
 
 from app.authentication import supabase, supabase_admin
 
@@ -313,6 +313,20 @@ class Homework:
             return False
         n = re.sub(r"\s+", "", str(name).strip().upper())
         return bool(re.match(r"^EX\d{1,3}$", n) or n == "FEX")
+
+    @staticmethod
+    def normalize_enabled_exam_score_column_list(raw) -> List[str]:
+        """Return a de-duplicated list of allowed exam column codes from API/UI (EX1–EX3, FEX)."""
+        allowed_order = ("EX1", "EX2", "EX3", "FEX")
+        allowed = set(allowed_order)
+        out: List[str] = []
+        if isinstance(raw, list):
+            for x in raw:
+                u = re.sub(r"\s+", "", str(x).strip().upper())
+                if u in allowed and u not in out:
+                    out.append(u)
+        order = {k: i for i, k in enumerate(allowed_order)}
+        return sorted(out, key=lambda c: order.get(c, 99))
 
     @staticmethod
     def parse_import_hw_pct(value) -> Optional[int]:

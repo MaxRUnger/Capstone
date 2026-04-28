@@ -304,6 +304,28 @@
           {% endfor %}
         </div>
       </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Exam score columns</label>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mb-2">Checked exams appear as EX1 / EX2 / EX3 / FEX in the speed grader and reports (empty until you enter or import scores).</p>
+        <div class="border border-slate-200 dark:border-slate-600 rounded-lg p-2 space-y-2">
+          <label class="flex items-center gap-2 py-0.5">
+            <input type="checkbox" class="exam-col-checkbox" value="EX1" data-exam-col="EX1">
+            <span class="text-xs text-slate-700 dark:text-slate-300">Exam 1 (EX1)</span>
+          </label>
+          <label class="flex items-center gap-2 py-0.5">
+            <input type="checkbox" class="exam-col-checkbox" value="EX2" data-exam-col="EX2">
+            <span class="text-xs text-slate-700 dark:text-slate-300">Exam 2 (EX2)</span>
+          </label>
+          <label class="flex items-center gap-2 py-0.5">
+            <input type="checkbox" class="exam-col-checkbox" value="EX3" data-exam-col="EX3">
+            <span class="text-xs text-slate-700 dark:text-slate-300">Exam 3 (EX3)</span>
+          </label>
+          <label class="flex items-center gap-2 py-0.5">
+            <input type="checkbox" class="exam-col-checkbox" value="FEX" data-exam-col="FEX">
+            <span class="text-xs text-slate-700 dark:text-slate-300">Final (FEX)</span>
+          </label>
+        </div>
+      </div>
       <div class="flex gap-3 pt-2">
         <button type="button" onclick="closeModal()" class="flex-1 px-4 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-colors">
           Cancel
@@ -347,6 +369,7 @@ function closeModal() {
   document.getElementById('assignmentForm').reset();
   // Uncheck any LO checkboxes
   document.querySelectorAll('.lo-checkbox').forEach(cb => cb.checked = false);
+  document.querySelectorAll('.exam-col-checkbox').forEach(cb => { cb.checked = false; });
 }
 
 function createLO() {
@@ -392,6 +415,16 @@ function editAssignment(assignment) {
     if (cb) cb.checked = true;
   });
 
+  document.querySelectorAll('.exam-col-checkbox').forEach(cb => { cb.checked = false; });
+  const enabledExam = Array.isArray(assignment.enabled_exam_score_columns)
+    ? assignment.enabled_exam_score_columns
+    : [];
+  enabledExam.forEach(code => {
+    const u = String(code || '').trim().toUpperCase();
+    const ex = document.querySelector(`.exam-col-checkbox[data-exam-col="${u}"]`);
+    if (ex) ex.checked = true;
+  });
+
   const modal = document.getElementById('addAssignmentModal');
   if (modal) {
     modal.classList.remove('hidden');
@@ -427,13 +460,15 @@ function saveAssignment() {
   }
 
   const selectedLOs = Array.from(document.querySelectorAll('.lo-checkbox:checked')).map(cb => cb.value);
+  const enabledExamScoreColumns = Array.from(document.querySelectorAll('.exam-col-checkbox:checked')).map(cb => cb.value);
 
   const data = {
     name: name,
     homework_group: hwGroup,
     date_returned: dateReturned || null,
     revision_due: revisionDue || null,
-    selected_los: selectedLOs
+    selected_los: selectedLOs,
+    enabled_exam_score_columns: enabledExamScoreColumns
   };
 
   const url = assignmentId ? `/class/{{ class_id }}/assignments/${assignmentId}/update` : `/class/{{ class_id }}/create_assignment`;

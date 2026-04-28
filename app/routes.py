@@ -241,6 +241,87 @@ def _student_name_key(name: str) -> str:
     return _normalize_spaces((name or "").replace(",", " ").lower())
 
 
+def _load_assignment_enabled_exam_score_columns(class_id: str, assignment_id: str) -> List[str]:
+    """Exam columns (EX1, EX2, EX3, FEX) enabled on this assignment for empty-column UI."""
+    try:
+        r = (
+            supabase_admin.table("assignments")
+            .select("enabled_exam_score_columns")
+            .eq("id", assignment_id)
+            .eq("class_id", class_id)
+            .limit(1)
+            .execute()
+        )
+        if not r.data:
+            return []
+        raw = r.data[0].get("enabled_exam_score_columns")
+        if raw is None:
+            return []
+        return Homework.normalize_enabled_exam_score_column_list(
+            raw if isinstance(raw, list) else []
+        )
+    except Exception as e:
+        err = str(e).lower()
+        if "enabled_exam_score_columns" in str(e) or "pgrst204" in err or "schema cache" in err:
+            return []
+        logger.error(
+            "Error loading enabled_exam_score_columns for assignment %s: %s",
+            assignment_id,
+            e,
+        )
+        return []
+
+
+def _assignments_insert_compat(row: Dict[str, Any]):
+    """Insert assignment; omit enabled_exam_score_columns if the column is not deployed yet."""
+    try:
+        return supabase_admin.table("assignments").insert(row).execute()
+    except Exception as e:
+        if "enabled_exam_score_columns" in row and (
+            "enabled_exam_score_columns" in str(e)
+            or "PGRST204" in str(e)
+            or "schema cache" in str(e).lower()
+        ):
+            row2 = {k: v for k, v in row.items() if k != "enabled_exam_score_columns"}
+            logger.warning(
+                "assignments insert without enabled_exam_score_columns (run scripts/add_assignments_enabled_exam_score_columns.sql): %s",
+                e,
+            )
+            return supabase_admin.table("assignments").insert(row2).execute()
+        raise
+
+
+def _assignments_update_compat(assignment_id: str, class_id: str, fields: Dict[str, Any]):
+    """Update assignment row; omit enabled_exam_score_columns if the column is missing."""
+    try:
+        return (
+            supabase_admin.table("assignments")
+            .update(fields)
+            .eq("id", assignment_id)
+            .eq("class_id", class_id)
+            .execute()
+        )
+    except Exception as e:
+        if "enabled_exam_score_columns" in fields and (
+            "enabled_exam_score_columns" in str(e)
+            or "PGRST204" in str(e)
+            or "schema cache" in str(e).lower()
+        ):
+            fields2 = {k: v for k, v in fields.items() if k != "enabled_exam_score_columns"}
+            logger.warning(
+                "assignments update without enabled_exam_score_columns (run scripts/add_assignments_enabled_exam_score_columns.sql): %s",
+                e,
+            )
+            return (
+                supabase_admin.table("assignments")
+                .update(fields2)
+                .eq("id", assignment_id)
+                .eq("class_id", class_id)
+                .execute()
+            )
+        raise
+
+
 def _exam_storage_keys_for_class(class_id: str) -> Dict[str, set]:
     """Return exam column -> homework_scores storage keys for this class."""
     out: Dict[str, set] = {}
@@ -1405,15 +1486,20 @@ def create_assignment(class_id):
     if not name or not homework_group:
         return jsonify({"success": False, "error": "Missing or invalid required fields (name, homework_group)."}), 400
 
+    enabled_exam_cols = Homework.normalize_enabled_exam_score_column_list(
+        data.get("enabled_exam_score_columns") or data.get("exam_score_columns") or []
+    )
+
     try:
         # Create new assignment
-        result = supabase_admin.table("assignments").insert({
+        result = _assignments_insert_compat({
             "class_id": class_id,
             "name": name,
             "homework_group": homework_group,
             "date_returned": data.get('date_returned'),
-            "revision_due": data.get('revision_due')
-        }).execute()
+            "revision_due": data.get('revision_due'),
+            "enabled_exam_score_columns": enabled_exam_cols,
+        })
         
         # Link selected LOs to this assignment (batch insert)
         if result.data:
@@ -1432,15 +1518,33 @@ def create_assignment(class_id):
 @api_instructor_required
 def update_assignment(class_id, assignment_id):
     
-    data = request.get_json()
+    data = request.get_json() or {}
+    has_exam_payload = (
+        "enabled_exam_score_columns" in data
+        or "exam_score_columns" in data
+    )
+    if has_exam_payload:
+        enabled_raw = data.get("enabled_exam_score_columns")
+        if enabled_raw is None:
+            enabled_raw = data.get("exam_score_columns")
+        if not isinstance(enabled_raw, list):
+            enabled_raw = []
+        enabled_exam_cols = Homework.normalize_enabled_exam_score_column_list(enabled_raw)
+    else:
+        enabled_exam_cols = None
+
+    update_fields = {
+        "name": data['name'],
+        "homework_group": data['homework_group'],
+        "date_returned": data.get('date_returned'),
+        "revision_due": data.get('revision_due'),
+    }
+    if enabled_exam_cols is not None:
+        update_fields["enabled_exam_score_columns"] = enabled_exam_cols
+
     try:
         # Update assignment
-        supabase_admin.table("assignments").update({
-            "name": data['name'],
-            "homework_group": data['homework_group'],
-            "date_returned": data.get('date_returned'),
-            "revision_due": data.get('revision_due')
-        }).eq("id", assignment_id).eq("class_id", class_id).execute()
+        _assignments_update_compat(assignment_id, class_id, update_fields)
         
         # Update linked LOs — delete existing, batch insert new
         supabase_admin.table("assignment_objectives").delete().eq("assignment_id", assignment_id).execute()
@@ -2456,12 +2560,16 @@ def api_assignment_grades(class_id, assignment_id):
                 return (1, 0)
             return (2, str(col))
 
-        exam_columns = sorted(exam_keys_by_col.keys(), key=_exam_col_sort_key)
+        enabled_on_assignment = _load_assignment_enabled_exam_score_columns(
+            class_id, assignment_id
+        )
+        exam_columns_set = set(exam_keys_by_col.keys()) | set(enabled_on_assignment)
+        exam_columns = sorted(exam_columns_set, key=_exam_col_sort_key)
         exam_scores: Dict[str, Dict[str, Any]] = {c: {} for c in exam_columns}
         for col in exam_columns:
             keys = [k for k in exam_keys_by_col.get(col, set()) if k]
             if not keys:
-                continue
+                keys = [f"EXAM::{col}"]
             try:
                 rows = (
                     supabase_admin.table("homework_scores")
