@@ -1,4 +1,5 @@
 {% extends "app_base.html" %}
+{% from "_components.html" import assignment_exam_score_chips %}
 
 {% block content %}
 <div class="space-y-4">
@@ -42,6 +43,7 @@
                 {% endfor %}
               </div>
               {% endif %}
+              {{ assignment_exam_score_chips(assignment) }}
             </div>
             <div class="flex items-center gap-2">
               <button type="button" class="edit-assignment p-1.5 text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors" title="Edit"
