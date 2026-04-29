@@ -45,23 +45,6 @@
         </div>
       </div>
 
-      <!-- Filter Type -->
-      <div>
-        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">
-          <svg class="inline w-4 h-4 mr-1 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2a1 1 0 01-.293.707L13 13.414V19a1 1 0 01-.553.894l-4 2A1 1 0 017 21v-7.586L3.293 6.707A1 1 0 013 6V4z"/>
-          </svg>
-          Filter Type
-        </label>
-        <div class="flex gap-1">
-          <button type="button" id="filterAll" onclick="setFilter('all')"
-            class="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors">All</button>
-          <button type="button" id="filterHomework" onclick="setFilter('homework')"
-            class="px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">Homework</button>
-          <button type="button" id="filterTests" onclick="setFilter('tests')"
-            class="px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">Tests</button>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -816,36 +799,6 @@ document.addEventListener('keydown', (e) => {
     document.getElementById('undoBtn').click();
   }
 });
-
-// Filter buttons
-let currentFilter = 'all';
-
-function setFilter(type) {
-  currentFilter = type;
-  const active = 'px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors';
-  const inactive = 'px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
-  document.getElementById('filterAll').className = type === 'all' ? active : inactive;
-  document.getElementById('filterHomework').className = type === 'homework' ? active : inactive;
-  document.getElementById('filterTests').className = type === 'tests' ? active : inactive;
-
-  // Filter dropdown options by type
-  document.querySelectorAll('#assignmentFilter option').forEach(opt => {
-    const group = (opt.dataset.group || '').toLowerCase();
-    if (type === 'all') opt.style.display = '';
-    else if (type === 'homework') opt.style.display = group.includes('hw') ? '' : 'none';
-    else if (type === 'tests') opt.style.display = group.includes('exam') ? '' : 'none';
-  });
-  const assignmentFilter = document.getElementById('assignmentFilter');
-  if (assignmentFilter) {
-    const selectedOption = assignmentFilter.options[assignmentFilter.selectedIndex];
-    const selectedHidden = !selectedOption || selectedOption.style.display === 'none';
-    if (selectedHidden) {
-      const firstVisible = Array.from(assignmentFilter.options).find((opt) => opt.style.display !== 'none');
-      if (firstVisible) assignmentFilter.value = firstVisible.value;
-    }
-  }
-  filterByAssignment();
-}
 
 function filterByAssignment() {
   const assignmentId = document.getElementById('assignmentFilter').value;
