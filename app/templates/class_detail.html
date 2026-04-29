@@ -800,8 +800,6 @@ function closeUploadStudentsModal(clearFile = true) {
   }
 }
 
-let studentUploadPreviewRows = [];
-
 function renderStudentUploadPreviewTable(rows) {
   const tbody = document.getElementById('studentUploadPreviewTbody');
   if (!tbody) return;
@@ -901,8 +899,7 @@ function submitUploadStudents() {
         return;
       }
 
-      studentUploadPreviewRows = data.rows || [];
-      renderStudentUploadPreviewTable(studentUploadPreviewRows);
+      renderStudentUploadPreviewTable(data.rows || []);
 
       const warnEl = document.getElementById('studentUploadPreviewWarnings');
       if (warnEl) {
@@ -982,15 +979,12 @@ function confirmStudentUploadImport() {
       }
       const stats = data.stats || {};
       const warningCount = Array.isArray(data.warnings) ? data.warnings.length : 0;
-      alert(
-        'Student upload complete.\n\n' +
-        `Rows processed: ${data.total_rows || 0}\n` +
-        `Created students: ${stats.created_profiles || 0}\n` +
-        `Enrolled existing profiles: ${stats.enrolled_existing_profiles || 0}\n` +
-        `Updated missing emails: ${stats.updated_missing_emails || 0}\n` +
-        `Skipped existing rows: ${stats.skipped_existing || 0}\n` +
-        `Warnings: ${warningCount}`
-      );
+      // Avoid exposing internal import/debug counters on the student-facing upload UI.
+      if (warningCount > 0) {
+        alert('Student upload complete. Some rows may have been skipped or require review.');
+      } else {
+        alert('Student upload complete.');
+      }
       const nextUrl = new URL(window.location.href);
       nextUrl.searchParams.set('manage_students', '1');
       window.location.assign(nextUrl.toString());

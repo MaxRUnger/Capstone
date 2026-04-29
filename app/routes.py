@@ -1024,10 +1024,12 @@ def login():
 def signup():
     data = request.get_json()
     try:
+        login_redirect_url = f"{_public_base_url()}/login"
         result = supabase.auth.sign_up({
             "email": data.get("email"),
             "password": data.get("password"),
             "options": {
+                "email_redirect_to": login_redirect_url,
                 "data": {
                     "full_name": data.get("name"),
                     "role": "instructor"
@@ -1130,6 +1132,8 @@ def instructor_dashboard():
 @main_bp.route("/class/<class_id>")
 @login_required
 def class_detail(class_id):
+    if not _instructor_owns_class(class_id):
+        return redirect(url_for('main.instructor_dashboard'))
     class_data = Course.get_full_class_data(class_id)
     if not class_data:
         logger.error("class_detail: get_full_class_data returned None for class_id=%s", class_id)
@@ -1176,6 +1180,8 @@ def class_detail(class_id):
 @main_bp.route("/class/<class_id>/add_student", methods=["POST"])
 @api_instructor_required
 def add_student(class_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     data = request.get_json()
     email = data.get('email', '').strip()
     name = data.get('name', '').strip()
@@ -1223,6 +1229,8 @@ def add_student(class_id):
 @main_bp.route("/class/<class_id>/students/<student_id>/delete", methods=["POST"])
 @api_instructor_required
 def delete_student_from_class(class_id, student_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     try:
         # Remove enrollment for this class only
         supabase_admin.table("enrollments").delete().eq("class_id", class_id).eq("student_id", student_id).execute()
@@ -1243,6 +1251,8 @@ def delete_student_from_class(class_id, student_id):
 @main_bp.route("/class/<class_id>/students")
 @login_required
 def class_students(class_id):
+    if not _instructor_owns_class(class_id):
+        return redirect(url_for('main.instructor_dashboard'))
     class_data = Course.get_full_class_data(class_id)
     
     if not class_data:
@@ -1261,6 +1271,8 @@ def class_students(class_id):
 @main_bp.route("/class/<class_id>/delete", methods=["POST"])
 @api_instructor_required
 def delete_class(class_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     try:
         lo_ids = Course.get_lo_ids_for_class(class_id)
 
@@ -1286,6 +1298,9 @@ def copy_class(class_id):
     """Duplicate a class for the same instructor: same course settings and LOs; no students or assignments."""
     if session.get("role") != "instructor":
         return redirect(url_for("main.login_page"))
+
+    if not _instructor_owns_class(class_id):
+        return redirect(url_for("main.instructor_dashboard"))
 
     form_token = (request.form.get("copy_class_token") or "").strip()
     session_token = (session.get("copy_class_token") or "").strip()
@@ -1398,6 +1413,8 @@ def copy_class(class_id):
 @main_bp.route("/class/<class_id>/students/<student_id>")
 @login_required
 def class_student_detail(class_id, student_id):
+    if not _instructor_owns_class(class_id):
+        return redirect(url_for('main.instructor_dashboard'))
     class_data = Course.get_full_class_data(class_id)
     if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
@@ -1445,6 +1462,8 @@ def class_student_detail(class_id, student_id):
 @main_bp.route("/class/<class_id>/assignments")
 @login_required
 def class_assignments(class_id):
+    if not _instructor_owns_class(class_id):
+        return redirect(url_for('main.instructor_dashboard'))
     class_data = Course.get_full_class_data(class_id)
     
     if not class_data:
@@ -1475,7 +1494,9 @@ def class_assignments(class_id):
 @main_bp.route("/class/<class_id>/create_assignment", methods=["POST"])
 @api_instructor_required
 def create_assignment(class_id):
-    
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+
     data = request.get_json() or {}
     logger.debug("create_assignment payload: %s", data)
 
@@ -1517,7 +1538,9 @@ def create_assignment(class_id):
 @main_bp.route("/class/<class_id>/assignments/<assignment_id>/update", methods=["POST", "PUT"])
 @api_instructor_required
 def update_assignment(class_id, assignment_id):
-    
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+
     data = request.get_json() or {}
     has_exam_payload = (
         "enabled_exam_score_columns" in data
@@ -1560,12 +1583,26 @@ def update_assignment(class_id, assignment_id):
 @main_bp.route("/class/<class_id>/delete_assignment/<assignment_id>", methods=["POST"])
 @api_instructor_required
 def delete_assignment(class_id, assignment_id):
-    
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+
     try:
+        # Verify the assignment actually belongs to this class before touching anything.
+        owner_check = (
+            supabase_admin.table("assignments")
+            .select("id")
+            .eq("id", assignment_id)
+            .eq("class_id", class_id)
+            .limit(1)
+            .execute()
+        )
+        if not owner_check.data:
+            return jsonify({"success": False, "error": "Not found"}), 404
+
         # First delete assignment_objectives links
         supabase_admin.table("assignment_objectives").delete().eq("assignment_id", assignment_id).execute()
-        # Then delete the assignment
-        supabase_admin.table("assignments").delete().eq("id", assignment_id).execute()
+        # Then delete the assignment, scoped by class_id so a leaked id can't cross classes.
+        supabase_admin.table("assignments").delete().eq("id", assignment_id).eq("class_id", class_id).execute()
         return jsonify({"success": True})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
@@ -1810,6 +1847,8 @@ def api_import_learning_objectives(class_id):
 @main_bp.route("/class/<class_id>/reports")
 @login_required
 def class_reports(class_id):
+    if not _instructor_owns_class(class_id):
+        return redirect(url_for('main.instructor_dashboard'))
     class_data = Course.get_full_class_data(class_id)
     
     if not class_data:
@@ -1987,6 +2026,8 @@ def api_send_bulk_report_emails(class_id):
 @main_bp.route("/class/<class_id>/student/<student_id>/history")
 @login_required
 def student_history(class_id, student_id):
+    if not _instructor_owns_class(class_id):
+        return redirect(url_for('main.instructor_dashboard'))
     class_data = Course.get_full_class_data(class_id)
     if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
@@ -2028,7 +2069,6 @@ def student_history(class_id, student_id):
     
     # Get all learning objectives for the class
     learning_objectives = class_data.get('learning_objectives', [])
-    lo_lookup = {str(lo.get('id')): lo for lo in learning_objectives}
     
     # Organize grades by learning objective
     student_grades = {}
@@ -2046,7 +2086,7 @@ def student_history(class_id, student_id):
         lo_info = {
             'id': lo_id,
             'vendor_code': lo.get('vendor_code'),
-                'description': lo.get('description'),
+            'description': lo.get('description'),
             'grades': grades
         }
         lo_grade_data.append(lo_info)
@@ -2064,6 +2104,8 @@ def student_history(class_id, student_id):
 @main_bp.route("/class/<class_id>/speed_grader", endpoint='class_speed_grader')
 @login_required
 def class_speed_grader(class_id):
+    if not _instructor_owns_class(class_id):
+        return redirect(url_for('main.instructor_dashboard'))
     class_data = Course.get_full_class_data(class_id)
 
     if not class_data:
@@ -2116,6 +2158,9 @@ def class_speed_grader(class_id):
 @main_bp.route("/class/<class_id>/update_grade", methods=["GET", "POST"], endpoint='upload_grades')
 @login_required
 def update_grade_handler(class_id):
+    if not _instructor_owns_class(class_id):
+        return redirect(url_for('main.instructor_dashboard'))
+
     class_data = Course.get_full_class_data(class_id)
 
     if not class_data:
@@ -2264,6 +2309,9 @@ def mobile_upload_file(class_id, token):
 @main_bp.route("/class/<class_id>/create_learning_objective", methods=["GET", "POST"], endpoint='create_learning_objective')
 @login_required
 def create_lo_handler(class_id):
+    if not _instructor_owns_class(class_id):
+        return redirect(url_for('main.instructor_dashboard'))
+
     class_data = Course.get_full_class_data(class_id)
     if not class_data:
         return redirect(url_for('main.instructor_dashboard'))
@@ -2283,14 +2331,15 @@ def create_lo_handler(class_id):
             if assignment_name:
                 try:
                     if assignment_id:
-                        # Update existing assignment
+                        # Update existing assignment, scoped by class_id so a
+                        # leaked id from another class can't be touched here.
                         supabase_admin.table("assignments").update({
                             "name": assignment_name,
                             "homework_group": hw_group,
                             "date_returned": date_returned,
                             "revision_due": revision_due
-                        }).eq("id", assignment_id).execute()
-                        
+                        }).eq("id", assignment_id).eq("class_id", class_id).execute()
+
                         # Delete existing links and batch re-insert
                         supabase_admin.table("assignment_objectives").delete().eq("assignment_id", assignment_id).execute()
                         ao_rows = [{"assignment_id": assignment_id, "learning_objective_id": lo_id}
@@ -2428,8 +2477,72 @@ def add_class():
 @main_bp.route("/api/update_grade", methods=["POST"], endpoint='api_update_grade')
 @api_login_required
 def api_update_grade():
-    data = request.get_json()
+    data = request.get_json() or {}
     try:
+        supplied_class_id = data.get("class_id")
+        assignment_id = data.get("assignment_id")
+        lo_id = data.get("lo_id")
+
+        # Always derive the authoritative class_id from the related entities
+        # (assignment / learning objective) — never trust the caller's value
+        # alone, since they could send a class_id they own while passing a
+        # foreign assignment_id / lo_id.
+        derived_from_assignment = None
+        derived_from_lo = None
+
+        if assignment_id:
+            try:
+                a = (
+                    supabase_admin.table("assignments")
+                    .select("class_id")
+                    .eq("id", assignment_id)
+                    .limit(1)
+                    .execute()
+                )
+                if a.data:
+                    derived_from_assignment = a.data[0].get("class_id")
+            except Exception:
+                derived_from_assignment = None
+        if lo_id:
+            try:
+                lo = (
+                    supabase_admin.table("learning_objectives")
+                    .select("class_id")
+                    .eq("id", lo_id)
+                    .limit(1)
+                    .execute()
+                )
+                if lo.data:
+                    derived_from_lo = lo.data[0].get("class_id")
+            except Exception:
+                derived_from_lo = None
+
+        # If both assignment and LO are present they must agree on a class.
+        if (
+            derived_from_assignment
+            and derived_from_lo
+            and str(derived_from_assignment) != str(derived_from_lo)
+        ):
+            return jsonify({"success": False, "error": "Forbidden"}), 403
+
+        true_class_id = derived_from_assignment or derived_from_lo
+
+        # If the caller supplied a class_id, it must match the derived one.
+        if (
+            supplied_class_id
+            and true_class_id
+            and str(supplied_class_id) != str(true_class_id)
+        ):
+            return jsonify({"success": False, "error": "Forbidden"}), 403
+
+        # Fall back to the caller-supplied value only when nothing could be
+        # derived (e.g. legacy callers without assignment/lo). Ownership is
+        # still enforced below.
+        class_id = true_class_id or supplied_class_id
+
+        if not class_id or not _instructor_owns_class(str(class_id)):
+            return jsonify({"success": False, "error": "Forbidden"}), 403
+
         Grade.update_score(student_id=data['student_id'], lo_id=data['lo_id'], 
                             top_score=data['top_score'], second_score=data.get('second_score'),
                             assignment_id=data.get('assignment_id'))
@@ -2441,6 +2554,8 @@ def api_update_grade():
 @main_bp.route("/api/class/<class_id>/assignments")
 @api_login_required
 def api_class_assignments(class_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     try:
         result = supabase_admin.table("assignments") \
             .select("*") \
@@ -2456,6 +2571,8 @@ def api_class_assignments(class_id):
 @api_login_required
 def save_grades(class_id):
     try:
+        if not _instructor_owns_class(class_id):
+            return jsonify({"success": False, "error": "Forbidden"}), 403
         data = request.get_json()
         grades_dict = data.get('grades', {})
         assignment_id = data.get('assignment_id')
@@ -2494,6 +2611,8 @@ def save_grades(class_id):
 @api_login_required
 def api_assignment_grades(class_id, assignment_id):
     """Return grades for a specific assignment, keyed by student_id|lo_id."""
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     try:
         result = supabase_admin.table("grades") \
             .select("student_id, learning_objective_id, top_score") \
@@ -2563,8 +2682,9 @@ def api_assignment_grades(class_id, assignment_id):
         enabled_on_assignment = _load_assignment_enabled_exam_score_columns(
             class_id, assignment_id
         )
-        exam_columns_set = set(exam_keys_by_col.keys()) | set(enabled_on_assignment)
-        exam_columns = sorted(exam_columns_set, key=_exam_col_sort_key)
+        # IMPORTANT: Speed Grader should only show exam columns explicitly enabled
+        # on the currently selected assignment (not every class-level exam key).
+        exam_columns = sorted(set(enabled_on_assignment), key=_exam_col_sort_key)
         exam_scores: Dict[str, Dict[str, Any]] = {c: {} for c in exam_columns}
         for col in exam_columns:
             keys = [k for k in exam_keys_by_col.get(col, set()) if k]
@@ -2609,6 +2729,8 @@ def api_assignment_grades(class_id, assignment_id):
 @api_login_required
 def save_hw_percentage(class_id):
     try:
+        if not _instructor_owns_class(class_id):
+            return jsonify({"success": False, "error": "Forbidden"}), 403
         data = request.get_json()
         student_id = data.get('student_id')
         score = data.get('score')
@@ -2676,6 +2798,8 @@ def save_hw_percentage(class_id):
 @api_login_required
 def save_exam_score(class_id):
     try:
+        if not _instructor_owns_class(class_id):
+            return jsonify({"success": False, "error": "Forbidden"}), 403
         data = request.get_json() or {}
         student_id = data.get("student_id")
         exam_col = str(data.get("exam_col") or "").strip().upper()
@@ -2721,6 +2845,8 @@ def save_exam_score(class_id):
 @api_login_required
 def use_free_pass(class_id):
     try:
+        if not _instructor_owns_class(class_id):
+            return jsonify({"success": False, "error": "Forbidden"}), 403
         data = request.get_json()
         student_id = data.get('student_id')
         if not student_id:
@@ -2761,6 +2887,8 @@ def use_free_pass(class_id):
 @api_login_required
 def return_free_pass(class_id):
     try:
+        if not _instructor_owns_class(class_id):
+            return jsonify({"success": False, "error": "Forbidden"}), 403
         data = request.get_json()
         student_id = data.get('student_id')
         if not student_id:
@@ -2791,8 +2919,10 @@ def return_free_pass(class_id):
 
 
 @main_bp.route("/api/class/<class_id>/available_students", methods=["GET"])
-@api_login_required
+@api_instructor_required
 def get_available_students(class_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     try:
         all_students = supabase_admin.table("profiles").select("id, full_name") \
             .eq("role", "student").execute().data or []
@@ -2813,8 +2943,10 @@ def get_available_students(class_id):
 
 
 @main_bp.route("/api/class/<class_id>/add_student", methods=["POST"])
-@api_login_required
+@api_instructor_required
 def api_add_student_to_class(class_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     try:
         data = request.get_json()
         student_name = data.get('student_name', '').strip()
@@ -2914,6 +3046,8 @@ def _build_profiles_by_email_for_rows(rows: List[Dict[str, str]]) -> Dict[str, D
 @main_bp.route("/api/class/<class_id>/upload_students", methods=["POST"])
 @api_instructor_required
 def api_upload_students_to_class(class_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     err, rows, parse_warnings = _parse_student_csv_upload()
     if err:
         return jsonify({
@@ -3080,6 +3214,8 @@ def api_upload_students_to_class(class_id):
 @main_bp.route("/api/class/<class_id>/preview-upload-students", methods=["POST"])
 @api_instructor_required
 def api_preview_upload_students(class_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     err, rows, parse_warnings = _parse_student_csv_upload()
     if err:
         return jsonify({
@@ -3197,6 +3333,8 @@ def api_preview_upload_students(class_id):
 @main_bp.route("/api/class/<class_id>/toggle_mute", methods=["POST"])
 @api_instructor_required
 def api_toggle_mute(class_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
     try:
         data = request.get_json()
         student_id = data.get('student_id')
@@ -3214,6 +3352,8 @@ def api_toggle_mute(class_id):
 @api_login_required
 def api_remove_student_from_class(class_id):
     try:
+        if not _instructor_owns_class(class_id):
+            return jsonify({"success": False, "error": "Forbidden"}), 403
         data = request.get_json()
         student_id = data.get('student_id')
         if not student_id:
@@ -3244,6 +3384,8 @@ def api_import_grades():
     extracted_los = data.get('learning_objectives', []) or []
     if not class_id:
         return jsonify({"success": False, "error": "Missing class_id"}), 400
+    if not _instructor_owns_class(str(class_id)):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
 
     # Keep import-only numeric columns (e.g., EX1/FEX) out of mastery LO creation/linking.
     extracted_los = [

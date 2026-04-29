@@ -277,8 +277,8 @@ td[data-lo-id] .mastery-badge {
 }
 #assignmentReport.measuring-print th,
 #assignmentReport.measuring-print td {
-  padding: 3px 3px !important;
-  line-height: 1.15 !important;
+  padding: 2px 2px !important;
+  line-height: 1.1 !important;
 }
 #assignmentReport.measuring-print th:nth-child(2),
 #assignmentReport.measuring-print td:nth-child(2) {
@@ -333,8 +333,8 @@ td[data-lo-id] .mastery-badge {
   }
   #assignmentReport th,
   #assignmentReport td {
-    padding: 3px 3px !important;
-    line-height: 1.15 !important;
+    padding: 2px 2px !important;
+    line-height: 1.1 !important;
     letter-spacing: 0 !important;
   }
   #assignmentReport th:first-child,
@@ -427,9 +427,21 @@ const studentDropdownBtnEl = document.getElementById('studentDropdownBtn');
 const emailSelectedBtnEl = document.getElementById('emailSelectedBtn');
 const viewAllEl = document.getElementById('view-all');
 const viewAllAssignmentsEl = document.getElementById('view-all-assignments');
-const defaultHwBadgeClass = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
-const passingHwBadgeClass = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300';
-const failingHwBadgeClass = 'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300';
+
+// Match Speed Grader thresholds/colors for HW %.
+const EXAM_HW_MIN = 65;      // in-class grade eligible (yellow)
+const REVISION_M_MIN = 75;   // revision to M eligible (green)
+
+const defaultHwBadgeClass =
+  'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
+const highHwBadgeClass =
+  'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300';
+const midHwBadgeClass =
+  'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200';
+const lowHwBadgeClass =
+  'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-red-100 dark:bg-red-900/40 text-red-700 dark:text-red-300';
+const hwPassBadgeClass =
+  'hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-sky-600 text-white';
 function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
   var scope = (scopeAssignmentId === undefined || scopeAssignmentId === null)
     ? '.hw-score-display'
@@ -457,13 +469,15 @@ function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
           const score = hwScores[sid];
           if (score === -1) {
             el.textContent = 'HW Pass';
-            el.className = passingHwBadgeClass;
+            el.className = hwPassBadgeClass;
           } else {
             el.textContent = score + '%';
-            if (score >= 65) {
-              el.className = passingHwBadgeClass;
+            if (score >= REVISION_M_MIN) {
+              el.className = highHwBadgeClass;
+            } else if (score >= EXAM_HW_MIN) {
+              el.className = midHwBadgeClass;
             } else {
-              el.className = failingHwBadgeClass;
+              el.className = lowHwBadgeClass;
             }
           }
         }
@@ -480,7 +494,7 @@ function renderExamColumnsInReports(examColumns, examScoresByCol, scopeAssignmen
 
   const tableSelector = (scopeAssignmentId === undefined || scopeAssignmentId === null || String(scopeAssignmentId) === '')
     ? '#all-students-table'
-    : '#assignmentReport table';
+    : '#view-all-assignments table[data-assignment-id="' + String(scopeAssignmentId) + '"]';
   const table = document.querySelector(tableSelector);
   if (!table) return;
   const headerRow = table.querySelector('thead tr');
@@ -638,10 +652,7 @@ function clearStudentSelection() {
 
 // --- Clear all filters ---
 function clearAllFilters() {
-  const firstAssignmentItem = document.querySelector('.assignment-dd-item[data-assignment-id]:not([data-assignment-id=""])');
-  if (firstAssignmentItem) {
-    selectAssignment(firstAssignmentItem.getAttribute('data-assignment-id'), firstAssignmentItem.textContent.trim());
-  }
+  selectAssignment('', 'All Assignments');
   clearStudentSelection();
   updateEmailSelectedButton();
 }
@@ -706,7 +717,7 @@ function renderAllAssignmentsView() {
     html += '    <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{{ class_name }}</p>';
     html += '  </div>';
     html += '  <div class="overflow-x-auto">';
-    html += '    <table class="w-full text-sm">';
+    html += '    <table class="w-full text-sm" data-assignment-id="' + escapeHtml(assignmentId) + '">';
     html += '      <thead><tr class="border-b border-slate-200 dark:border-slate-700">';
     html += '        <th class="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400 w-48">Student</th>';
     html += '        <th class="text-center px-2 py-2 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap print:hidden">Email</th>';
@@ -1181,7 +1192,10 @@ function applySinglePagePrintScale() {
   // Page width is naturally filled by table-layout: fixed + width: 100%.
   // Only scale DOWN if the table is taller than one page.
   const heightScale = pageHeightPx / Math.max(1, measuredHeight);
-  const finalScale = Math.max(0.3, Math.min(1, heightScale));
+  // Be a bit more conservative so slightly larger rosters (e.g. 34 students)
+  // still fit on one physical page across printer/browser differences.
+  const safetyFactor = 0.9;
+  const finalScale = Math.max(0.25, Math.min(1, heightScale * safetyFactor));
   assignmentReport.style.setProperty('--print-scale', String(finalScale));
 }
 
