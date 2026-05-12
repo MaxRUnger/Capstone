@@ -1,0 +1,59 @@
+{# Reusable components: HomeworkPercentageBadge, ProgressBar #}
+{% macro homework_percentage_badge(mastered, total, size='default') %}
+{% set pct = (mastered / total * 100)|round|int if total > 0 else 0 %}
+<span class="homework-badge inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold {{ 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300' if pct == 100 else 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300' }}">{{ pct }}%</span>
+{% endmacro %}
+
+{% macro copy_email_button(email, compact=false) %}
+{% if email %}
+<button type="button"
+  data-copy-email-btn
+  data-email="{{ email|e }}"
+  class="shrink-0 inline-flex items-center justify-center rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors relative z-20 {{ 'p-0.5' if compact else 'p-1' }}"
+  onclick="event.stopPropagation(); copyEmailFromBtn(this); return false;"
+  aria-label="Copy email"
+  title="Copy email"
+  data-label-copied="Copied">
+  <svg class="{{ 'w-3.5 h-3.5' if compact else 'w-4 h-4' }}" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/>
+  </svg>
+</button>
+{% endif %}
+{% endmacro %}
+
+{% macro assignment_exam_score_chips(assignment, dense=true) %}
+{# Renders Exam 1-3 / Final for enabled_exam_score_columns (EX1..FEX). #}
+{# Iterates the canonical EX1/EX2/EX3/FEX list (not the raw stored list) so #}
+{# chip order is deterministic regardless of how the DB row stores them. #}
+{% set raw = assignment.enabled_exam_score_columns|default([], true) %}
+{% if raw is sequence and raw is not string and raw|length > 0 %}
+{% set labels = {'EX1': 'Exam 1', 'EX2': 'Exam 2', 'EX3': 'Exam 3', 'FEX': 'Final'} %}
+{% set chip = ('px-2 py-0.5 text-xs rounded-full font-medium bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-300' if dense else 'px-2 py-1 text-xs rounded-full font-medium bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-300') %}
+{% set wrap = 'mt-2 flex flex-wrap gap-1' if dense else 'mt-2 flex flex-wrap gap-2' %}
+{% set ns = namespace(found=[]) %}
+{% for code in ['EX1', 'EX2', 'EX3', 'FEX'] %}
+{% for x in raw %}
+{% if (x|string)|upper|replace(' ', '') == code and code not in ns.found %}
+{% set _ = ns.found.append(code) %}
+{% endif %}
+{% endfor %}
+{% endfor %}
+{% if ns.found %}
+<div class="{{ wrap }}">
+{% for code in ns.found %}
+<span class="{{ chip }}">{{ labels[code] }}</span>
+{% endfor %}
+</div>
+{% endif %}
+{% endif %}
+{% endmacro %}
+
+{% macro progress_bar(mastered, total, show_label=false) %}
+{% set pct = (mastered / total * 100)|round|int if total > 0 else 0 %}
+<div class="progress-bar-wrapper">
+  {% if show_label %}<span class="text-sm text-slate-600 dark:text-slate-400 mb-1 block">{{ mastered }}/{{ total }}</span>{% endif %}
+  <div class="h-2 bg-slate-100 dark:bg-slate-700 rounded-full overflow-hidden">
+    <div class="h-full bg-green-500 rounded-full transition-all" {{ ('style="width:' ~ pct ~ '%"')|safe }}></div>
+  </div>
+</div>
+{% endmacro %}

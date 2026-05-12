@@ -1,0 +1,1599 @@
+{% extends "app_base.html" %}
+{% from "_components.html" import homework_percentage_badge, progress_bar, copy_email_button, assignment_exam_score_chips %}
+
+{% block content %}
+<div class="space-y-6">
+  <div class="flex items-center justify-between">
+    <div>
+      <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Dashboard</h1>
+      <p class="text-slate-500 dark:text-slate-400 mt-1">{{ class_name }}</p>
+    </div>
+
+  </div>
+
+  {% set total_students = students|length %}
+  {% set total_all_students = all_students|length %}
+  {% set total_los = learning_objectives|length %}
+  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+    <button type="button" onclick="document.getElementById('studentManagementModal').classList.remove('hidden')" class="text-left bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm hover:scale-[1.02] transition-transform">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Active Students</p>
+          <p id="activeStudentsCount" class="text-3xl font-semibold text-slate-900 dark:text-white">{{ total_students }}</p>
+        </div>
+        <div class="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+        </div>
+      </div>
+    </button>
+    <button type="button" onclick="document.getElementById('overdueRevisionsModal').classList.remove('hidden')" class="mark-only text-left bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm hover:scale-[1.02] transition-transform">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Overdue Revisions</p>
+          <p class="text-3xl font-semibold text-orange-600 dark:text-orange-400">{{ overdue_revisions|length }}</p>
+        </div>
+        <div class="p-2.5 rounded-lg bg-orange-50 dark:bg-orange-900 text-orange-600 dark:text-orange-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"></path></svg>
+        </div>
+      </div>
+    </button>
+    <a href="{{ url_for('main.class_learning_objectives_summary', class_id=class_id) }}"
+       class="block bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm hover:scale-[1.02] transition-transform">
+      <div class="flex items-start justify-between">
+        <div>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Learning Objectives</p>
+          <p class="text-3xl font-semibold text-slate-900 dark:text-white">{{ total_los }}</p>
+        </div>
+        <div class="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-900 text-blue-600 dark:text-blue-400">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4M7.835 4.697a3.42 3.42 0 001.946-.806 3.42 3.42 0 014.438 0 3.42 3.42 0 001.946.806 3.42 3.42 0 013.138 3.138 3.42 3.42 0 00.806 1.946 3.42 3.42 0 010 4.438 3.42 3.42 0 00-.806 1.946 3.42 3.42 0 01-3.138 3.138 3.42 3.42 0 00-1.946.806 3.42 3.42 0 01-4.438 0 3.42 3.42 0 00-1.946-.806 3.42 3.42 0 01-3.138-3.138z"></path></svg>
+        </div>
+      </div>
+    </a>
+  </div>
+
+  <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)] gap-6 items-start">
+    <!-- ~60%: students, assignments, upload -->
+    <div class="min-w-0 bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700">
+      <div class="p-6 border-b border-slate-100 dark:border-slate-700">
+        <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-4">
+          <div class="flex gap-2 flex-wrap">
+            <button type="button" onclick="switchView('students')" id="btnStudents" class="px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors">By Students</button>
+            <button type="button" onclick="switchView('assignments')" id="btnAssignments" class="px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors">By Assignments</button>
+          </div>
+          <div class="flex gap-2 flex-wrap">
+            <a href="{{ url_for('main.upload_grades', class_id=class_id) }}" class="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors text-sm font-medium">Upload Grades</a>
+            <button type="button" onclick="openUploadStudentsModal()" class="px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors text-sm font-medium">Upload Students</button>
+            <a href="{{ url_for('main.class_assignments', class_id=class_id) }}" class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm font-medium">Manage Assignments</a>
+          </div>
+        </div>
+        <div class="relative">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+          <input type="text" id="searchInput" placeholder="Search..." oninput="handleSearch()" class="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-900 dark:text-white dark:placeholder-slate-400">
+        </div>
+      </div>
+
+      <div id="studentsView" class="divide-y divide-slate-50 dark:divide-slate-700">
+        {% for student in students %}
+        {% set los = student.learning_objectives %}
+        {% set passed = los|selectattr('is_passed')|list|length %}
+        <div class="student-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-student-id="{{ student.id }}" data-name="{{ student.name|lower }} {{ (student.email or '')|lower }}">
+          <div class="flex items-center justify-between">
+            <div class="flex items-center gap-3 min-w-0 flex-1">
+              <div class="min-w-0 flex-1">
+                <a href="{{ url_for('main.class_student_detail', class_id=class_id, student_id=student.id) }}" class="block hover:underline">
+                  <span class="font-medium text-slate-900 dark:text-white">{{ student.name }}</span>
+                </a>
+                {% if student.email %}
+                <div class="flex items-center gap-1 mt-0.5 min-w-0">
+                  <span class="text-xs text-slate-500 dark:text-slate-400 select-text cursor-text truncate">{{ student.email }}</span>
+                  {{ copy_email_button(student.email, compact=True) }}
+                </div>
+                {% endif %}
+              </div>
+              <a href="{{ url_for('main.class_student_detail', class_id=class_id, student_id=student.id) }}" class="shrink-0 hover:opacity-90" tabindex="-1" aria-hidden="true">
+                {{ homework_percentage_badge(passed, los|length) }}
+              </a>
+            </div>
+            <button type="button" onclick="deleteStudent('{{ student.id }}', '{{ student.name }}')" class="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors flex-shrink-0" title="Delete student">
+              <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+            </button>
+          </div>
+        </div>
+        {% endfor %}
+        <div id="studentsViewEmptyState" class="{% if students %}hidden {% endif %}px-6 py-10 text-center text-sm text-slate-500 dark:text-slate-400 border-t border-slate-100 dark:border-slate-700">
+          No active students. Open <strong class="text-slate-700 dark:text-slate-300">Manage Students</strong> to unmute roster members.
+        </div>
+      </div>
+
+      <div id="assignmentsView" class="hidden divide-y divide-slate-50 dark:divide-slate-700">
+        {% for assignment in assignments %}
+        <div class="assignment-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-assignment-name="{{ assignment.name|lower }}">
+          <div class="flex items-center justify-between cursor-pointer" onclick="toggleAssignment(this)">
+            <span class="font-medium text-slate-900 dark:text-white">{{ assignment.name }}</span>
+            <svg class="w-5 h-5 text-slate-400 chevron transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"></path></svg>
+          </div>
+          <div class="assignment-content mt-4 hidden">
+            <div class="space-y-4">
+              <div class="text-sm text-slate-600 dark:text-slate-400">
+                <span class="mark-only"><strong>Homework Group:</strong> {{ assignment.homework_group }}<br></span>
+                <span class="mark-only">{% if assignment.date_returned %}<strong>Date Returned:</strong> {{ assignment.date_returned }}<br>{% endif %}</span>
+                <span class="mark-only">{% if assignment.revision_due %}<strong>Revision Due:</strong> {{ assignment.revision_due }}<br>{% endif %}</span>
+              </div>
+              {% if assignment.assignment_objectives %}
+              <div>
+                <strong class="text-sm text-slate-600 dark:text-slate-400">Linked Learning Objectives:</strong>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  {% for ao in assignment.assignment_objectives %}
+                  <span class="px-2 py-1 bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 text-xs rounded-full">
+                    {{ ao.learning_objectives.vendor_code }}
+                  </span>
+                  {% endfor %}
+                </div>
+              </div>
+              {% endif %}
+              {{ assignment_exam_score_chips(assignment, dense=false) }}
+            </div>
+          </div>
+        </div>
+        {% else %}
+        <div class="p-12 text-center text-slate-400 dark:text-slate-500 text-sm">
+          No assignments yet.<br>
+          <span class="mt-1 inline-block">Go to <a href="{{ url_for('main.class_assignments', class_id=class_id) }}" class="text-blue-600 dark:text-blue-400 underline">Manage Assignments</a> to create one.</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    <!-- ~40%: learning objectives -->
+    <aside class="min-w-0 bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 lg:sticky lg:top-6 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto">
+      <div class="mb-5">
+        <h2 class="font-semibold text-slate-900 dark:text-white">Learning objectives</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400">Add objectives here or under Assignments. Link them to assignments when you manage assignments.</p>
+      </div>
+
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Objective Code</label>
+        <input type="text" id="loCode" placeholder="e.g., ALG-1.1"
+          class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+      </div>
+      <div class="mb-4">
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Description <span class="text-slate-400">(optional)</span></label>
+        <textarea id="loDescription" rows="1" data-max-height="420" placeholder="Brief description of the objective"
+          class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all resize-none overflow-hidden min-h-[2.75rem] leading-snug block"></textarea>
+      </div>
+      <div class="mb-6">
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Required Ms</label>
+        <input type="number" id="loRequiredMs" value="2" min="1" max="5"
+          class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all">
+      </div>
+
+      <form action="{{ url_for('main.create_learning_objective', class_id=class_id) }}" method="post" id="loForm">
+        <input type="hidden" name="form_type" value="create_lo">
+        <input type="hidden" name="return_to" value="dashboard">
+        <input type="hidden" name="code" id="hiddenLoCode">
+        <input type="hidden" name="description" id="hiddenLoDescription">
+        <input type="hidden" name="required_ms" id="hiddenLoRequiredMs">
+        <button type="button" onclick="dashboardCreateLO()" id="createLOBtn"
+          class="w-full px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2 shadow-sm shadow-blue-500/20">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+          Create Objective
+        </button>
+      </form>
+
+      <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-600 space-y-2">
+        <button type="button" id="loCsvToggleBtn"
+          class="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+          Upload Learning Objective
+        </button>
+        <div id="loCsvUploadPanel" class="hidden space-y-3 pt-1">
+          <p class="text-xs font-medium text-slate-600 dark:text-slate-400 uppercase tracking-wide">Import from CSV</p>
+          <input type="file" id="loCsvInput" accept=".csv,text/csv,application/csv" class="hidden">
+          <button type="button" id="loCsvChooseBtn" onclick="document.getElementById('loCsvInput').click()"
+            class="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100 rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+            Choose CSV from computer
+          </button>
+          <label for="loCsvTemplateCount" class="block text-sm font-medium text-slate-700 dark:text-slate-300">How many learning objectives are you importing?</label>
+          <input type="number" id="loCsvTemplateCount" min="1" max="500" value="10"
+            class="w-full px-4 py-2.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+          <button type="button" onclick="downloadLoCsvTemplate()"
+            class="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100 rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            Download CSV template
+          </button>
+          {% if lo_mobile_upload_token %}
+          <div class="rounded-lg border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-900/40 p-3 space-y-2">
+            <p class="text-xs font-semibold text-slate-800 dark:text-slate-100">Or use your phone</p>
+            <p class="text-xs text-slate-500 dark:text-slate-400">Scan the QR code to open the uploader on your phone</p>
+            {% if lo_mobile_upload_url_is_loopback %}
+            <div class="rounded border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-900 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-100">
+              Phones cannot open <code class="rounded bg-white/70 px-0.5 dark:bg-slate-800">localhost</code>. Set <code class="rounded bg-white/70 px-0.5 dark:bg-slate-800">PUBLIC_BASE_URL</code> or use your LAN URL (same Wi‑Fi as the phone).
+            </div>
+            {% endif %}
+            <div class="flex justify-center py-1">
+              <div id="loQrCanvas" class="rounded-lg bg-white p-2 shadow-sm inline-block" aria-label="QR code for CSV upload from phone"></div>
+            </div>
+            <p id="loCsvMobileStatus" class="hidden text-xs text-green-600 dark:text-green-400 font-medium text-center"></p>
+          </div>
+          {% endif %}
+          <button type="button" id="loCsvPanelCloseBtn" class="w-full text-xs font-medium text-slate-600 dark:text-slate-300 px-3 py-2 rounded-lg border border-slate-300 dark:border-slate-500 bg-transparent hover:bg-slate-100 dark:hover:bg-slate-700/60 hover:text-slate-800 dark:hover:text-white transition-colors">
+            Hide upload
+          </button>
+        </div>
+      </div>
+
+      <div class="mt-8">
+        <button type="button"
+          class="w-full flex items-center justify-between gap-2 rounded-lg px-1 py-2 -mx-1 mb-2 hover:bg-slate-50 dark:hover:bg-slate-700/50 transition-colors text-left"
+          onclick="toggleExistingLosSection(this)" aria-expanded="false" aria-controls="existingLosListWrapper">
+          <span class="font-medium text-slate-900 dark:text-white">Existing objectives</span>
+          <svg class="w-5 h-5 text-slate-400 chevron transition-transform shrink-0 rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </button>
+        <div id="existingLosListWrapper" class="hidden">
+        <div id="existingLosList" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 max-h-56 overflow-y-auto pr-1 content-start">
+          {% for lo in all_los %}
+          <div class="lo-row flex flex-col gap-1.5 px-2.5 py-2 bg-slate-50 dark:bg-slate-700 rounded-lg border border-slate-200/70 dark:border-slate-600/50 min-w-0"
+               data-lo-id="{{ lo.id }}"
+               data-lo-code="{{ (lo.vendor_code or '')|e }}"
+               data-lo-description="{{ (lo.description or '')|e }}"
+               data-lo-required="{{ lo.required_ms|default(2, true) }}">
+            <span class="lo-row-display text-xs font-medium text-slate-700 dark:text-slate-300 truncate min-w-0">{{ lo.vendor_code }}</span>
+            <div class="flex items-center justify-end gap-0.5 mt-auto pt-0.5 border-t border-slate-200/60 dark:border-slate-600/50">
+              <button type="button" class="lo-edit-btn p-1 text-slate-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors shrink-0" title="Edit">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
+              </button>
+              <button type="button" class="lo-delete-btn p-1 text-slate-400 hover:text-red-600 dark:hover:text-red-400 transition-colors shrink-0" title="Delete">
+                <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+              </button>
+            </div>
+          </div>
+          {% else %}
+          <p class="col-span-full text-sm text-slate-500 dark:text-slate-400 py-2">No objectives yet. Create one above.</p>
+          {% endfor %}
+        </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+
+  <!-- Learning objectives CSV preview (nothing saved until user confirms) -->
+  <div id="loCsvPreviewModal" class="hidden fixed inset-0 z-[60] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+       role="dialog" aria-modal="true"
+       onclick="if (event.target === this && typeof closeLoCsvPreviewModal === 'function') closeLoCsvPreviewModal()">
+    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+      <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700 flex items-start justify-between gap-3 shrink-0">
+        <div>
+          <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Confirm import</h3>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Review codes and objectives from your file. Set <strong class="text-slate-700 dark:text-slate-300">Ms</strong> (1–5) for each new row. Only <strong class="text-slate-700 dark:text-slate-300">new</strong> codes are imported; rows already in this class are skipped.</p>
+        </div>
+        <button type="button" onclick="closeLoCsvPreviewModal()" class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0" aria-label="Close">
+          <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div id="loCsvPreviewWarnings" class="hidden px-5 py-2.5 text-xs bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-100 border-b border-amber-100 dark:border-amber-900/40 shrink-0 whitespace-pre-wrap"></div>
+      <div class="flex-1 min-h-0 overflow-auto p-4">
+        <table class="w-full text-sm text-left border-collapse">
+          <thead class="text-xs uppercase text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-700/50">
+            <tr>
+              <th class="px-2 py-2 font-medium">Code (title)</th>
+              <th class="px-2 py-2 font-medium">Description (optional)</th>
+              <th class="px-2 py-2 font-medium w-24">Ms (1–5)</th>
+              <th class="px-2 py-2 font-medium">Status</th>
+            </tr>
+          </thead>
+          <tbody id="loCsvPreviewTbody" class="divide-y divide-slate-100 dark:divide-slate-700 text-slate-800 dark:text-slate-200"></tbody>
+        </table>
+      </div>
+      <div class="px-5 py-3 border-t border-slate-200 dark:border-slate-700 flex flex-wrap gap-2 justify-end shrink-0 bg-slate-50/90 dark:bg-slate-900/50">
+        <button type="button" id="loCsvPreviewCancel" onclick="closeLoCsvPreviewModal()"
+          class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">Cancel</button>
+        <button type="button" id="loCsvPreviewConfirm"
+          class="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Import confirmed rows</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Edit learning objective (same row id — grades stay linked) -->
+  <div id="editLoModal" class="hidden fixed inset-0 z-[61] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+       role="dialog" aria-modal="true" onclick="if (event.target === this) closeEditLoModal()">
+    <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 w-full max-w-md p-6" onclick="event.stopPropagation()">
+      <div class="flex items-start justify-between gap-3 mb-4">
+        <div>
+          <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Edit objective</h3>
+          <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Updates labels and settings only. All grades and assignment links stay on this objective.</p>
+        </div>
+        <button type="button" onclick="closeEditLoModal()" class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-500" aria-label="Close">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="space-y-3">
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Objective code</label>
+          <input type="text" id="editLoCode" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Description <span class="text-slate-400 font-normal">(optional)</span></label>
+          <textarea id="editLoDescription" rows="1" data-max-height="360" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none overflow-hidden min-h-[2.75rem] leading-snug block"></textarea>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1">Required Ms</label>
+          <input type="number" id="editLoRequiredMs" min="1" max="5" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        </div>
+      </div>
+      <div class="flex gap-2 justify-end mt-6">
+        <button type="button" onclick="closeEditLoModal()" class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">Cancel</button>
+        <button type="button" id="editLoSaveBtn" onclick="saveEditLo()" class="px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-700 text-white transition-colors">Save changes</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="overdueRevisionsModal" class="mark-only hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-8">
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-3xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900 dark:text-white">Overdue Revisions Report</h2>
+        <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Students with revisions past due date</p>
+      </div>
+      <button type="button" onclick="document.getElementById('overdueRevisionsModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <div class="flex-1 overflow-y-auto p-6">
+      {% if overdue_revisions %}
+      <div class="space-y-3">
+        {% for rev in overdue_revisions %}
+        <div class="flex items-center justify-between p-4 rounded-lg border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-900/20">
+          <div>
+            <p class="font-medium text-slate-900 dark:text-white">{{ rev.student_name }}</p>
+            <p class="text-sm text-slate-600 dark:text-slate-400">{{ rev.lo_name }} · {{ rev.assignment_name }}</p>
+          </div>
+          <div class="text-right">
+            <span class="px-2 py-1 bg-orange-100 dark:bg-orange-900 text-orange-700 dark:text-orange-300 text-xs font-medium rounded-full">RQ</span>
+            <p class="text-xs text-red-500 mt-1">Due {{ rev.revision_due }}</p>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+      {% else %}
+      <p class="text-slate-500 dark:text-slate-400 text-center py-8">No overdue revisions.</p>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+<div id="studentManagementModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-8">
+  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-xl max-w-4xl w-full max-h-[80vh] overflow-hidden flex flex-col">
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700 flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900 dark:text-white">Manage Students</h2>
+        <p id="modalStudentCountsLine" class="text-sm text-slate-500 dark:text-slate-400 mt-1">{{ students|length }} active students ({{ all_students|length }} total)</p>
+      </div>
+      <div class="flex items-center gap-3">
+        <button type="button" onclick="document.getElementById('addStudentModal').classList.remove('hidden')" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors">
+          Add Student
+        </button>
+        <button type="button" onclick="document.getElementById('studentManagementModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+          <svg class="w-5 h-5 text-slate-600 dark:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+    </div>
+    <div class="p-6 border-b border-slate-100 dark:border-slate-700">
+      <div class="relative">
+        <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+        <input type="text" id="modalSearchInput" placeholder="Search students..." oninput="filterModalStudents()" class="w-full pl-10 pr-4 py-2 bg-slate-50 dark:bg-slate-700 border-0 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm text-slate-900 dark:text-white dark:placeholder-slate-400">
+      </div>
+    </div>
+    <div class="flex-1 overflow-y-auto p-6 space-y-2" id="modalStudentList">
+      {% for student in all_students %}
+      <div class="modal-student flex items-center justify-between p-4 rounded-lg bg-white dark:bg-slate-700 border border-slate-200 dark:border-slate-600 gap-4{% if student.muted %} opacity-60{% endif %}" data-name="{{ student.name|lower }} {{ (student.email or '')|lower }}" data-student-id="{{ student.id }}">
+        <div class="flex-1 min-w-0">
+          <p class="font-medium text-slate-900 dark:text-white{% if student.muted %} line-through{% endif %}">{{ student.name }}</p>
+          {% if student.email %}
+          <div class="flex items-center gap-1 mt-0.5 min-w-0">
+            <span class="text-xs text-slate-500 dark:text-slate-400 select-text cursor-text truncate">{{ student.email }}</span>
+            {{ copy_email_button(student.email, compact=True) }}
+          </div>
+          {% endif %}
+        </div>
+        <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-400 cursor-pointer shrink-0">
+          <input type="checkbox" class="mute-toggle rounded border-slate-300 dark:border-slate-600 text-blue-600 focus:ring-blue-500" data-student-id="{{ student.id }}" onchange="toggleMute(this)"{% if student.muted %} checked{% endif %}>
+          <span>Mute</span>
+        </label>
+        <a href="{{ url_for('main.class_student_detail', class_id=class_id, student_id=student.id) }}" class="text-sm text-blue-600 dark:text-blue-400 hover:underline shrink-0">View progress →</a>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="p-6 border-t border-slate-100 dark:border-slate-700 bg-slate-50 dark:bg-slate-900 text-sm text-slate-600 dark:text-slate-400">
+      Muted students are hidden from all grading views, reports, and student lists.
+    </div>
+  </div>
+</div>
+
+<div id="addStudentModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onclick="if(event.target===this) this.classList.add('hidden')">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-md w-full" onclick="event.stopPropagation()">
+    <div class="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+      <h2 class="font-semibold text-slate-900 dark:text-white">Add Student</h2>
+      <button type="button" onclick="document.getElementById('addStudentModal').classList.add('hidden')" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <form id="addStudentForm" onsubmit="addStudent(event)" class="p-6 space-y-4">
+      <div>
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Email</label>
+        <input type="email" id="studentEmail" required placeholder="student@university.edu" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+      </div>
+      <div>
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Full Name</label>
+        <input type="text" id="studentName" required placeholder="John Doe" class="w-full px-3 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500 transition-all">
+      </div>
+      <div class="flex gap-3 pt-2">
+        <button type="button" onclick="document.getElementById('addStudentModal').classList.add('hidden')" class="flex-1 px-4 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-colors">
+          Cancel
+        </button>
+        <button type="submit" class="flex-1 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm shadow-blue-500/20">
+          Add Student
+        </button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div id="uploadStudentsModal" class="hidden fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onclick="if(event.target===this) closeUploadStudentsModal()">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl max-w-xl w-full" onclick="event.stopPropagation()">
+    <div class="p-6 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between">
+      <div>
+        <h2 class="font-semibold text-slate-900 dark:text-white">Upload Students CSV</h2>
+      </div>
+      <button type="button" onclick="closeUploadStudentsModal()" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors">
+        <svg class="w-5 h-5 text-slate-500 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+    <div class="p-6 space-y-4">
+      <input type="file" id="uploadStudentsInput" accept=".csv,text/csv,application/csv" class="block w-full text-sm text-slate-700 dark:text-slate-200 file:mr-3 file:rounded-lg file:border-0 file:bg-slate-100 dark:file:bg-slate-700 file:px-3 file:py-2 file:text-sm file:font-medium hover:file:bg-slate-200 dark:hover:file:bg-slate-600">
+      <label for="studentsCsvTemplateCount" class="block text-sm font-medium text-slate-700 dark:text-slate-300">How many students are you importing?</label>
+      <input type="number" id="studentsCsvTemplateCount" min="1" max="500" value="10"
+        class="w-full px-4 py-2.5 rounded-lg border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500">
+      <button type="button" onclick="downloadStudentsCsvTemplate()"
+        class="w-full px-4 py-2.5 border border-slate-300 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 hover:bg-slate-100 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-100 rounded-lg font-medium text-sm transition-colors flex items-center justify-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+        Download CSV template
+      </button>
+      <p id="uploadStudentsError" class="hidden text-sm text-red-600 dark:text-red-400"></p>
+      <div class="flex gap-3 pt-1">
+        <button type="button" onclick="closeUploadStudentsModal()" class="flex-1 px-4 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-300 rounded-lg text-sm font-medium transition-colors">Cancel</button>
+        <button type="button" id="uploadStudentsSubmitBtn" onclick="submitUploadStudents()" class="flex-1 px-4 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-sm font-medium transition-colors shadow-sm shadow-emerald-500/20">Preview Import</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div id="studentUploadPreviewModal" class="hidden fixed inset-0 z-[61] bg-black/50 backdrop-blur-sm flex items-center justify-center p-4"
+     role="dialog" aria-modal="true"
+     onclick="if (event.target === this) closeStudentUploadPreviewModal()">
+  <div class="bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-3xl max-h-[88vh] flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+    <div class="px-5 py-4 border-b border-slate-200 dark:border-slate-700 flex items-start justify-between gap-3 shrink-0">
+      <div>
+        <h3 class="text-lg font-semibold text-slate-900 dark:text-white">Confirm student import</h3>
+        <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Review each row before saving. Nothing is imported until you confirm.</p>
+      </div>
+      <button type="button" onclick="closeStudentUploadPreviewModal()" class="p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors shrink-0" aria-label="Close">
+        <svg class="w-5 h-5 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div id="studentUploadPreviewWarnings" class="hidden px-5 py-2.5 text-xs bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-100 border-b border-amber-100 dark:border-amber-900/40 whitespace-pre-wrap"></div>
+    <div class="flex-1 min-h-0 overflow-auto p-4">
+      <table class="w-full text-sm text-left border-collapse">
+        <thead class="text-xs uppercase text-slate-500 dark:text-slate-400 bg-slate-50 dark:bg-slate-700/50">
+          <tr>
+            <th class="px-2 py-2 font-medium">Student Name</th>
+            <th class="px-2 py-2 font-medium">Email</th>
+            <th class="px-2 py-2 font-medium">Status</th>
+          </tr>
+        </thead>
+        <tbody id="studentUploadPreviewTbody" class="divide-y divide-slate-100 dark:divide-slate-700 text-slate-800 dark:text-slate-200"></tbody>
+      </table>
+    </div>
+    <div id="studentUploadPreviewError" class="hidden px-5 py-2 text-sm text-red-600 dark:text-red-400 border-t border-red-100 dark:border-red-900/40"></div>
+    <div class="px-5 py-3 border-t border-slate-200 dark:border-slate-700 flex flex-wrap gap-2 justify-end shrink-0 bg-slate-50/90 dark:bg-slate-900/50">
+      <button type="button" onclick="closeStudentUploadPreviewModal(); openUploadStudentsModal();" class="px-4 py-2 text-sm font-medium rounded-lg border border-slate-300 dark:border-slate-600 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 transition-colors">Back</button>
+      <button type="button" id="studentUploadPreviewConfirm" onclick="confirmStudentUploadImport()" class="px-4 py-2 text-sm font-medium rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Import confirmed rows</button>
+    </div>
+  </div>
+</div>
+
+<script type="application/json" id="dashboardAllStudentsJson">{{ all_students | tojson }}</script>
+
+<script>
+(function initDashboardStudentsState() {
+  try {
+    var el = document.getElementById('dashboardAllStudentsJson');
+    if (!el || !el.textContent) {
+      window.__dashboardAllStudents = [];
+      return;
+    }
+    window.__dashboardAllStudents = JSON.parse(el.textContent);
+  } catch (e) {
+    window.__dashboardAllStudents = [];
+  }
+})();
+
+const escapeHtmlDashboard = (window.ClarityUI && window.ClarityUI.escapeHtml)
+  ? window.ClarityUI.escapeHtml
+  : function (s) {
+      return String(s == null ? '' : s)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    };
+
+function homeworkBadgeHtmlDashboard(mastered, total) {
+  var pct = total > 0 ? Math.round((mastered / total) * 100) : 0;
+  var cls = pct === 100
+    ? 'bg-blue-100 dark:bg-blue-900/40 text-blue-700 dark:text-blue-300'
+    : 'bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300';
+  return '<span class="homework-badge inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ' + cls + '">' + pct + '%</span>';
+}
+
+function copyEmailBtnHtmlDashboard(email) {
+  var e = escapeHtmlDashboard(email);
+  return '<button type="button" data-copy-email-btn data-email="' + e + '" class="shrink-0 inline-flex items-center justify-center rounded-md p-0.5 text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700/80 transition-colors relative z-20" onclick="event.stopPropagation(); copyEmailFromBtn(this); return false;" aria-label="Copy email" title="Copy email" data-label-copied="Copied">' +
+    '<svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg></button>';
+}
+
+function studentSortKeyDashboard(student) {
+  var raw = String((student.full_name || student.name || '')).trim();
+  if (!raw) return ['\uffff', ''];
+  var lowerFull = raw.toLowerCase();
+  if (raw.indexOf(',') !== -1) {
+    var last = raw.split(',', 1)[0].trim().toLowerCase();
+    return [last || '\uffff', lowerFull];
+  }
+  var parts = raw.split(/\s+/).filter(Boolean);
+  if (parts.length >= 2) {
+    return [parts[parts.length - 1].toLowerCase(), lowerFull];
+  }
+  return [parts[0].toLowerCase(), lowerFull];
+}
+
+function compareStudentsDashboard(a, b) {
+  var ka = studentSortKeyDashboard(a);
+  var kb = studentSortKeyDashboard(b);
+  if (ka[0] < kb[0]) return -1;
+  if (ka[0] > kb[0]) return 1;
+  if (ka[1] < kb[1]) return -1;
+  if (ka[1] > kb[1]) return 1;
+  return 0;
+}
+
+function buildStudentRowHTMLDashboard(s, classId) {
+  var los = s.learning_objectives || [];
+  var passed = los.filter(function (lo) { return lo.is_passed; }).length;
+  var total = los.length;
+  var badge = homeworkBadgeHtmlDashboard(passed, total);
+  var email = (s.email || '').trim();
+  var searchKey = ((s.name || '') + ' ' + email).toLowerCase().trim();
+  var detailPath = '/class/' + encodeURIComponent(classId) + '/students/' + encodeURIComponent(s.id);
+  var emailBlock = email
+    ? '<div class="flex items-center gap-1 mt-0.5 min-w-0"><span class="text-xs text-slate-500 dark:text-slate-400 select-text cursor-text truncate">' + escapeHtmlDashboard(email) + '</span>' + copyEmailBtnHtmlDashboard(email) + '</div>'
+    : '';
+  return (
+    '<div class="student-item p-6 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors" data-name="' + escapeHtmlDashboard(searchKey) + '" data-student-id="' + escapeHtmlDashboard(s.id) + '">' +
+      '<div class="flex items-center justify-between">' +
+        '<div class="flex items-center gap-3 min-w-0 flex-1">' +
+          '<div class="min-w-0 flex-1">' +
+            '<a href="' + detailPath + '" class="block hover:underline"><span class="font-medium text-slate-900 dark:text-white">' + escapeHtmlDashboard(s.name) + '</span></a>' +
+            emailBlock +
+          '</div>' +
+          '<a href="' + detailPath + '" class="shrink-0 hover:opacity-90" tabindex="-1" aria-hidden="true">' + badge + '</a>' +
+        '</div>' +
+        '<button type="button" onclick="deleteStudent(' + JSON.stringify(s.id) + ', ' + JSON.stringify(s.name) + ')" class="p-2 text-red-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-900/30 rounded-lg transition-colors flex-shrink-0" title="Delete student">' +
+          '<svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>' +
+        '</button>' +
+      '</div>' +
+    '</div>'
+  );
+}
+
+function insertStudentRowSortedDashboard(container, student) {
+  var html = buildStudentRowHTMLDashboard(student, '{{ class_id }}');
+  var wrap = document.createElement('div');
+  wrap.innerHTML = html.trim();
+  var newEl = wrap.firstElementChild;
+  if (!newEl) return;
+  var emptyEl = document.getElementById('studentsViewEmptyState');
+  var children = Array.from(container.querySelectorAll('.student-item'));
+  var insertBefore = null;
+  for (var i = 0; i < children.length; i++) {
+    var sid = children[i].getAttribute('data-student-id');
+    var other = (window.__dashboardAllStudents || []).find(function (x) { return String(x.id) === String(sid); });
+    if (!other) continue;
+    if (compareStudentsDashboard(student, other) < 0) {
+      insertBefore = children[i];
+      break;
+    }
+  }
+  if (insertBefore) container.insertBefore(newEl, insertBefore);
+  else if (emptyEl) container.insertBefore(newEl, emptyEl);
+  else container.appendChild(newEl);
+}
+
+function updateActiveStudentCountsDashboard() {
+  var arr = window.__dashboardAllStudents || [];
+  var total = arr.length;
+  var active = arr.filter(function (s) { return !s.muted; }).length;
+  var countEl = document.getElementById('activeStudentsCount');
+  if (countEl) countEl.textContent = String(active);
+  var modalLine = document.getElementById('modalStudentCountsLine');
+  if (modalLine) modalLine.textContent = active + ' active students (' + total + ' total)';
+  var emptyEl = document.getElementById('studentsViewEmptyState');
+  if (emptyEl) {
+    if (active === 0) emptyEl.classList.remove('hidden');
+    else emptyEl.classList.add('hidden');
+  }
+}
+
+function maybeOpenManageStudentsModalFromQuery() {
+  const modal = document.getElementById('studentManagementModal');
+  if (!modal) return;
+
+  const currentUrl = new URL(window.location.href);
+  if (currentUrl.searchParams.get('manage_students') !== '1') return;
+
+  modal.classList.remove('hidden');
+
+  // Clean up the URL after restoring modal state.
+  currentUrl.searchParams.delete('manage_students');
+  window.history.replaceState({}, '', currentUrl.toString());
+}
+
+maybeOpenManageStudentsModalFromQuery();
+
+// `ClarityUI.debounce` lives in ui_helpers.js; fall back to an identity
+// wrapper so this page still works if that script load is blocked.
+const __clarityDebounce =
+  (window.ClarityUI && typeof window.ClarityUI.debounce === 'function')
+    ? window.ClarityUI.debounce
+    : function (fn) { return fn; };
+
+// Cached node lists below assume the DOM is static after initial render.
+// Add/remove of student or assignment rows happens via full page reload, so
+// the cache is rebuilt naturally without manual invalidation here.
+let __cachedModalStudents = null;
+function _modalStudents() {
+  if (!__cachedModalStudents) {
+    __cachedModalStudents = Array.from(document.querySelectorAll('.modal-student'));
+  }
+  return __cachedModalStudents;
+}
+
+const _runFilterModalStudents = __clarityDebounce(function () {
+  const q = (document.getElementById('modalSearchInput')?.value || '').toLowerCase();
+  const list = _modalStudents();
+  for (let i = 0; i < list.length; i++) {
+    const el = list[i];
+    const wanted = (!q || (el.dataset.name || '').includes(q)) ? '' : 'none';
+    if (el.style.display !== wanted) el.style.display = wanted;
+  }
+}, 80);
+
+function filterModalStudents() {
+  _runFilterModalStudents();
+}
+function toggleMute(checkbox) {
+  const row = checkbox.closest('.modal-student');
+  const studentId = checkbox.dataset.studentId;
+  const muted = checkbox.checked;
+  row.classList.toggle('opacity-60', muted);
+  row.querySelector('p').classList.toggle('line-through', muted);
+  fetch(`/api/class/{{ class_id }}/toggle_mute`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify({ student_id: studentId, muted: muted })
+  })
+  .then(r => r.json())
+  .then(data => {
+    if (!data.success) {
+      alert('Error toggling mute: ' + (data.error || 'Unknown error'));
+      checkbox.checked = !muted;
+      row.classList.toggle('opacity-60', !muted);
+      row.querySelector('p').classList.toggle('line-through', !muted);
+      return;
+    }
+    const roster = window.__dashboardAllStudents || [];
+    const s = roster.find(function (x) { return String(x.id) === String(studentId); });
+    if (s) s.muted = muted;
+
+    const listEl = document.getElementById('studentsView');
+    const dashRow = listEl && Array.from(listEl.querySelectorAll('.student-item')).find(function (el) {
+      return el.dataset.studentId === studentId;
+    });
+    if (muted) {
+      if (dashRow) dashRow.remove();
+    } else if (s && listEl) {
+      insertStudentRowSortedDashboard(listEl, s);
+    }
+    updateActiveStudentCountsDashboard();
+    if (typeof handleSearch === 'function') handleSearch();
+  })
+  .catch(() => {
+    alert('Error toggling mute.');
+    checkbox.checked = !muted;
+    row.classList.toggle('opacity-60', !muted);
+    row.querySelector('p').classList.toggle('line-through', !muted);
+  });
+}
+</script>
+
+<script>
+function switchView(view) {
+  const studentsView = document.getElementById('studentsView');
+  const assignmentsView = document.getElementById('assignmentsView');
+  const btnStudents = document.getElementById('btnStudents');
+  const btnAssignments = document.getElementById('btnAssignments');
+  if (view === 'students') {
+    studentsView.classList.remove('hidden');
+    assignmentsView.classList.add('hidden');
+    btnStudents.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors';
+    btnAssignments.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+  } else {
+    studentsView.classList.add('hidden');
+    assignmentsView.classList.remove('hidden');
+    btnAssignments.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-blue-600 text-white transition-colors';
+    btnStudents.className = 'px-4 py-2 rounded-lg text-sm font-medium bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600 transition-colors';
+  }
+}
+function deleteStudent(studentId, studentName) {
+  if (window.__studentDeleteInFlight) return;
+  if (!confirm('Delete ' + studentName + ' from this class? This removes all their grades and cannot be undone.')) return;
+  window.__studentDeleteInFlight = true;
+  var url = '/class/{{ class_id }}/students/' + encodeURIComponent(studentId) + '/delete';
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+    credentials: 'same-origin',
+    body: '{}'
+  })
+    .then(function (response) {
+      return response.json().then(function (data) {
+        return { ok: response.ok, data: data };
+      });
+    })
+    .then(function (result) {
+      if (!result.ok || !result.data.success) {
+        alert('Error: ' + (result.data.error || 'Unknown error'));
+        return;
+      }
+      location.reload();
+    })
+    .catch(function (err) {
+      var msg = (err && err.message) ? String(err.message) : String(err);
+      var hint = '';
+      if (/failed to fetch|networkerror|load failed|aborted|reset/i.test(msg)) {
+        hint = '\n\nTip: If this happened right after saving code, the dev server may have restarted and dropped the request. Try again, or run with FLASK_NO_RELOADER=1 for a stable local server.';
+      }
+      alert('Could not reach the server to delete this student.' + hint);
+    })
+    .finally(function () {
+      window.__studentDeleteInFlight = false;
+    });
+}
+function toggleObjective(el) {
+  const content = el.nextElementSibling;
+  const chevron = el.querySelector('.chevron');
+  content.classList.toggle('hidden');
+  chevron.classList.toggle('rotate-180');
+}
+function toggleAssignment(el) {
+  const content = el.nextElementSibling;
+  const chevron = el.querySelector('.chevron');
+  content.classList.toggle('hidden');
+  chevron.classList.toggle('rotate-180');
+}
+
+function toggleExistingLosSection(btn) {
+  var wrap = document.getElementById('existingLosListWrapper');
+  if (!wrap || !btn) return;
+  var chev = btn.querySelector('.chevron');
+  wrap.classList.toggle('hidden');
+  if (chev) {
+    chev.classList.toggle('rotate-180', wrap.classList.contains('hidden'));
+  }
+  btn.setAttribute('aria-expanded', wrap.classList.contains('hidden') ? 'false' : 'true');
+}
+let __cachedStudentItems = null;
+let __cachedAssignmentItems = null;
+function _studentItems() {
+  if (!__cachedStudentItems) {
+    __cachedStudentItems = Array.from(document.querySelectorAll('.student-item'));
+  }
+  return __cachedStudentItems;
+}
+function _assignmentItems() {
+  if (!__cachedAssignmentItems) {
+    __cachedAssignmentItems = Array.from(document.querySelectorAll('.assignment-item'));
+  }
+  return __cachedAssignmentItems;
+}
+
+const _runHandleSearch = __clarityDebounce(function () {
+  const q = (document.getElementById('searchInput').value || '').toLowerCase();
+  const sList = _studentItems();
+  for (let i = 0; i < sList.length; i++) {
+    const item = sList[i];
+    const name = item.dataset.name || '';
+    const want = (!q || name.includes(q)) ? '' : 'none';
+    if (item.style.display !== want) item.style.display = want;
+  }
+  const aList = _assignmentItems();
+  for (let j = 0; j < aList.length; j++) {
+    const item = aList[j];
+    const name = item.dataset.assignmentName || '';
+    const want = (!q || name.includes(q)) ? '' : 'none';
+    if (item.style.display !== want) item.style.display = want;
+  }
+}, 80);
+
+function handleSearch() {
+  _runHandleSearch();
+}
+
+function escapeCsvCell(val) {
+  const s = String(val == null ? '' : val);
+  if (/[",\r\n]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+  return s;
+}
+function csvTextFromRows(rows) {
+  return rows.map((row) => row.map(escapeCsvCell).join(',')).join('\r\n');
+}
+function triggerCsvDownload(filename, csvText) {
+  const blob = new Blob(['\ufeff' + csvText], { type: 'text/csv;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.rel = 'noopener';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+}
+function clampCsvTemplateRows(raw, def, max) {
+  let n = parseInt(String(raw), 10);
+  if (!Number.isFinite(n) || n < 1) n = def;
+  if (n > max) n = max;
+  return n;
+}
+function downloadStudentsCsvTemplate() {
+  const inp = document.getElementById('studentsCsvTemplateCount');
+  const n = clampCsvTemplateRows(inp && inp.value, 10, 500);
+  if (inp) inp.value = String(n);
+  const rows = [['full_name', 'email']];
+  for (let i = 0; i < n; i++) rows.push(['', '']);
+  triggerCsvDownload('students_import_template.csv', csvTextFromRows(rows));
+}
+function downloadLoCsvTemplate() {
+  const inp = document.getElementById('loCsvTemplateCount');
+  const n = clampCsvTemplateRows(inp && inp.value, 10, 500);
+  if (inp) inp.value = String(n);
+  const rows = [['title', 'description', 'calculation_int']];
+  for (let i = 0; i < n; i++) rows.push(['', '', '']);
+  triggerCsvDownload('learning_objectives_import_template.csv', csvTextFromRows(rows));
+}
+
+function openUploadStudentsModal() {
+  const modal = document.getElementById('uploadStudentsModal');
+  if (!modal) return;
+  const err = document.getElementById('uploadStudentsError');
+  if (err) {
+    err.classList.add('hidden');
+    err.textContent = '';
+  }
+  modal.classList.remove('hidden');
+}
+
+function closeUploadStudentsModal(clearFile = true) {
+  const modal = document.getElementById('uploadStudentsModal');
+  if (!modal) return;
+  modal.classList.add('hidden');
+  const fileInput = document.getElementById('uploadStudentsInput');
+  if (clearFile && fileInput) fileInput.value = '';
+  const err = document.getElementById('uploadStudentsError');
+  if (err) {
+    err.classList.add('hidden');
+    err.textContent = '';
+  }
+}
+
+function renderStudentUploadPreviewTable(rows) {
+  const tbody = document.getElementById('studentUploadPreviewTbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  (rows || []).forEach((row) => {
+    const tr = document.createElement('tr');
+    if (row.action === 'skip') tr.className = 'bg-slate-50/90 dark:bg-slate-800/40';
+
+    const nameTd = document.createElement('td');
+    nameTd.className = 'px-2 py-2 align-top';
+    nameTd.textContent = String(row.full_name || '');
+    tr.appendChild(nameTd);
+
+    const emailTd = document.createElement('td');
+    emailTd.className = 'px-2 py-2 align-top break-all';
+    emailTd.textContent = String(row.email || '');
+    tr.appendChild(emailTd);
+
+    const statusTd = document.createElement('td');
+    statusTd.className = 'px-2 py-2 align-top text-xs font-medium';
+    statusTd.textContent = String(row.status || '');
+    if (row.action === 'skip') statusTd.classList.add('text-slate-500', 'dark:text-slate-400');
+    else if (row.action === 'update_missing_email') statusTd.classList.add('text-blue-700', 'dark:text-blue-300');
+    else statusTd.classList.add('text-green-700', 'dark:text-green-300');
+    tr.appendChild(statusTd);
+
+    tbody.appendChild(tr);
+  });
+}
+
+function openStudentUploadPreviewModal() {
+  const m = document.getElementById('studentUploadPreviewModal');
+  if (m) m.classList.remove('hidden');
+}
+
+function closeStudentUploadPreviewModal() {
+  const m = document.getElementById('studentUploadPreviewModal');
+  if (m) m.classList.add('hidden');
+  const err = document.getElementById('studentUploadPreviewError');
+  if (err) {
+    err.classList.add('hidden');
+    err.textContent = '';
+  }
+}
+
+function submitUploadStudents() {
+  const fileInput = document.getElementById('uploadStudentsInput');
+  const errorEl = document.getElementById('uploadStudentsError');
+  const submitBtn = document.getElementById('uploadStudentsSubmitBtn');
+  if (!fileInput || !fileInput.files || !fileInput.files.length) {
+    if (errorEl) {
+      errorEl.textContent = 'Please choose a CSV file.';
+      errorEl.classList.remove('hidden');
+    }
+    return;
+  }
+
+  const file = fileInput.files[0];
+  if (!file.name.toLowerCase().endsWith('.csv')) {
+    if (errorEl) {
+      errorEl.textContent = 'Only .csv files are supported.';
+      errorEl.classList.remove('hidden');
+    }
+    return;
+  }
+
+  if (errorEl) {
+    errorEl.classList.add('hidden');
+    errorEl.textContent = '';
+  }
+
+  const fd = new FormData();
+  fd.append('file', file);
+
+  const previousText = submitBtn ? submitBtn.textContent : 'Preview Import';
+  if (submitBtn) {
+    submitBtn.disabled = true;
+    submitBtn.classList.add('opacity-60', 'cursor-not-allowed');
+    submitBtn.textContent = 'Preparing preview...';
+  }
+
+  fetch('/api/class/{{ class_id }}/preview-upload-students', {
+    method: 'POST',
+    body: fd,
+    credentials: 'same-origin'
+  })
+    .then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      return { ok: response.ok, data: data };
+    })
+    .then(({ ok, data }) => {
+      if (!ok || !data.success) {
+        if (errorEl) {
+          errorEl.textContent = data.error || 'Student upload failed.';
+          errorEl.classList.remove('hidden');
+        }
+        return;
+      }
+
+      renderStudentUploadPreviewTable(data.rows || []);
+
+      const warnEl = document.getElementById('studentUploadPreviewWarnings');
+      if (warnEl) {
+        const warnings = Array.isArray(data.warnings) ? data.warnings.filter(Boolean) : [];
+        if (warnings.length) {
+          warnEl.textContent = warnings.join('\n');
+          warnEl.classList.remove('hidden');
+        } else {
+          warnEl.classList.add('hidden');
+          warnEl.textContent = '';
+        }
+      }
+
+      closeUploadStudentsModal(false);
+      openStudentUploadPreviewModal();
+    })
+    .catch(() => {
+      if (errorEl) {
+        errorEl.textContent = 'Unexpected error preparing preview.';
+        errorEl.classList.remove('hidden');
+      }
+    })
+    .finally(() => {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+        submitBtn.textContent = previousText || 'Upload Students';
+      }
+    });
+}
+
+function confirmStudentUploadImport() {
+  const fileInput = document.getElementById('uploadStudentsInput');
+  const errorEl = document.getElementById('studentUploadPreviewError');
+  const confirmBtn = document.getElementById('studentUploadPreviewConfirm');
+  if (!fileInput || !fileInput.files || !fileInput.files.length) {
+    if (errorEl) {
+      errorEl.textContent = 'Please re-select your CSV file.';
+      errorEl.classList.remove('hidden');
+    }
+    closeStudentUploadPreviewModal();
+    openUploadStudentsModal();
+    return;
+  }
+
+  if (errorEl) {
+    errorEl.classList.add('hidden');
+    errorEl.textContent = '';
+  }
+
+  const fd = new FormData();
+  fd.append('file', fileInput.files[0]);
+
+  const previousText = confirmBtn ? confirmBtn.textContent : 'Import confirmed rows';
+  if (confirmBtn) {
+    confirmBtn.disabled = true;
+    confirmBtn.classList.add('opacity-60', 'cursor-not-allowed');
+    confirmBtn.textContent = 'Importing...';
+  }
+
+  fetch('/api/class/{{ class_id }}/upload_students', {
+    method: 'POST',
+    body: fd,
+    credentials: 'same-origin'
+  })
+    .then(async (response) => {
+      const data = await response.json().catch(() => ({}));
+      return { ok: response.ok, data: data };
+    })
+    .then(({ ok, data }) => {
+      if (!ok || !data.success) {
+        if (errorEl) {
+          errorEl.textContent = data.error || 'Student import failed.';
+          errorEl.classList.remove('hidden');
+        }
+        return;
+      }
+      const stats = data.stats || {};
+      const warningCount = Array.isArray(data.warnings) ? data.warnings.length : 0;
+      // Avoid exposing internal import/debug counters on the student-facing upload UI.
+      if (warningCount > 0) {
+        alert('Student upload complete. Some rows may have been skipped or require review.');
+      } else {
+        alert('Student upload complete.');
+      }
+      const nextUrl = new URL(window.location.href);
+      nextUrl.searchParams.set('manage_students', '1');
+      window.location.assign(nextUrl.toString());
+    })
+    .catch(() => {
+      if (errorEl) {
+        errorEl.textContent = 'Unexpected error importing students.';
+        errorEl.classList.remove('hidden');
+      }
+    })
+    .finally(() => {
+      if (confirmBtn) {
+        confirmBtn.disabled = false;
+        confirmBtn.classList.remove('opacity-60', 'cursor-not-allowed');
+        confirmBtn.textContent = previousText || 'Import confirmed rows';
+      }
+    });
+}
+
+function dashboardCreateLO() {
+  const loForm = document.getElementById('loForm');
+  if (!loForm) return;
+  document.getElementById('hiddenLoCode').value = document.getElementById('loCode').value;
+  document.getElementById('hiddenLoDescription').value = document.getElementById('loDescription').value;
+  document.getElementById('hiddenLoRequiredMs').value = document.getElementById('loRequiredMs').value;
+  const btn = document.getElementById('createLOBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.classList.add('opacity-60', 'cursor-not-allowed');
+  }
+  loForm.submit();
+}
+
+var editLoCurrentId = null;
+
+function openEditLoFromRow(row) {
+  if (!row) return;
+  openEditLoModal({
+    id: row.getAttribute('data-lo-id'),
+    vendor_code: row.getAttribute('data-lo-code') || '',
+    description: row.getAttribute('data-lo-description') || '',
+    required_ms: parseInt(row.getAttribute('data-lo-required') || '2', 10) || 2
+  });
+}
+
+function growLoDescriptionField(el) {
+  if (!el || el.tagName !== 'TEXTAREA') return;
+  el.style.height = 'auto';
+  var max = parseInt(el.getAttribute('data-max-height') || '420', 10);
+  var h = Math.min(el.scrollHeight, max);
+  el.style.height = h + 'px';
+  el.style.overflowY = el.scrollHeight > max ? 'auto' : 'hidden';
+}
+
+function wireLoDescriptionAutoGrow() {
+  ['loDescription', 'editLoDescription'].forEach(function (id) {
+    var el = document.getElementById(id);
+    if (!el) return;
+    var grow = function () { growLoDescriptionField(el); };
+    el.addEventListener('input', grow);
+    el.addEventListener('focus', grow);
+    window.addEventListener('resize', grow);
+    grow();
+  });
+}
+
+function openEditLoModal(lo) {
+  if (!lo || !lo.id) return;
+  editLoCurrentId = String(lo.id);
+  var c = document.getElementById('editLoCode');
+  var d = document.getElementById('editLoDescription');
+  var r = document.getElementById('editLoRequiredMs');
+  if (c) c.value = lo.vendor_code != null ? String(lo.vendor_code) : '';
+  if (d) d.value = lo.description != null ? String(lo.description) : '';
+  if (r) r.value = lo.required_ms != null ? String(lo.required_ms) : '2';
+  var m = document.getElementById('editLoModal');
+  if (m) m.classList.remove('hidden');
+  requestAnimationFrame(function () { growLoDescriptionField(d); });
+}
+
+function closeEditLoModal() {
+  editLoCurrentId = null;
+  var m = document.getElementById('editLoModal');
+  if (m) m.classList.add('hidden');
+}
+
+function saveEditLo() {
+  if (!editLoCurrentId) return;
+  var vendorCode = document.getElementById('editLoCode') ? document.getElementById('editLoCode').value.trim() : '';
+  if (!vendorCode) {
+    alert('Objective code is required.');
+    return;
+  }
+  var body = {
+    vendor_code: vendorCode,
+    description: document.getElementById('editLoDescription') ? document.getElementById('editLoDescription').value.trim() : '',
+    required_ms: parseInt(document.getElementById('editLoRequiredMs') && document.getElementById('editLoRequiredMs').value, 10) || 2
+  };
+  var btn = document.getElementById('editLoSaveBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'Saving…';
+  }
+  fetch('/api/class/' + encodeURIComponent('{{ class_id }}') + '/update-lo/' + encodeURIComponent(editLoCurrentId), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(body)
+  })
+    .then(function (response) {
+      return response.json().then(function (data) {
+        return { ok: response.ok, data: data };
+      });
+    })
+    .then(function (result) {
+      if (!result.ok || !result.data.success) {
+        alert(result.data.error || 'Could not save changes.');
+        return;
+      }
+      location.reload();
+    })
+    .catch(function () {
+      alert('Could not save changes.');
+    })
+    .finally(function () {
+      if (btn) {
+        btn.disabled = false;
+        btn.textContent = 'Save changes';
+      }
+    });
+}
+
+function dashboardDeleteLO(id, name) {
+  if (!id) return;
+  var label = name != null && String(name).length ? String(name) : 'this objective';
+  if (!confirm('Are you sure you want to delete "' + label + '"? This will also remove all associated grades.')) return;
+  fetch('/class/{{ class_id }}/delete_lo/' + encodeURIComponent(id), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: '{}'
+  })
+    .then(function (response) {
+      return response.json().then(function (data) {
+        return { ok: response.ok, data: data };
+      });
+    })
+    .then(function (result) {
+      if (!result.ok || !result.data.success) {
+        alert('Error deleting learning objective: ' + (result.data.error || 'Unknown error'));
+        return;
+      }
+      location.reload();
+    })
+    .catch(function () {
+      alert('Error deleting learning objective.');
+    });
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  var list = document.getElementById('existingLosList');
+  if (list) {
+    list.addEventListener('click', function (e) {
+      var row = e.target.closest('.lo-row');
+      if (!row) return;
+      if (e.target.closest('.lo-delete-btn')) {
+        var id = row.getAttribute('data-lo-id');
+        var disp = row.querySelector('.lo-row-display');
+        var nm = disp ? disp.textContent : '';
+        dashboardDeleteLO(id, nm);
+        return;
+      }
+      if (e.target.closest('.lo-edit-btn')) {
+        openEditLoFromRow(row);
+      }
+    });
+  }
+  wireLoDescriptionAutoGrow();
+});
+
+function addStudent(event) {
+  event.preventDefault();
+  
+  const email = document.getElementById('studentEmail').value;
+  const name = document.getElementById('studentName').value;
+  
+  fetch(`/class/{{ class_id }}/add_student`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      email: email,
+      name: name
+    })
+  })
+  .then(response => response.json())
+  .then(data => {
+    if (data.success) {
+      document.getElementById('addStudentModal').classList.add('hidden');
+      document.getElementById('addStudentForm').reset();
+      const returnUrl = new URL(window.location.href);
+      returnUrl.searchParams.set('manage_students', '1');
+      window.location.assign(returnUrl.toString());
+    } else {
+      alert('Error adding student: ' + data.error);
+    }
+  })
+  .catch(error => {
+    alert('Error: ' + error);
+  });
+}
+</script>
+<script src="{{ url_for('static', filename='js/qrcodejs.min.js') }}"></script>
+<div id="loCsvConfig"
+     class="hidden"
+     data-class-id="{{ class_id }}"
+     data-mobile-token="{{ lo_mobile_upload_token|default('') }}"
+     data-mobile-url="{{ lo_mobile_upload_url|default('') }}"></div>
+<script>
+var loCsvConfigEl = document.getElementById('loCsvConfig');
+window.LO_CLASS_ID = loCsvConfigEl ? (loCsvConfigEl.dataset.classId || '') : '';
+window.LO_MOBILE_UPLOAD_TOKEN = loCsvConfigEl ? (loCsvConfigEl.dataset.mobileToken || '') : '';
+window.LO_MOBILE_UPLOAD_URL = loCsvConfigEl ? (loCsvConfigEl.dataset.mobileUrl || '') : '';
+
+var loCsvMobilePollInterval = null;
+var loCsvPendingRows = null;
+var loQrAssignmentsInited = false;
+
+function stopLoCsvMobilePoll() {
+  if (loCsvMobilePollInterval) {
+    clearInterval(loCsvMobilePollInterval);
+    loCsvMobilePollInterval = null;
+  }
+}
+
+function maybeInitAssignmentsLoQr() {
+  if (loQrAssignmentsInited) return;
+  var el = document.getElementById('loQrCanvas');
+  var url = window.LO_MOBILE_UPLOAD_URL;
+  if (el && url && typeof QRCode !== 'undefined') {
+    try {
+      new QRCode(el, { text: url, width: 140, height: 140, colorDark: '#0f172a', colorLight: '#ffffff' });
+      loQrAssignmentsInited = true;
+    } catch (e) {
+      console.error(e);
+    }
+  }
+}
+
+function closeLoCsvPreviewModal() {
+  var m = document.getElementById('loCsvPreviewModal');
+  if (m) m.classList.add('hidden');
+  loCsvPendingRows = null;
+  var inp = document.getElementById('loCsvInput');
+  if (inp) inp.value = '';
+  var w = document.getElementById('loCsvPreviewWarnings');
+  if (w) {
+    w.classList.add('hidden');
+    w.textContent = '';
+  }
+  var cbtn = document.getElementById('loCsvPreviewConfirm');
+  if (cbtn) {
+    cbtn.disabled = false;
+    cbtn.textContent = 'Import confirmed rows';
+  }
+  var st = document.getElementById('loCsvMobileStatus');
+  if (st) {
+    st.classList.add('hidden');
+    st.textContent = '';
+  }
+}
+
+function renderLoCsvPreviewTable(rows) {
+  var tbody = document.getElementById('loCsvPreviewTbody');
+  if (!tbody) return;
+  tbody.innerHTML = '';
+  (rows || []).forEach(function (r) {
+    var dup = !!r.duplicate;
+    var tr = document.createElement('tr');
+    if (dup) tr.setAttribute('data-duplicate', '1');
+    if (dup) tr.className = 'bg-slate-50/90 dark:bg-slate-800/40';
+    var codeTd = document.createElement('td');
+    codeTd.className = 'px-2 py-2 align-top break-all max-w-[140px]';
+    codeTd.textContent = String(r.vendor_code || '');
+    tr.appendChild(codeTd);
+    var descTd = document.createElement('td');
+    descTd.className = 'px-2 py-2 align-top break-words';
+    descTd.textContent = String(r.description || '');
+    tr.appendChild(descTd);
+    var msTd = document.createElement('td');
+    msTd.className = 'px-2 py-2 align-top';
+    if (dup) {
+      var msSpan = document.createElement('span');
+      msSpan.className = 'text-xs text-slate-500 dark:text-slate-400 tabular-nums';
+      msSpan.textContent = r.required_ms != null ? String(r.required_ms) : '—';
+      msTd.appendChild(msSpan);
+    } else {
+      var v = r.required_ms != null ? parseInt(r.required_ms, 10) : NaN;
+      if (isNaN(v) || v < 1 || v > 5) v = 2;
+      var inp = document.createElement('input');
+      inp.type = 'number';
+      inp.min = '1';
+      inp.max = '5';
+      inp.step = '1';
+      inp.value = String(v);
+      inp.className =
+        'lo-csv-ms-input w-full max-w-[4.5rem] rounded-md border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-900 px-2 py-1 text-sm text-center text-slate-900 dark:text-slate-100';
+      inp.setAttribute('aria-label', 'Required Ms for ' + String(r.vendor_code || ''));
+      msTd.appendChild(inp);
+    }
+    tr.appendChild(msTd);
+    var stTd = document.createElement('td');
+    stTd.className = 'px-2 py-2 align-top text-xs font-medium';
+    if (dup) {
+      stTd.className += ' text-slate-500 dark:text-slate-400';
+      stTd.textContent = 'Already in class';
+    } else {
+      stTd.className += ' text-green-700 dark:text-green-400';
+      stTd.textContent = 'Will import';
+    }
+    tr.appendChild(stTd);
+    tbody.appendChild(tr);
+  });
+}
+
+function openLoCsvPreviewModal(rows, warnings) {
+  loCsvPendingRows = rows;
+  renderLoCsvPreviewTable(rows);
+  var warnEl = document.getElementById('loCsvPreviewWarnings');
+  if (warnEl) {
+    if (warnings && warnings.length) {
+      warnEl.textContent = warnings.join('\n');
+      warnEl.classList.remove('hidden');
+    } else {
+      warnEl.classList.add('hidden');
+      warnEl.textContent = '';
+    }
+  }
+  var newCount = (rows || []).filter(function (r) { return !r.duplicate; }).length;
+  var cbtn = document.getElementById('loCsvPreviewConfirm');
+  if (cbtn) {
+    cbtn.disabled = newCount === 0;
+    cbtn.title = newCount === 0 ? 'No new objectives to import' : '';
+  }
+  var modal = document.getElementById('loCsvPreviewModal');
+  if (modal) modal.classList.remove('hidden');
+}
+
+async function assignmentsPreviewLoCsv(file) {
+  if (!file || !file.name.toLowerCase().endsWith('.csv')) {
+    alert('Please choose a .csv file.');
+    return;
+  }
+  var fd = new FormData();
+  fd.append('file', file);
+  var btn = document.getElementById('loCsvChooseBtn');
+  var prevLabel = '';
+  if (btn) {
+    prevLabel = btn.textContent;
+    btn.disabled = true;
+    btn.classList.add('opacity-60', 'cursor-not-allowed');
+    btn.textContent = 'Reading file…';
+  }
+  try {
+    var r = await fetch(
+      '/api/class/' + encodeURIComponent(window.LO_CLASS_ID) + '/preview-learning-objectives',
+      { method: 'POST', body: fd, credentials: 'same-origin' }
+    );
+    var j = await r.json().catch(function () { return {}; });
+    if (!j.success) {
+      alert(j.error || 'Could not read that CSV.');
+      return;
+    }
+    openLoCsvPreviewModal(j.rows || [], j.warnings || []);
+  } catch (e) {
+    alert('Preview failed: ' + (e && e.message ? e.message : String(e)));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.classList.remove('opacity-60', 'cursor-not-allowed');
+      btn.textContent = prevLabel || 'Choose CSV from computer';
+    }
+    var inp = document.getElementById('loCsvInput');
+    if (inp) inp.value = '';
+  }
+}
+
+async function assignmentsConfirmLoCsvImport() {
+  var tbody = document.getElementById('loCsvPreviewTbody');
+  if (!tbody) return;
+  var toSend = [];
+  tbody.querySelectorAll('tr').forEach(function (tr) {
+    if (tr.getAttribute('data-duplicate') === '1') return;
+    var msInp = tr.querySelector('input.lo-csv-ms-input');
+    if (!msInp) return;
+    var cells = tr.cells;
+    if (!cells || cells.length < 2) return;
+    var vendor_code = String(cells[0].textContent || '').trim();
+    if (!vendor_code) return;
+    var description = String(cells[1].textContent || '').trim();
+    var ms = parseInt(msInp.value, 10);
+    if (isNaN(ms) || ms < 1 || ms > 5) ms = 2;
+    toSend.push({ vendor_code: vendor_code, description: (description || null), required_ms: ms });
+  });
+  if (!toSend.length) {
+    alert('No new objectives to import — every code in this file already exists in the class.');
+    return;
+  }
+  var cbtn = document.getElementById('loCsvPreviewConfirm');
+  if (cbtn) {
+    cbtn.disabled = true;
+    cbtn.textContent = 'Importing…';
+  }
+  try {
+    var r = await fetch(
+      '/api/class/' + encodeURIComponent(window.LO_CLASS_ID) + '/import-learning-objectives',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ rows: toSend })
+      }
+    );
+    var j = await r.json().catch(function () { return {}; });
+    if (!j.success) {
+      alert(j.error || 'Import failed');
+      if (cbtn) {
+        cbtn.disabled = false;
+        cbtn.textContent = 'Import confirmed rows';
+      }
+      return;
+    }
+    var msg = 'Imported ' + (j.inserted || 0) + ' objective(s).';
+    if (j.skipped) msg += ' Skipped ' + j.skipped + ' duplicate code(s).';
+    alert(msg);
+    closeLoCsvPreviewModal();
+    location.reload();
+  } catch (e) {
+    alert('Import failed: ' + (e && e.message ? e.message : String(e)));
+    if (cbtn) {
+      cbtn.disabled = false;
+      cbtn.textContent = 'Import confirmed rows';
+    }
+  }
+}
+
+document.getElementById('loCsvToggleBtn')?.addEventListener('click', function () {
+  var p = document.getElementById('loCsvUploadPanel');
+  if (!p) return;
+  p.classList.remove('hidden');
+  maybeInitAssignmentsLoQr();
+});
+
+document.getElementById('loCsvPanelCloseBtn')?.addEventListener('click', function () {
+  var p = document.getElementById('loCsvUploadPanel');
+  if (p) p.classList.add('hidden');
+});
+
+document.getElementById('loCsvInput')?.addEventListener('change', function () {
+  var f = this.files && this.files[0];
+  if (f) assignmentsPreviewLoCsv(f);
+});
+
+document.getElementById('loCsvPreviewConfirm')?.addEventListener('click', assignmentsConfirmLoCsvImport);
+
+function startLoCsvMobilePoll() {
+  if (!window.LO_MOBILE_UPLOAD_TOKEN || !window.LO_CLASS_ID) return;
+  stopLoCsvMobilePoll();
+  if (window.ClarityUI && typeof window.ClarityUI.startMobileCsvPoll === 'function') {
+    loCsvMobilePollInterval = window.ClarityUI.startMobileCsvPoll({
+      classId: window.LO_CLASS_ID,
+      token: window.LO_MOBILE_UPLOAD_TOKEN,
+      intervalMs: 2000,
+      stop: stopLoCsvMobilePoll,
+      onReady: async function (file) {
+        var st = document.getElementById('loCsvMobileStatus');
+        if (st) {
+          st.textContent = 'CSV received from phone — review the import preview.';
+          st.classList.remove('hidden');
+        }
+        await assignmentsPreviewLoCsv(file);
+      },
+      onError: function (msg) {
+        alert(msg);
+      },
+      onCatch: function (e) {
+        console.error('LO CSV mobile poll:', e);
+      }
+    });
+  }
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  startLoCsvMobilePoll();
+});
+</script>
+<script>
+if (window.ClarityUI && typeof window.ClarityUI.applyInstructorModeVisibility === 'function') {
+  window.ClarityUI.applyInstructorModeVisibility('{{ instructor_mode }}');
+}
+</script>
+{% endblock %}

@@ -1,0 +1,1448 @@
+{% extends "app_base.html" %}
+
+{% block content %}
+<div class="space-y-5">
+
+  <!-- Header -->
+  <div class="flex items-center justify-between">
+    <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Speed Grader</h1>
+    <div class="flex items-center gap-2">
+      <button type="button" id="undoBtn" disabled
+        class="flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors bg-slate-100 dark:bg-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6"/>
+        </svg>
+        <span id="undoLabel">Undo</span>
+      </button>
+      <a href="{{ url_for('main.upload_grades', class_id=class_id) }}"
+        class="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-medium text-sm transition-colors shadow-sm">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+        </svg>
+        Upload PDF Grades
+      </a>
+    </div>
+  </div>
+
+  <!-- Assignment Selector + Filter -->
+  <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-5">
+    <div class="flex items-start gap-8 flex-wrap">
+      <!-- Assignment dropdown -->
+      <div class="flex-1 min-w-[240px]">
+        <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Assignment</label>
+        <div class="relative">
+          <select id="assignmentFilter" onchange="filterByAssignment()"
+            class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg text-sm text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 appearance-none pr-10 transition-all">
+            {% for assignment in assignments %}
+            <option value="{{ assignment.id }}" data-group="{{ assignment.homework_group or '' }}">
+              {{ assignment.name }}{% if instructor_mode == 'mark' and assignment.homework_group %} ({{ assignment.homework_group }}){% endif %}
+            </option>
+            {% endfor %}
+          </select>
+          <svg class="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400 pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+          </svg>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcuts -->
+  <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-3 relative">
+    <h3 class="font-semibold text-slate-900 dark:text-white mb-2">Keyboard Shortcuts</h3>
+    <div class="grid grid-cols-3 gap-x-8 gap-y-2 text-sm text-slate-600 dark:text-slate-300">
+      <div class="flex items-center gap-3">
+        <kbd class="kbd">M</kbd>
+        <span>Mastered</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <kbd class="kbd">⇧M</kbd>
+        <span>Mastered (revision) — <span class="font-mono">MR</span></span>
+      </div>
+      <div class="flex items-center gap-3">
+        <kbd class="kbd">R</kbd>
+        <span>Revise for Mastery</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <kbd class="kbd">Q</kbd>
+        <span>Revise with Question (RQ)</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <kbd class="kbd">P</kbd>
+        <span>Progressing</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <kbd class="kbd">X</kbd>
+        <span>No Evidence</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <kbd class="kbd">A</kbd>
+        <span>Absent</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <kbd class="kbd">Tab</kbd>
+        <span>Next Cell</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <kbd class="kbd">↑↓←→</kbd>
+        <span>Navigate</span>
+      </div>
+      <div class="flex items-center gap-3">
+        <kbd class="kbd">Enter</kbd>
+        <span>Next Student</span>
+      </div>
+    </div>
+    {% if instructor_mode == 'mark' %}
+    <div class="mt-4 pt-4 border-t border-slate-200 dark:border-slate-700">
+      <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400 mb-2">HW Eligibility Key</p>
+      <div class="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-slate-600 dark:text-slate-300">
+        <span class="inline-flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-emerald-500"></span>
+          Can Revise
+        </span>
+        <span class="inline-flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-amber-500"></span>
+          In-Class Grade Eligible
+        </span>
+        <span class="inline-flex items-center gap-2">
+          <span class="w-2.5 h-2.5 rounded-full bg-red-500"></span>
+          Not Eligible
+        </span>
+      </div>
+    </div>
+    {% endif %}
+    <div id="autosaveNotice"
+         class="hidden absolute right-4 bottom-3 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+      <svg class="w-3 h-3 animate-spin text-slate-400" viewBox="0 0 24 24" fill="none">
+        <circle class="opacity-25" cx="12" cy="12" r="10"
+                stroke="currentColor" stroke-width="4"></circle>
+        <path class="opacity-75" fill="currentColor"
+              d="M4 12a8 8 0 018-8V2C6.477 2 2 6.477 2 12h2z"></path>
+      </svg>
+      <span>Auto-saving…</span>
+    </div>
+  </div>
+
+  <!-- Grader Table -->
+  <div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden relative">
+    <!-- Top horizontal scrollbar (synced with main grid below). Readable column widths; no zoom-out. -->
+    <div id="graderTableTopScroll"
+         class="grader-table-hscroll-top h-[18px] shrink-0 overflow-x-auto overflow-y-hidden max-w-full touch-pan-x border-b border-slate-200 dark:border-slate-600"
+         aria-hidden="true">
+      <div id="graderTableTopScrollInner" class="h-px pointer-events-none"></div>
+    </div>
+    <div id="graderTableScrollWrap" class="grader-table-hscroll-main overflow-x-auto max-w-full touch-pan-x">
+      <table class="w-full border-collapse" id="graderTable">
+        <thead class="border-b border-slate-200 dark:border-slate-700">
+          <tr>
+            <!-- Student col -->
+            <th class="px-4 py-3 text-left text-sm font-semibold text-slate-600 dark:text-slate-300 sticky left-0 bg-white dark:bg-slate-800 z-20 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)] min-w-[160px]">
+              Student
+            </th>
+            <!-- HW % col -->
+            <th class="px-3 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[90px]" data-hw-col-header>
+              <span class="block">HW %</span>
+            </th>
+            <!-- LO columns -->
+            {% for lo in lo_names %}
+            <th class="px-1 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[70px]" data-lo="{{ lo.name }}" data-lo-id="{{ lo.id }}">
+              <div class="text-xs font-bold text-slate-800 dark:text-white">{{ lo.vendor_code or lo.name }}</div>
+              <div class="text-xs font-normal text-slate-400 dark:text-slate-500 mt-0.5 leading-tight">{{ lo.name }}</div>
+            </th>
+            {% endfor %}
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+          {% for student in students %}
+          {% set row_index = loop.index0 %}
+          <tr class="group hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors" data-student-row data-student-id="{{ student.id }}">
+            <!-- Student name -->
+            <td class="px-4 py-3 text-sm font-semibold text-slate-900 dark:text-white sticky left-0 bg-white dark:bg-slate-800 group-hover:bg-slate-50 dark:group-hover:bg-slate-700/30 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)] transition-colors">
+              <div class="flex items-center gap-2">
+                <span>{{ student.name }}</span>
+                <button type="button" onclick="deleteStudent('{{ student.id }}', '{{ student.name }}', this)" class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-all" title="Remove student">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                </button>
+              </div>
+            </td>
+            <!-- HW % editable -->
+            <td class="px-3 py-3 text-center" data-hw-cell>
+              <div class="hw-cell" data-student-id="{{ student.id }}">
+                <input type="number" min="0" max="100"
+                       class="hw-pct-input w-14 text-center text-xs font-bold rounded-full py-1 px-2 border-0 focus:outline-none focus:ring-2 focus:ring-blue-500 text-white"
+                       data-student-id="{{ student.id }}"
+                       value=""
+                       placeholder="—"
+                       style="background:#64748b">
+                <div class="hw-pass-text hidden mt-0.5">
+                  <span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-sky-600 text-white" title="Free pass used for this assignment">HW Pass</span>
+                </div>
+                <div class="revision-status mark-only mt-0.5 hidden" data-student-id="{{ student.id }}"></div>
+                {% if instructor_mode == 'mark' %}
+                <label class="flex items-center justify-center gap-1 mt-1 mark-only cursor-pointer" title="Use a HW pass">
+                  <input type="checkbox" class="hw-pass-check w-3.5 h-3.5 rounded border-slate-300 text-green-600 focus:ring-green-500"
+                         data-student-id="{{ student.id }}"
+                         data-passes="{{ student.passes_remaining|default(0) }}">
+                  <span class="hw-pass-label text-[10px] text-slate-400">{{ student.passes_remaining|default(0) }} left</span>
+                </label>
+                {% endif %}
+              </div>
+            </td>
+            <!-- Grade cells -->
+            {% for lo in lo_names %}
+            <td class="px-0 py-0.5" data-lo="{{ lo.name }}" data-lo-id="{{ lo.id }}">
+              <div class="grade-cell w-full min-h-[40px] flex items-center justify-center rounded-lg border-2 border-transparent hover:bg-slate-100 dark:hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-300 transition-all cursor-pointer"
+                   data-student-id="{{ student.id }}"
+                   data-lo-id="{{ lo.id }}"
+                   data-row="{{ row_index }}"
+                   data-col="{{ loop.index0 }}"
+                   data-actual-grade=""
+                   tabindex="0">
+                <span class="text-slate-200 dark:text-slate-600 text-[12px] select-none">—</span>
+              </div>
+            </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- Save bar -->
+  <div class="fixed bottom-6 right-6 z-30">
+    <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 p-4 flex flex-col gap-2 w-72">
+      <button type="button" id="saveBtn"
+        class="w-full px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-lg shadow-blue-500/20 flex items-center justify-center gap-2 transition-all">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+        </svg>
+        Save All Changes
+      </button>
+    </div>
+  </div>
+
+  <!-- Bottom spacer so save bar doesn't cover last row -->
+  <div class="h-24"></div>
+</div>
+
+<style>
+.kbd {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  background: #f1f5f9;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 11px;
+  font-family: ui-monospace, monospace;
+  font-weight: 700;
+  color: #475569;
+  white-space: nowrap;
+}
+.dark .kbd {
+  background: #334155;
+  border-color: #475569;
+  color: #cbd5e1;
+}
+
+
+/* Top strip: visible horizontal scrollbar. Main grid: same scroll position, scrollbar hidden
+   (wheel / trackpad / touch still scroll the grid). */
+#graderTableTopScroll {
+  scrollbar-width: auto;
+  -webkit-overflow-scrolling: touch;
+}
+#graderTableTopScroll::-webkit-scrollbar {
+  height: 12px;
+}
+#graderTableTopScroll::-webkit-scrollbar-track {
+  background: rgba(148, 163, 184, 0.25);
+  border-radius: 9999px;
+}
+#graderTableTopScroll::-webkit-scrollbar-thumb {
+  background: rgba(100, 116, 139, 0.65);
+  border-radius: 9999px;
+}
+.grader-table-hscroll-main {
+  scrollbar-width: none; /* Firefox — use top bar for visual */
+  -webkit-overflow-scrolling: touch;
+}
+.grader-table-hscroll-main::-webkit-scrollbar {
+  display: none;
+  height: 0;
+}
+
+/* Also pin the HW % column so the "exam score bubbles" don't drift when scrolling LO columns. */
+#graderTableScrollWrap {
+  --student-col-width: 200px; /* fallback; set precisely via JS */
+}
+#graderTable th[data-hw-col-header],
+#graderTable td[data-hw-cell] {
+  position: sticky;
+  left: var(--student-col-width);
+  z-index: 12; /* below the Student sticky column */
+  background: #ffffff;
+}
+.dark #graderTable th[data-hw-col-header],
+.dark #graderTable td[data-hw-cell] {
+  background: #1e293b; /* slate-800 */
+}
+
+/* Keep HW bubble text (HW Pass / eligibility) on one line. */
+#graderTable .hw-pass-text,
+#graderTable .hw-pass-text span,
+#graderTable .hw-pass-label,
+#graderTable .revision-status,
+#graderTable .revision-status span {
+  white-space: nowrap !important;
+  line-height: 1.1 !important;
+}
+
+#graderTable .hw-pass-text:not(.hidden),
+#graderTable .revision-status:not(.hidden) {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: nowrap;
+}
+
+/* Keep the student and HW columns compact (sized to their content / min-width),
+   and let LO + exam columns use natural widths; horizontal scroll shows extra columns. */
+#graderTable thead th.sticky,
+#graderTable tbody td.sticky,
+#graderTable th[data-hw-col-header],
+#graderTable td[data-hw-cell] {
+  width: 1%;
+}
+
+.mastery-m  { background: #dcfce7; color: #15803d; border-color: #86efac; }
+.mastery-mr { background: #ecfdf5; color: #047857; border-color: #34d399; }
+.mastery-r  { background: #fef9c3; color: #a16207; border-color: #fde047; }
+.mastery-rq { background: #ffedd5; color: #c2410c; border-color: #fdba74; }
+.mastery-p  { background: #dbeafe; color: #1d4ed8; border-color: #93c5fd; }
+.mastery-x  { background: #fee2e2; color: #b91c1c; border-color: #fca5a5; }
+.mastery-a  { background: #f1f5f9; color: #475569; border-color: #cbd5e1; }
+.mastery-i  { background: #fef3c7; color: #92400e; border-color: #fcd34d; }
+
+/* Same circular footprint for M, MR, RQ, etc. (two-letter codes no longer stretch wide) */
+.grade-cell .mastery-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  width: 2.25rem;
+  height: 2.25rem;
+  padding: 0;
+  border-radius: 9999px;
+  border-width: 1px;
+  border-style: solid;
+  font-size: 0.8rem;
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+  line-height: 1;
+  letter-spacing: -0.03em;
+}
+
+/* Red square marker for mastery grades that currently do not count. */
+.grade-cell.non-counting-grade {
+  box-shadow: inset 0 0 0 2px #ef4444;
+  background: rgba(239, 68, 68, 0.08);
+}
+
+</style>
+
+<script id="assignmentData" type="application/json">{{ assignments | tojson }}</script>
+
+<script>
+const INSTRUCTOR_MODE = '{{ instructor_mode }}';
+const GRADES = ['M', 'R', 'Q', 'P', 'X', 'A'];
+const GRADE_MAP = { 'Q': 'RQ' }; // Q key → RQ grade
+const gradeHistory = [];
+const grades = {};
+const classId = "{{ class_id }}";
+// Read server-side flag as JSON string so this line stays valid JS in editors.
+const AUTO_CONVERT_M = JSON.parse('{{ (auto_convert_m or false)|tojson }}');
+
+// Synced horizontal scroll: thin bar at the top of the card + main table area below.
+// Table stays at 100% zoom (readable); overflow is handled by scrolling, not shrinking.
+(function setupGraderHorizontalScrollSync() {
+  const topEl = document.getElementById('graderTableTopScroll');
+  const bottomEl = document.getElementById('graderTableScrollWrap');
+  const innerEl = document.getElementById('graderTableTopScrollInner');
+  const table = document.getElementById('graderTable');
+  if (!topEl || !bottomEl || !innerEl) return;
+
+  let syncing = false;
+
+  function syncScrollMetrics() {
+    const sw = bottomEl.scrollWidth;
+    innerEl.style.width = sw + 'px';
+    innerEl.style.minWidth = sw + 'px';
+    const max = Math.max(0, sw - bottomEl.clientWidth);
+    if (bottomEl.scrollLeft > max) bottomEl.scrollLeft = max;
+    if (topEl.scrollLeft > max) topEl.scrollLeft = max;
+  }
+
+  function onTopScroll() {
+    if (syncing) return;
+    syncing = true;
+    bottomEl.scrollLeft = topEl.scrollLeft;
+    syncing = false;
+  }
+
+  function onBottomScroll() {
+    if (syncing) return;
+    syncing = true;
+    topEl.scrollLeft = bottomEl.scrollLeft;
+    syncing = false;
+  }
+
+  topEl.addEventListener('scroll', onTopScroll, { passive: true });
+  bottomEl.addEventListener('scroll', onBottomScroll, { passive: true });
+
+  window.addEventListener('resize', function () {
+    window.clearTimeout(window.__graderScrollResizeT);
+    window.__graderScrollResizeT = window.setTimeout(syncScrollMetrics, 50);
+  });
+
+  if (typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver(function () {
+      window.requestAnimationFrame(syncScrollMetrics);
+    });
+    ro.observe(bottomEl);
+    if (table) ro.observe(table);
+  }
+
+  window.graderTableSyncScrollMetrics = syncScrollMetrics;
+
+  window.requestAnimationFrame(syncScrollMetrics);
+  window.setTimeout(syncScrollMetrics, 100);
+  window.setTimeout(syncScrollMetrics, 400);
+})();
+
+(function pinHwColumnToStudentWidth() {
+  const scrollWrap = document.getElementById('graderTableScrollWrap');
+  if (!scrollWrap) return;
+
+  function update() {
+    const studentTh = document.querySelector('#graderTable thead th.sticky');
+    if (!studentTh) return;
+    const w = Math.ceil(studentTh.getBoundingClientRect().width);
+    scrollWrap.style.setProperty('--student-col-width', w + 'px');
+  }
+
+  window.addEventListener('resize', update);
+  // In case fonts/layout shift after load.
+  window.requestAnimationFrame(update);
+  window.setTimeout(update, 250);
+})();
+
+/** HW % thresholds: in-class exam marks vs revision to M (M/MR) */
+const EXAM_HW_MIN = 65;
+const REVISION_M_MIN = 75;
+const examGradeEligible = {};
+const revisionEligible = {};
+let hasUnsavedChanges = false;
+
+function markUnsavedChanges() {
+  hasUnsavedChanges = true;
+}
+
+function recomputeUnsavedState() {
+  const hwDirty = Array.from(document.querySelectorAll('.hw-pct-input')).some((input) => {
+    if (input.classList.contains('hidden')) return false;
+    const raw = String(input.value || '').trim();
+    if (raw === '') return false;
+    const val = String(Math.max(0, Math.min(100, parseInt(raw, 10) || 0)));
+    const lastSaved = input.dataset.lastSaved;
+    return lastSaved == null || String(lastSaved) !== val;
+  });
+  hasUnsavedChanges = gradeHistory.length > 0 || hwDirty;
+}
+
+function getActiveAssignmentId() {
+  const sel = document.getElementById('assignmentFilter');
+  const v = sel ? String(sel.value || '').trim() : '';
+  return v || null;
+}
+
+/** Align API map keys with dataset student ids (trim + lowercase) so `sid in hw_scores` works after JSON round-trip. */
+function normalizeStudentKeyForMap(id) {
+  return String(id == null ? '' : id).trim().toLowerCase();
+}
+
+function coerceStudentKeyedMap(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const k of Object.keys(raw)) {
+    const nk = normalizeStudentKeyForMap(k);
+    if (nk) out[nk] = raw[k];
+  }
+  return out;
+}
+
+function gradeBadgeHtml(grade) {
+  const g = String(grade);
+  return `<span class="mastery-badge mastery-${g.toLowerCase()} border">${g}</span>`;
+}
+
+/** HW cell for this student, preferring the same table row as the grade cell (avoids wrong student + stale cache). */
+function resolveHwCell(studentId, gradeCellEl) {
+  const sid = String(studentId || '');
+  if (gradeCellEl && typeof gradeCellEl.closest === 'function') {
+    const row = gradeCellEl.closest('tr[data-student-row]');
+    if (row) {
+      const hw = row.querySelector('.hw-cell');
+      if (hw) return hw;
+    }
+  }
+  if (!sid) return null;
+  const attr = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
+    ? CSS.escape(sid)
+    : sid;
+  try {
+    return document.querySelector(`.hw-cell[data-student-id="${attr}"]`);
+  } catch (e) {
+    return null;
+  }
+}
+
+/**
+ * Live-DOM HW eligibility check, used only to PREDICT counts_for_mastery on a
+ * brand-new M/MR keystroke before the server has had a chance to persist the
+ * flag. The persisted flag (data-counts-for-mastery) is the source of truth
+ * for already-saved rows; this function never re-evaluates them.
+ */
+function predictCountsForMasteryFromCurrentHw(studentId, gradeCellEl) {
+  const sid = String(studentId || '');
+  const hwCell = resolveHwCell(sid, gradeCellEl);
+  if (!hwCell) {
+    // No HW row visible (e.g. shelbi mode hides HW UI). Default to counting so
+    // we never silently mark a grade as non-counting without HW context.
+    return true;
+  }
+  const passEl = hwCell.querySelector('.hw-pass-check');
+  const passChecked = !!(passEl && passEl.checked);
+  if (passChecked) return true;
+  const input = hwCell.querySelector('.hw-pct-input');
+  const rawHw = input ? String(input.value || '').trim() : '';
+  if (rawHw === '') {
+    // Mirrors the server: missing HW data => allow M (TestSaveGradesAutoConvertHwGuard).
+    return true;
+  }
+  const hw = parseInt(rawHw, 10);
+  return Number.isFinite(hw) && hw >= EXAM_HW_MIN;
+}
+
+/**
+ * Cells now always render the raw stored letter. The legacy M->I visual swap
+ * has moved to print/PDF export time on the Reports tab; in the Speed Grader,
+ * non-counting M/MR is communicated purely by the red border on the cell.
+ */
+function getDisplayedGradeForStudent(rawGrade /*, studentId, gradeCellEl */) {
+  return String(rawGrade || '').toUpperCase();
+}
+
+/**
+ * Stamp the persistent counts_for_mastery flag on a newly-entered cell.
+ * First-entry-only: if the cell already had a value with the flag set, we
+ * leave it alone (mirrors the server's stickiness rule).
+ */
+function applyCountsForMasteryOnEdit(cell, rawGrade, prevGrade) {
+  const g = String(rawGrade || '').toUpperCase();
+  if (INSTRUCTOR_MODE !== 'mark') {
+    delete cell.dataset.countsForMastery;
+    return;
+  }
+  if (g !== 'M' && g !== 'MR') {
+    // Non-mastery letters don't carry a meaningful flag.
+    delete cell.dataset.countsForMastery;
+    return;
+  }
+  const prev = String(prevGrade || '').toUpperCase();
+  const hadMasteryAlready = (prev === 'M' || prev === 'MR') &&
+    (cell.dataset.countsForMastery === '0' || cell.dataset.countsForMastery === '1');
+  if (hadMasteryAlready) {
+    // Sticky: keep the original flag from when M was first entered.
+    return;
+  }
+  const sid = String(cell.dataset.studentId || '');
+  const counts = predictCountsForMasteryFromCurrentHw(sid, cell);
+  cell.dataset.countsForMastery = counts ? '1' : '0';
+}
+
+function renderGradeInCell(cell, rawGrade) {
+  const raw = String(rawGrade || '').toUpperCase();
+  const shown = getDisplayedGradeForStudent(raw);
+  // Red border = non-counting M/MR, driven purely by the persisted flag. Only
+  // shown in mark mode (Shelbi hides this distinction by design).
+  const isMastery = raw === 'M' || raw === 'MR';
+  const isNonCountingMastery =
+    INSTRUCTOR_MODE === 'mark' &&
+    isMastery &&
+    cell.dataset.countsForMastery === '0';
+  cell.classList.toggle('non-counting-grade', isNonCountingMastery);
+  cell.innerHTML = shown ? gradeBadgeHtml(shown) : `<span class="text-slate-200 dark:text-slate-600 text-[12px] select-none">—</span>`;
+}
+
+function escapeHtml(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function setHwEligibilityFromState(studentId, scoreNum, isPass /* , skipGradeRefresh */) {
+  if (INSTRUCTOR_MODE !== 'mark') {
+    examGradeEligible[studentId] = true;
+    revisionEligible[studentId] = true;
+    return;
+  }
+  if (isPass) {
+    examGradeEligible[studentId] = true;
+    revisionEligible[studentId] = false;
+  } else if (scoreNum === null || scoreNum === undefined || (typeof scoreNum === 'number' && isNaN(scoreNum))) {
+    examGradeEligible[studentId] = false;
+    revisionEligible[studentId] = false;
+  } else {
+    const n = typeof scoreNum === 'number' ? scoreNum : parseInt(String(scoreNum), 10);
+    if (isNaN(n)) {
+      examGradeEligible[studentId] = false;
+      revisionEligible[studentId] = false;
+    } else {
+      examGradeEligible[studentId] = n >= EXAM_HW_MIN;
+      revisionEligible[studentId] = n >= REVISION_M_MIN;
+    }
+  }
+  updateRevisionStatus(studentId);
+  // Intentionally no longer re-renders displayed grades: counts_for_mastery is
+  // captured at first-entry time and persisted, so HW% changes after the fact
+  // do NOT alter the visual state of existing M/MR cells.
+}
+
+function hwInputBackground(scoreNum, isPass) {
+  if (INSTRUCTOR_MODE !== 'mark') return '#64748b';
+  if (isPass) return '#0ea5e9';
+  if (scoreNum === null || scoreNum === undefined || (typeof scoreNum === 'number' && isNaN(scoreNum))) return '#64748b';
+  const n = parseInt(String(scoreNum), 10);
+  if (isNaN(n)) return '#64748b';
+  if (n >= REVISION_M_MIN) return '#22c55e';
+  if (n >= EXAM_HW_MIN) return '#f59e0b';
+  return '#ef4444';
+}
+
+/** Persist every visible HW % field (used on Save so values commit even if input never blurred). */
+async function persistAllHwPctInputs() {
+  const activeAssignmentId = getActiveAssignmentId();
+  if (!activeAssignmentId) return;
+  const errors = [];
+
+  const inputs = Array.from(document.querySelectorAll('.hw-pct-input')).filter(input => {
+    if (input.classList.contains('hidden')) return false;
+    const raw = String(input.value || '').trim();
+    if (raw === '') return false;
+    return true;
+  });
+
+  // Only save what changed (prevents hammering the backend and causing disconnects).
+  const dirtyInputs = inputs.filter(input => {
+    const raw = String(input.value || '').trim();
+    const val = String(Math.max(0, Math.min(100, parseInt(raw, 10) || 0)));
+    const lastSaved = input.dataset.lastSaved;
+    return lastSaved == null || lastSaved === '' || String(lastSaved) !== val;
+  });
+
+  // Save with limited concurrency to avoid server overload.
+  const concurrency = 5;
+  let index = 0;
+
+  async function worker() {
+    while (index < dirtyInputs.length) {
+      const input = dirtyInputs[index++];
+      const raw = String(input.value || '').trim();
+      const studentId = input.dataset.studentId;
+      if (!studentId) continue;
+
+      const val = Math.max(0, Math.min(100, parseInt(raw, 10) || 0));
+      input.value = String(val);
+
+      try {
+        const res = await fetch('/api/class/' + classId + '/save-hw-percentage', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            student_id: studentId,
+            score: val,
+            assignment_id: activeAssignmentId
+          })
+        });
+        const data = await res.json().catch(function () { return {}; });
+        if (!res.ok || !data.success) {
+          errors.push(data.error || res.statusText || 'HW save failed');
+        } else {
+          input.dataset.lastSaved = String(val);
+        }
+      } catch (e) {
+        errors.push(e && e.message ? e.message : 'HW save failed');
+      }
+    }
+  }
+
+  const workers = [];
+  for (let i = 0; i < Math.min(concurrency, dirtyInputs.length); i++) {
+    workers.push(worker());
+  }
+
+  await Promise.all(workers);
+
+  if (errors.length) {
+    // Keep the UX friendly: don't fail on the first disconnect if some requests succeeded.
+    // Still throw so the UI can re-enable buttons properly.
+    throw new Error(errors[0]);
+  }
+}
+
+function updateRevisionStatus(studentId) {
+  if (INSTRUCTOR_MODE !== 'mark') return;
+  const el = document.querySelector(`.revision-status[data-student-id="${studentId}"]`);
+  if (!el) return;
+  el.classList.remove('hidden');
+  if (revisionEligible[studentId]) {
+    el.innerHTML = '<span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-green-100 dark:bg-green-900/40 text-green-700 dark:text-green-300">Can revise</span>';
+  } else if (examGradeEligible[studentId]) {
+    el.innerHTML = '<span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200">In-class grade eligible</span>';
+  } else {
+    el.innerHTML = '<span class="px-2 py-0.5 text-[10px] font-bold rounded-full bg-red-100 dark:bg-red-900/40 text-red-600 dark:text-red-400">Not eligible</span>';
+  }
+}
+
+async function deleteStudent(studentId, studentName, btn) {
+  if (!confirm(`Remove "${studentName}" from this class? This will delete all their grades.`)) return;
+  try {
+    const res = await fetch(`/api/class/${classId}/remove_student`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ student_id: studentId })
+    });
+    if (!res.ok) throw new Error((await res.json()).error || 'Failed');
+    const row = btn.closest('tr');
+    if (row) row.remove();
+    if (window.graderTableSyncScrollMetrics) {
+      window.requestAnimationFrame(window.graderTableSyncScrollMetrics);
+    }
+  } catch (e) {
+    alert('Error removing student: ' + e.message);
+  }
+}
+
+// Init grade cell event listeners
+document.querySelectorAll('.grade-cell').forEach(cell => {
+  cell.addEventListener('click', () => cell.focus());
+
+  cell.addEventListener('keydown', (e) => {
+    const k = e.key.toUpperCase();
+    const row = parseInt(cell.dataset.row);
+    const col = parseInt(cell.dataset.col);
+
+    if (e.shiftKey && k === 'M') {
+      e.preventDefault();
+      updateCellValue(cell, 'MR');
+      moveFocusForward(row, col);
+    } else if (GRADES.includes(k)) {
+      e.preventDefault();
+      const grade = GRADE_MAP[k] || k;
+      updateCellValue(cell, grade);
+      moveFocusForward(row, col);
+    } else if (e.key === 'Backspace' || e.key === 'Delete') {
+      e.preventDefault();
+      updateCellValue(cell, null);
+    } else if (e.key === 'Tab') {
+      e.preventDefault();
+      moveFocusForward(row, col);
+    } else if (e.key === 'ArrowRight') { e.preventDefault(); moveFocusForward(row, col); }
+    else if (e.key === 'ArrowLeft')  { e.preventDefault(); moveFocusBackward(row, col); }
+    else if (e.key === 'ArrowDown')  { e.preventDefault(); moveFocusVertical(row, col, 1); }
+    else if (e.key === 'ArrowUp')    { e.preventDefault(); moveFocusVertical(row, col, -1); }
+    else if (e.key === 'Enter') {
+      e.preventDefault();
+      const nextRowCells = getVisibleGradeCellsInRow(row + 1);
+      if (nextRowCells.length) focusGradeCell(nextRowCells[0]);
+    }
+  });
+});
+
+function updateCellValue(cell, newGrade) {
+  const key = `${cell.dataset.studentId}|${cell.dataset.loId}`;
+  const prev = grades[key];
+  if (prev === newGrade) return;
+
+  grades[key] = newGrade;
+  gradeHistory.push({ key, prev, newGrade });
+  markUnsavedChanges();
+
+  cell.dataset.actualGrade = newGrade || '';
+  applyCountsForMasteryOnEdit(cell, newGrade || '', prev || '');
+  if (!newGrade) {
+    // Cleared cells discard any prior flag so a future first-entry re-evaluates.
+    delete cell.dataset.countsForMastery;
+  }
+  renderGradeInCell(cell, newGrade || '');
+
+  updateUndoBtn();
+}
+
+/** Grade cells in hidden LO columns are skipped so assignment filters stay consistent. */
+function isGradeCellVisible(cell) {
+  const td = cell.closest('td[data-lo-id]');
+  return td && td.style.display !== 'none';
+}
+
+function getVisibleGradeCellsInRow(rowNum) {
+  return Array.from(document.querySelectorAll(`.grade-cell[data-row="${rowNum}"]`))
+    .filter(isGradeCellVisible)
+    .sort((a, b) => parseInt(a.dataset.col, 10) - parseInt(b.dataset.col, 10));
+}
+
+function focusGradeCell(cell) {
+  if (!cell) return;
+  cell.focus();
+  cell.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+}
+
+/** After entering a grade / Tab / Right: next cell in row, or first cell of next student at end of row. */
+function moveFocusForward(row, col) {
+  const cells = getVisibleGradeCellsInRow(row);
+  const idx = cells.findIndex(c => parseInt(c.dataset.col, 10) === col);
+  if (idx !== -1 && idx < cells.length - 1) {
+    focusGradeCell(cells[idx + 1]);
+    return;
+  }
+  if (idx !== -1 && idx === cells.length - 1) {
+    const nextRow = getVisibleGradeCellsInRow(row + 1);
+    if (nextRow.length) focusGradeCell(nextRow[0]);
+    return;
+  }
+  const nextSameRow = cells.find(c => parseInt(c.dataset.col, 10) > col);
+  if (nextSameRow) {
+    focusGradeCell(nextSameRow);
+    return;
+  }
+  const nextRow = getVisibleGradeCellsInRow(row + 1);
+  if (nextRow.length) focusGradeCell(nextRow[0]);
+}
+
+function moveFocusBackward(row, col) {
+  const cells = getVisibleGradeCellsInRow(row);
+  const idx = cells.findIndex(c => parseInt(c.dataset.col, 10) === col);
+  if (idx > 0) {
+    focusGradeCell(cells[idx - 1]);
+    return;
+  }
+  if (idx === 0) {
+    const prevRow = getVisibleGradeCellsInRow(row - 1);
+    if (prevRow.length) focusGradeCell(prevRow[prevRow.length - 1]);
+    return;
+  }
+  const prevSame = [...cells].reverse().find(c => parseInt(c.dataset.col, 10) < col);
+  if (prevSame) {
+    focusGradeCell(prevSame);
+    return;
+  }
+  const prevRow = getVisibleGradeCellsInRow(row - 1);
+  if (prevRow.length) focusGradeCell(prevRow[prevRow.length - 1]);
+}
+
+function moveFocusVertical(row, col, delta) {
+  const cells = getVisibleGradeCellsInRow(row + delta);
+  if (!cells.length) return;
+  let best = cells[0];
+  let bestDist = Math.abs(parseInt(best.dataset.col, 10) - col);
+  for (const c of cells) {
+    const d = Math.abs(parseInt(c.dataset.col, 10) - col);
+    if (d < bestDist) {
+      best = c;
+      bestDist = d;
+    }
+  }
+  focusGradeCell(best);
+}
+
+function updateUndoBtn() {
+  const btn = document.getElementById('undoBtn');
+  const label = document.getElementById('undoLabel');
+  const has = gradeHistory.length > 0;
+  btn.disabled = !has;
+  if (has) {
+    btn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors bg-blue-600 text-white hover:bg-blue-700';
+    label.textContent = `Undo (${gradeHistory.length})`;
+  } else {
+    btn.className = 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors bg-slate-100 dark:bg-slate-700 text-slate-400 dark:text-slate-500 cursor-not-allowed';
+    label.textContent = 'Undo';
+  }
+}
+
+document.getElementById('undoBtn').addEventListener('click', () => {
+  if (!gradeHistory.length) return;
+  const last = gradeHistory.pop();
+  const [sid, loId] = last.key.split('|');
+  const cell = document.querySelector(`[data-student-id="${sid}"][data-lo-id="${loId}"]`);
+  grades[last.key] = last.prev;
+  if (cell) {
+    cell.dataset.actualGrade = last.prev || '';
+    // Treat undo as a "first-entry" again so the flag re-derives from the
+    // current HW row instead of inheriting the now-popped edit's flag.
+    delete cell.dataset.countsForMastery;
+    applyCountsForMasteryOnEdit(cell, last.prev || '', last.newGrade || '');
+    if (!last.prev) {
+      delete cell.dataset.countsForMastery;
+    }
+    renderGradeInCell(cell, last.prev || '');
+  }
+  updateUndoBtn();
+});
+
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+    e.preventDefault();
+    document.getElementById('undoBtn').click();
+  }
+});
+
+// One-time index of grade cells keyed by "studentId|loId". The grader grid
+// is built server-side once and never has rows added or removed at runtime,
+// so caching is safe. If that ever changes, the index must be rebuilt or
+// switched to a live querySelector lookup.
+const __gradeCellIndex = (() => {
+  const map = new Map();
+  document.querySelectorAll('.grade-cell').forEach(cell => {
+    const sid = cell.dataset.studentId || cell.getAttribute('data-student-id');
+    const loId = cell.dataset.loId || cell.getAttribute('data-lo-id');
+    if (sid && loId) map.set(sid + '|' + loId, cell);
+  });
+  return map;
+})();
+
+// String reused for every cleared cell so we set `innerHTML` to the same
+// constant. The browser can short-circuit equal innerHTML assignments and we
+// avoid generating a fresh string per clear during assignment switches.
+const __emptyGradeCellHtml = '<span class="text-slate-200 dark:text-slate-600 text-[12px] select-none">\u2014</span>';
+
+function filterByAssignment() {
+  const assignmentId = document.getElementById('assignmentFilter').value;
+  const assignmentData = JSON.parse(document.getElementById('assignmentData').textContent);
+
+  if (!assignmentId) return;
+
+  // Find the selected assignment's LO ids
+  const assignment = assignmentData.find(a => a.id === assignmentId);
+  if (!assignment) return;
+
+  const linkedLoIds = new Set((assignment.assignment_objectives || []).map(ao => String(ao.learning_objective_id)));
+  // When an assignment has no LOs explicitly linked (legacy/PDF-imported rows
+  // never edited in the UI) show every class LO column so grades still surface
+  // here the same way they do on the Reports tab. The scoped filter still
+  // applies as soon as any LO is linked via Class -> Assignments -> Edit.
+  const showAllLos = linkedLoIds.size === 0;
+
+  const loScoped = document.querySelectorAll('th[data-lo-id], td[data-lo-id]');
+  for (let i = 0; i < loScoped.length; i++) {
+    const el = loScoped[i];
+    const want = (showAllLos || linkedLoIds.has(String(el.dataset.loId))) ? '' : 'none';
+    if (el.style.display !== want) el.style.display = want;
+  }
+  if (window.graderTableSyncScrollMetrics) {
+    window.requestAnimationFrame(window.graderTableSyncScrollMetrics);
+  }
+
+  // Clear current grades and history, then fetch grades for this assignment
+  Object.keys(grades).forEach(k => delete grades[k]);
+  gradeHistory.length = 0;
+  updateUndoBtn();
+
+  // Reset only cells that currently have a value (skips already-empty cells to avoid layout work).
+  __gradeCellIndex.forEach(cell => {
+    if (cell.dataset.actualGrade) {
+      cell.dataset.actualGrade = '';
+      delete cell.dataset.countsForMastery;
+      cell.classList.remove('non-counting-grade');
+      cell.innerHTML = __emptyGradeCellHtml;
+    }
+  });
+
+  // Fetch grades for this assignment from the API
+  fetch(`/api/class/${classId}/assignment/${assignmentId}/grades`)
+    .then(r => r.json())
+    .then(data => {
+      if (!data.success) return;
+      const fetchedGrades = data.grades || {};
+      const countsMap = data.counts_for_mastery_map || {};
+      for (const key in fetchedGrades) {
+        const grade = fetchedGrades[key];
+        grades[key] = grade;
+        const cell = __gradeCellIndex.get(key);
+        if (cell) {
+          cell.dataset.actualGrade = grade;
+          // Persisted flag wins; default true if the server didn't include it
+          // (legacy deployments that haven't run the migration yet).
+          const flag = Object.prototype.hasOwnProperty.call(countsMap, key)
+            ? !!countsMap[key]
+            : true;
+          if (grade === 'M' || grade === 'MR') {
+            cell.dataset.countsForMastery = flag ? '1' : '0';
+          } else {
+            delete cell.dataset.countsForMastery;
+          }
+          // Render synchronously: the persistent flag no longer depends on
+          // the HW widgets being populated first.
+          renderGradeInCell(cell, grade);
+        }
+      }
+
+      // Populate HW% inputs for this assignment
+      const hwScores = coerceStudentKeyedMap(data.hw_scores || {});
+      const examScores = data.exam_scores || {};
+      const examColumns = Array.isArray(data.exam_columns) ? data.exam_columns : [];
+      renderExamColumns(examScores, examColumns);
+      document.querySelectorAll('.hw-pct-input').forEach(input => {
+        const sidRaw = String(input.dataset.studentId || '').trim();
+        const sidKey = normalizeStudentKeyForMap(sidRaw);
+        const cell = input.closest('.hw-cell');
+        const passText = cell ? cell.querySelector('.hw-pass-text') : null;
+        const passCb = cell ? cell.querySelector('.hw-pass-check') : null;
+
+        if (sidKey && Object.prototype.hasOwnProperty.call(hwScores, sidKey) && hwScores[sidKey] === -1) {
+          // HW Pass was used for this assignment (in-class exam marks only, not M/MR)
+          input.classList.add('hidden');
+          input.value = '';
+          input.style.background = '#64748b';
+          if (passText) passText.classList.remove('hidden');
+          if (passCb) passCb.checked = true;
+          input.dataset.lastSaved = '-1';
+          setHwEligibilityFromState(sidRaw, null, true);
+        } else if (sidKey && Object.prototype.hasOwnProperty.call(hwScores, sidKey)) {
+          input.classList.remove('hidden');
+          input.value = hwScores[sidKey];
+          input.style.background = hwInputBackground(hwScores[sidKey], false);
+          if (passText) passText.classList.add('hidden');
+          if (passCb) passCb.checked = false;
+          input.dataset.lastSaved = String(hwScores[sidKey]);
+          setHwEligibilityFromState(sidRaw, hwScores[sidKey], false);
+        } else {
+          input.classList.remove('hidden');
+          input.value = '';
+          input.style.background = '#64748b';
+          if (passText) passText.classList.add('hidden');
+          if (passCb) passCb.checked = false;
+          input.dataset.lastSaved = '';
+          setHwEligibilityFromState(sidRaw, null, false);
+        }
+      });
+      if (window.graderTableSyncScrollMetrics) {
+        window.requestAnimationFrame(window.graderTableSyncScrollMetrics);
+      }
+    })
+    .catch(e => console.error('Error loading assignment grades:', e));
+}
+
+function renderExamColumns(examScoresByCol, examColumns) {
+  const removeList = document.querySelectorAll('th.exam-score-col-header, td.exam-score-col-cell');
+  for (let i = 0; i < removeList.length; i++) removeList[i].remove();
+
+  const headerRow = document.querySelector('#graderTable thead tr');
+  const hwHeader = document.querySelector('th[data-hw-col-header]');
+  if (!headerRow || !hwHeader) return;
+
+  const cols = Array.isArray(examColumns) ? examColumns : [];
+  if (cols.length) {
+    const headerFrag = document.createDocumentFragment();
+    for (let i = 0; i < cols.length; i++) {
+      const col = cols[i];
+      const th = document.createElement('th');
+      th.className = 'exam-score-col-header px-2 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[70px]';
+      th.innerHTML = `<div class="text-xs font-bold text-slate-800 dark:text-white">${escapeHtml(col)}</div>`;
+      headerFrag.appendChild(th);
+    }
+    headerRow.insertBefore(headerFrag, hwHeader);
+  }
+
+  const rows = document.querySelectorAll('tr[data-student-row]');
+  for (let r = 0; r < rows.length; r++) {
+    const row = rows[r];
+    const sid = String(row.getAttribute('data-student-id') || '');
+    const hwCell = row.querySelector('td[data-hw-cell]');
+    if (!hwCell || !cols.length) continue;
+    const rowFrag = document.createDocumentFragment();
+    for (let c = 0; c < cols.length; c++) {
+      const col = cols[c];
+      const td = document.createElement('td');
+      td.className = 'exam-score-col-cell px-1 py-2 text-center';
+      const colMap = examScoresByCol[col] || {};
+      const raw = sid in colMap ? colMap[sid] : '';
+      const val = (raw == null) ? '' : String(raw);
+      td.innerHTML = `<input type="number" min="0" max="100" step="0.1" class="exam-score-input w-14 text-center text-[11px] font-bold rounded-full py-1 px-2 border-0 focus:outline-none focus:ring-2 focus:ring-violet-500 text-white bg-violet-600/90" data-student-id="${escapeHtml(sid)}" data-exam-col="${escapeHtml(col)}" value="${escapeHtml(val)}" placeholder="—">`;
+      rowFrag.appendChild(td);
+    }
+    row.insertBefore(rowFrag, hwCell);
+  }
+
+  bindExamScoreInputs();
+  if (window.graderTableSyncScrollMetrics) {
+    window.requestAnimationFrame(window.graderTableSyncScrollMetrics);
+  }
+}
+
+function bindExamScoreInputs() {
+  document.querySelectorAll('.exam-score-input').forEach(input => {
+    function clampExamInput() {
+      const raw = String(input.value || '').trim();
+      if (raw === '') return null;
+      let n = parseFloat(raw);
+      if (!Number.isFinite(n)) n = 0;
+      n = Math.max(0, Math.min(100, n));
+      if (String(n) !== raw) {
+        input.value = String(n);
+      }
+      return n;
+    }
+
+    input.addEventListener('input', () => {
+      clampExamInput();
+    });
+
+    input.addEventListener('change', async () => {
+      const studentId = input.dataset.studentId;
+      const examCol = input.dataset.examCol;
+      const n = clampExamInput();
+      if (n === null) return;
+      try {
+        const res = await fetch(`/api/class/${classId}/save-exam-score`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            student_id: studentId,
+            exam_col: examCol,
+            score: n
+          })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok || !data.success) {
+          throw new Error(data.error || 'Failed to save exam score');
+        }
+      } catch (e) {
+        alert('Error saving exam score: ' + e.message);
+      }
+    });
+  });
+}
+
+// Auto-select first assignment on load
+filterByAssignment();
+
+// Back-forward cache restore: refetch so HW map + grade display match server (avoids stale empty HW → false I).
+window.addEventListener('pageshow', function (ev) {
+  if (ev.persisted && document.getElementById('assignmentFilter')) {
+    filterByAssignment();
+  }
+});
+
+// HW % editable inputs — update color on change and auto-save
+document.querySelectorAll('.hw-pct-input').forEach(input => {
+  function clampHwInput() {
+    const raw = input.value.trim();
+    if (raw === '') return null;
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n)) return null;
+    const clamped = Math.max(0, Math.min(100, n));
+    if (String(clamped) !== raw) {
+      input.value = String(clamped);
+    }
+    return clamped;
+  }
+
+  function updateColor() {
+    const valNow = clampHwInput();
+    if (valNow === null) {
+      input.style.background = '#64748b';
+      return;
+    }
+    input.style.background = hwInputBackground(valNow, false);
+  }
+  input.addEventListener('input', () => {
+    updateColor();
+    const valNow = clampHwInput();
+    if (valNow === null) {
+      setHwEligibilityFromState(input.dataset.studentId, null, false);
+      return;
+    }
+    setHwEligibilityFromState(input.dataset.studentId, valNow, false);
+    markUnsavedChanges();
+  });
+  input.addEventListener('change', async () => {
+    updateColor();
+    const raw = input.value.trim();
+    const activeAssignmentId = getActiveAssignmentId();
+    if (raw === '' || !activeAssignmentId) return;
+    const studentId = input.dataset.studentId;
+    const val = clampHwInput();
+    if (val === null) return;
+    input.value = val;
+    updateColor();
+    setHwEligibilityFromState(studentId, val, false);
+    try {
+      const res = await fetch(`/api/class/${classId}/save-hw-percentage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'same-origin',
+        body: JSON.stringify({ student_id: studentId, score: val, assignment_id: activeAssignmentId })
+      });
+      const data = await res.json().catch(function () { return {}; });
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || 'Failed');
+      }
+      input.dataset.lastSaved = String(val);
+      recomputeUnsavedState();
+    } catch (e) {
+      console.error('Error saving HW %:', e);
+      // Avoid alert spam during rapid edits; user can re-click Save if needed.
+    }
+  });
+});
+
+// HW Pass checkboxes (Mark mode only)
+document.querySelectorAll('.hw-pass-check').forEach(cb => {
+  cb.addEventListener('change', async () => {
+    const studentId = cb.dataset.studentId;
+    const cell = cb.closest('.hw-cell');
+    const input = cell.querySelector('.hw-pct-input');
+    const passText = cell.querySelector('.hw-pass-text');
+    const label = cell.querySelector('.hw-pass-label');
+
+    if (cb.checked) {
+      cb.dataset.prevScore = String(input.value || '').trim();
+      const remaining = parseInt(cb.dataset.passes) || 0;
+      if (remaining <= 0) {
+        alert('No HW passes remaining for this student.');
+        cb.checked = false;
+        return;
+      }
+      const activeAssignmentId = getActiveAssignmentId();
+      if (!activeAssignmentId) {
+        alert('Select an assignment first.');
+        cb.checked = false;
+        return;
+      }
+      try {
+        // Use a pass
+        const res = await fetch(`/api/class/${classId}/use_pass`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ student_id: studentId })
+        });
+        const data = await res.json();
+        if (!data.success) throw new Error(data.error || 'Failed');
+        cb.dataset.passes = data.passes_remaining;
+        label.textContent = data.passes_remaining + ' left';
+
+        // Save -1 to homework_scores so it persists
+        const hwRes = await fetch(`/api/class/${classId}/save-hw-percentage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ student_id: studentId, score: -1, assignment_id: activeAssignmentId })
+        });
+        const hwData = await hwRes.json().catch(function () { return {}; });
+        if (!hwRes.ok || !hwData.success) {
+          throw new Error(hwData.error || 'Could not save HW pass');
+        }
+
+        input.classList.add('hidden');
+        passText.classList.remove('hidden');
+        input.dataset.lastSaved = '-1';
+        markUnsavedChanges();
+        setHwEligibilityFromState(studentId, null, true);
+      } catch (e) {
+        cb.checked = false;
+        alert('Error using HW pass: ' + e.message);
+      }
+    } else {
+      // Uncheck — return the pass, restore normal HW% input
+      try {
+        const res = await fetch(`/api/class/${classId}/return_pass`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ student_id: studentId })
+        });
+        const data = await res.json();
+        if (data.success) {
+          cb.dataset.passes = data.passes_remaining;
+          label.textContent = data.passes_remaining + ' left';
+        }
+      } catch (e) {
+        console.error('Error returning pass:', e);
+      }
+      input.classList.remove('hidden');
+      const restored = String(cb.dataset.prevScore || '').trim();
+      input.value = restored;
+      if (restored === '') {
+        input.style.background = '#64748b';
+      } else {
+        const n = Math.max(0, Math.min(100, parseInt(restored, 10) || 0));
+        input.value = String(n);
+        input.style.background = hwInputBackground(n, false);
+      }
+      passText.classList.add('hidden');
+      input.dataset.lastSaved = restored;
+      markUnsavedChanges();
+      if (restored === '') {
+        setHwEligibilityFromState(studentId, null, false);
+      } else {
+        setHwEligibilityFromState(studentId, parseInt(restored, 10) || 0, false);
+      }
+      const activeAssignmentId = getActiveAssignmentId();
+      if (activeAssignmentId) {
+        // Remove the -1; restore pre-pass value when available.
+        const restoredScore = restored === '' ? 0 : Math.max(0, Math.min(100, parseInt(restored, 10) || 0));
+        fetch(`/api/class/${classId}/save-hw-percentage`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ student_id: studentId, score: restoredScore, assignment_id: activeAssignmentId })
+        }).then(r => r.json()).catch(() => {});
+      }
+    }
+  });
+});
+
+// Save. When `btn` is provided (user click), animate that button. When called
+// without a button (autosave), do NOT touch #saveBtn — autosave shows progress
+// via the dedicated #autosaveNotice pill near the keyboard-shortcuts panel.
+async function performSave(btn) {
+  const activeAssignmentId = getActiveAssignmentId();
+  const orig = btn ? btn.innerHTML : '';
+
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<svg class="animate-spin h-4 w-4 text-white" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Saving...`;
+  }
+
+  try {
+    await persistAllHwPctInputs();
+    const res = await fetch(`/api/class/${classId}/save-grades`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ grades, assignment_id: activeAssignmentId })
+    });
+    if (res.ok) {
+      gradeHistory.length = 0;
+      updateUndoBtn();
+      recomputeUnsavedState();
+      if (btn) {
+        btn.classList.replace('bg-blue-600', 'bg-green-600');
+        btn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg> Saved!';
+        setTimeout(() => {
+          btn.classList.replace('bg-green-600', 'bg-blue-600');
+          btn.innerHTML = orig;
+          btn.disabled = false;
+        }, 2000);
+      }
+    } else {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || res.statusText);
+    }
+  } catch (e) {
+    if (btn) {
+      alert('Error saving grades: ' + e.message);
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    } else {
+      console.error('Autosave error:', e);
+    }
+  }
+}
+
+document.getElementById('saveBtn').addEventListener('click', async function () {
+  const btn = this;
+  await performSave(btn);
+});
+
+// Intercept top-nav tab clicks and offer to save before leaving.
+document.querySelectorAll('nav a[href]').forEach(a => {
+  const href = a.getAttribute('href') || '';
+  if (!href || href.startsWith('#')) return;
+  a.addEventListener('click', function (evt) {
+    if (!hasUnsavedChanges) return; // allow normal nav
+    evt.preventDefault();
+    const leave = confirm('You have unsaved changes.');
+    if (!leave) return;
+    window.location.href = href;
+  });
+});
+
+// Warn when switching assignments without saving.
+const assignmentFilterEl = document.getElementById('assignmentFilter');
+if (assignmentFilterEl) {
+  let lastValue = assignmentFilterEl.value;
+  assignmentFilterEl.addEventListener('change', function (evt) {
+    // If the user changes the selection and we have unsaved work, confirm.
+    if (!hasUnsavedChanges) {
+      lastValue = assignmentFilterEl.value;
+      return;
+    }
+
+    if (assignmentFilterEl.value === lastValue) return;
+
+    evt.preventDefault();
+    const leave = confirm('You have unsaved changes.');
+    if (!leave) {
+      // Stop the inline onchange handler so we don't reload grades under the user's feet.
+      evt.stopImmediatePropagation();
+      assignmentFilterEl.value = lastValue;
+      return;
+    }
+    lastValue = assignmentFilterEl.value;
+  }, true);
+}
+
+// Simple autosave: every minute, if there are unsaved changes and the tab is
+// visible, persist HW % and grades using the same save pipeline.
+let autosaveTimer = null;
+function startAutosaveTimer() {
+  if (autosaveTimer !== null) return;
+  autosaveTimer = window.setInterval(async function () {
+    if (document.hidden) return;
+    if (!hasUnsavedChanges) return;
+    const notice = document.getElementById('autosaveNotice');
+    try {
+      if (notice) notice.classList.remove('hidden');
+      await performSave(null);
+    } finally {
+      if (notice) notice.classList.add('hidden');
+    }
+  }, 180000);
+}
+function stopAutosaveTimer() {
+  if (autosaveTimer !== null) {
+    window.clearInterval(autosaveTimer);
+    autosaveTimer = null;
+  }
+}
+startAutosaveTimer();
+document.addEventListener('visibilitychange', function () {
+  if (!document.hidden) {
+    startAutosaveTimer();
+  }
+});
+</script>
+<script>
+if (window.ClarityUI && typeof window.ClarityUI.applyInstructorModeVisibility === 'function') {
+  window.ClarityUI.applyInstructorModeVisibility('{{ instructor_mode }}');
+}
+</script>
+{% endblock %}

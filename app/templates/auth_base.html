@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
+    <title>{% block title %}Project Clarity{% endblock %}</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = { darkMode: 'class' }
+    </script>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+    <script>
+        // CSRF auto-inject. Mirrors the wrapper in app_base.html so pages that
+        // extend auth_base.html (login, signup, instructor_select_class) can
+        // POST to state-changing endpoints (e.g. /api/set-instructor-mode for
+        // the Mark / Shelbi toggle) without the before_request CSRF check
+        // returning 403 and silently breaking the UI.
+        (function setupCsrfFetchInterceptor() {
+            function csrfToken() {
+                var m = document.querySelector('meta[name="csrf-token"]');
+                return m ? String(m.getAttribute('content') || '') : '';
+            }
+
+            var originalFetch = window.fetch;
+            window.fetch = function (input, init) {
+                init = init || {};
+                init.headers = init.headers || {};
+                var token = csrfToken();
+                var method = String((init.method || 'GET')).toUpperCase();
+                if (token && ['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(method) >= 0) {
+                    if (init.headers instanceof Headers) {
+                        if (!init.headers.has('X-CSRF-Token')) init.headers.set('X-CSRF-Token', token);
+                    } else if (!init.headers['X-CSRF-Token']) {
+                        init.headers['X-CSRF-Token'] = token;
+                    }
+                }
+                return originalFetch(input, init);
+            };
+
+            document.addEventListener('submit', function (evt) {
+                var form = evt.target;
+                if (!form || form.tagName !== 'FORM') return;
+                var method = String(form.getAttribute('method') || 'GET').toUpperCase();
+                if (['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(method) < 0) return;
+                if (form.querySelector('input[name="csrf_token"]')) return;
+                var token = csrfToken();
+                if (!token) return;
+                var hidden = document.createElement('input');
+                hidden.type = 'hidden';
+                hidden.name = 'csrf_token';
+                hidden.value = token;
+                form.appendChild(hidden);
+            }, true);
+        })();
+    </script>
+</head>
+<body class="min-h-screen bg-slate-50 dark:bg-slate-900 flex flex-col transition-colors">
+    <!-- Header with Logo -->
+    <div class="bg-white dark:bg-slate-800 border-b border-slate-200 dark:border-slate-700">
+        <div class="max-w-7xl mx-auto px-8 py-4">
+            <div class="flex items-center justify-between">
+                <div class="flex items-center gap-3">
+                    <img src="{{ url_for('static', filename='project_clarity.png') }}" alt="Project Clarity Logo" class="h-10 w-10" />
+                    <h1 class="text-xl font-semibold text-slate-900 dark:text-white">Mastery Grading System</h1>
+                </div>
+                <button type="button" id="themeToggle" class="p-2 hover:bg-slate-100 dark:hover:bg-slate-700 rounded-lg transition-colors" aria-label="Toggle theme">
+                    <svg id="iconSun" class="w-5 h-5 text-slate-600 dark:text-slate-300 hidden dark:block" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                    <svg id="iconMoon" class="w-5 h-5 text-slate-600 dark:hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" /></svg>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    {% block content %}{% endblock %}
+
+    <script>
+        (function() {
+            const stored = localStorage.getItem('theme');
+            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+            if (stored === 'dark' || (!stored && prefersDark)) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+            document.getElementById('themeToggle')?.addEventListener('click', function() {
+                document.documentElement.classList.toggle('dark');
+                localStorage.setItem('theme', document.documentElement.classList.contains('dark') ? 'dark' : 'light');
+            });
+        })();
+    </script>
+    {% block scripts %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,261 @@
+{% extends "auth_base.html" %}
+
+{% block content %}
+<div class="flex-1 flex flex-col">
+  <div class="flex-1 flex items-center justify-center p-8">
+    <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-8 w-full max-w-4xl">
+      <div id="selectClassHeader" class="flex items-center justify-between mb-6">
+        <div>
+          <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Select a Class</h1>
+          <p class="text-slate-500 dark:text-slate-400 mt-1">Choose a class to manage or create a new one</p>
+        </div>
+        <div class="flex items-center gap-3">
+          <div class="flex rounded-lg overflow-hidden border border-slate-200 dark:border-slate-600 h-[42px]" id="modeToggle">
+            <button type="button" onclick="setMode('mark')" id="modeMark"
+              class="min-w-[120px] px-6 text-sm font-medium transition-colors h-full">
+              Mark
+            </button>
+            <button type="button" onclick="setMode('shelbi')" id="modeShelbi"
+              class="min-w-[120px] px-6 text-sm font-medium transition-colors h-full">
+              Shelbi
+            </button>
+          </div>
+          <button type="button" onclick="document.getElementById('createClassForm').classList.remove('hidden'); document.getElementById('classList').classList.add('hidden'); document.getElementById('selectClassHeader').classList.add('hidden');" class="h-[42px] px-6 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium flex items-center gap-2">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+            New Class
+          </button>
+          <a href="{{ url_for('main.logout') }}" class="px-5 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors font-medium text-slate-700 dark:text-slate-300 flex items-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+            Logout
+          </a>
+        </div>
+      </div>
+
+      <div id="classList" class="space-y-3 max-h-[500px] overflow-y-auto">
+        {% for class in classes %}
+        <div class="relative">
+          <a href="{{ url_for('main.class_detail', class_id=class.id) }}" class="block w-full p-6 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-blue-500 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-all text-left group">
+            <div class="flex items-start justify-between">
+              <div class="flex-1">
+                <div class="flex items-center gap-3 mb-2">
+                  <svg class="w-5 h-5 text-blue-600 dark:text-blue-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path></svg>
+                  <h2 class="font-semibold text-slate-900 dark:text-white">{{ class.name }}</h2>
+                </div>
+                <div class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-slate-600 dark:text-slate-400">
+                  {% if class.semester %}
+                  <span>{{ class.semester }}</span>
+                  {% endif %}
+                  {% if class.number %}
+                  {% if class.semester %}<span class="text-slate-400 dark:text-slate-500" aria-hidden="true">•</span>{% endif %}
+                  <span>{{ class.number }}</span>
+                  {% endif %}
+                  {% if class.semester or class.number %}<span class="text-slate-400 dark:text-slate-500" aria-hidden="true">•</span>{% endif %}
+                  {% if class.is_online %}
+                  <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/40 dark:text-violet-200">Online</span>
+                  {% else %}
+                  <span class="px-2 py-0.5 text-xs font-medium rounded-full bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200">In Person</span>
+                  {% endif %}
+                </div>
+              </div>
+              <svg class="w-5 h-5 text-slate-400 group-hover:text-blue-600 dark:group-hover:text-blue-500 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+            </div>
+          </a>
+          <div class="absolute right-6 bottom-3 z-10 flex flex-wrap items-center justify-end gap-2">
+            <button type="button" class="copy-class-btn inline-flex h-6 min-w-[3.25rem] items-center justify-center px-2 text-[10px] font-semibold leading-none text-blue-700 bg-blue-100 dark:bg-blue-900/40 dark:text-blue-200 rounded-md hover:bg-blue-200 dark:hover:bg-blue-900/60" data-class-id="{{ class.id }}" data-class-days="{{ class.days or '' }}">Copy</button>
+            <form action="{{ url_for('main.delete_class', class_id=class.id) }}" method="post" class="inline-flex">
+              <button type="submit" onclick="event.stopPropagation(); return confirm('⚠️ You are about to permanently delete this class and all related data (students, assignments, grades, objectives). Continue?');" class="inline-flex h-6 min-w-[3.25rem] items-center justify-center px-2 text-[10px] font-semibold leading-none text-red-700 bg-red-100 rounded-md hover:bg-red-200">Delete</button>
+            </form>
+          </div>
+        </div>
+        {% else %}
+        <div class="text-center py-12 bg-slate-50 dark:bg-slate-900/50 rounded-xl border-2 border-dashed border-slate-200 dark:border-slate-700">
+            <p class="text-slate-500 dark:text-slate-400">No classes found. Click "New Class" to get started.</p>
+        </div>
+        {% endfor %}
+      </div>
+
+      <div id="copyClassModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60" aria-modal="true" role="dialog">
+        <div class="bg-white dark:bg-slate-800 rounded-xl shadow-lg max-w-md w-full p-6 border border-slate-200 dark:border-slate-600">
+          <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Copy class</h2>
+          <p class="text-sm text-slate-500 dark:text-slate-400 mt-1">Creates a new class with the same semester, settings, and learning objectives. Students and assignments are not copied.</p>
+          <form id="copyClassForm" method="post" class="mt-5 space-y-4">
+            <input type="hidden" name="copy_class_token" value="{{ copy_class_token }}" />
+            <div>
+              <label for="copyClassNameInput" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">New class name</label>
+              <input id="copyClassNameInput" name="name" type="text" required placeholder="e.g., Algebra II — Period 2" class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white placeholder:text-slate-400" />
+            </div>
+            <div>
+              <label for="copyClassDaysSelect" class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Class days</label>
+              <select id="copyClassDaysSelect" name="days" class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white">
+                <option value="MW">MW</option>
+                <option value="TTH">TTH</option>
+                <option value="MWF">MWF</option>
+                <option value="WF">WF</option>
+              </select>
+            </div>
+            <div class="flex gap-3 pt-2">
+              <button type="button" id="copyClassModalCancel" class="flex-1 px-4 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg font-medium text-slate-900 dark:text-white">Cancel</button>
+              <button type="submit" id="copyClassSubmitBtn" class="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium">Copy class</button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <div id="createClassForm" class="hidden">
+        <div class="mb-6">
+          <h1 class="text-xl font-semibold text-slate-900 dark:text-white">Create New Class</h1>
+          <p class="text-slate-500 dark:text-slate-400">Set up a new class for the semester</p>
+        </div>
+
+        <form id="createClassFormElement" action="{{ url_for('main.add_class') }}" method="post" class="space-y-6">
+          <input type="hidden" name="create_class_token" value="{{ create_class_token }}" />
+          <div>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Class Name</label>
+            <input name="name" type="text" placeholder="e.g., Algebra II - Period 3" required class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white placeholder:text-slate-400" />
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Semester</label>
+              <select name="semester" required class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white">
+                <option value="Spring">Spring</option>
+                <option value="Summer">Summer</option>
+                <option value="Fall">Fall</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Year</label>
+              <input name="year" type="text" placeholder="2026" required class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white placeholder:text-slate-400" />
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Number of Learning Objectives</label>
+              <input name="num_learning_objectives" type="number" min="1" placeholder="e.g., 36" required class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white placeholder:text-slate-400" />
+              <p class="text-xs text-slate-500 dark:text-slate-400 mt-1">Constant for the semester</p>
+            </div>
+            <div>
+              <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">Class Days</label>
+              <select name="days" class="w-full px-4 py-2.5 bg-slate-50 dark:bg-slate-700 border border-slate-200 dark:border-slate-600 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-slate-900 dark:text-white">
+                <option value="MW">MW</option>
+                <option value="TTH">TTH</option>
+                <option value="MWF">MWF</option>
+                <option value="WF">WF</option>
+              </select>
+            </div>
+          </div>
+          <div class="p-4 bg-slate-50 dark:bg-slate-700/40 rounded-lg">
+            <label class="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" name="is_online" value="1" class="mt-1 w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+              <div>
+                <span class="font-medium text-slate-900 dark:text-white">Online Class</span>
+                <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">Check this if students attend remotely. Leave unchecked for in-person classes.</p>
+              </div>
+            </label>
+          </div>
+          <div class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg mark-only">
+            <label class="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" name="auto_convert_m" value="1" checked class="mt-1 w-5 h-5 rounded border-slate-300 text-blue-600 focus:ring-blue-500" />
+              <div>
+                <span class="font-medium text-slate-900 dark:text-white">Auto-convert Ms with low HW scores</span>
+                <p class="text-sm text-slate-600 dark:text-slate-400 mt-1">When enabled, M grades with HW scores below 65% display as "I" in student views and grading screens. These Ms won't count toward mastery.</p>
+              </div>
+            </label>
+          </div>
+          <div class="flex gap-3 pt-4">
+            <button type="button" onclick="document.getElementById('createClassForm').classList.add('hidden'); document.getElementById('classList').classList.remove('hidden'); document.getElementById('selectClassHeader').classList.remove('hidden');" class="px-6 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 rounded-lg transition-colors font-medium text-slate-900 dark:text-white">Cancel</button>
+            <button id="createClassSubmitBtn" type="submit" class="flex-1 px-6 py-2.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium">Create Class</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+const CURRENT_MODE = '{{ session.get("instructor_mode", "mark") }}';
+
+function applyMode(mode) {
+  const markBtn = document.getElementById('modeMark');
+  const shelbiBtn = document.getElementById('modeShelbi');
+  const activeClass = 'bg-blue-600 text-white';
+  const inactiveClass = 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600';
+
+  markBtn.className = `px-4 py-2 text-sm font-medium transition-colors ${mode === 'mark' ? activeClass : inactiveClass}`;
+  shelbiBtn.className = `px-4 py-2 text-sm font-medium transition-colors ${mode === 'shelbi' ? activeClass : inactiveClass}`;
+
+  document.querySelectorAll('.mark-only').forEach(el => {
+    el.style.display = mode === 'shelbi' ? 'none' : '';
+  });
+}
+
+async function setMode(mode) {
+  try {
+    const res = await fetch('/api/set-instructor-mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode })
+    });
+    if (!res.ok) throw new Error('Failed');
+    applyMode(mode);
+  } catch (e) {
+    alert('Error setting mode: ' + e.message);
+  }
+}
+
+applyMode(CURRENT_MODE);
+
+const createClassFormElement = document.getElementById('createClassFormElement');
+if (createClassFormElement) {
+  createClassFormElement.addEventListener('submit', () => {
+    const submitBtn = document.getElementById('createClassSubmitBtn');
+    if (!submitBtn) return;
+    submitBtn.disabled = true;
+    submitBtn.classList.add('opacity-60', 'cursor-not-allowed');
+    submitBtn.textContent = 'Creating...';
+  });
+}
+
+const copyClassModal = document.getElementById('copyClassModal');
+const copyClassForm = document.getElementById('copyClassForm');
+
+function openCopyClassModal(classId, daysFromSource) {
+  if (!copyClassModal || !copyClassForm) return;
+  copyClassForm.action = `/class/${classId}/copy`;
+  const nameInput = document.getElementById('copyClassNameInput');
+  const daysSelect = document.getElementById('copyClassDaysSelect');
+  if (nameInput) nameInput.value = '';
+  if (daysSelect && daysFromSource) {
+    const opt = [...daysSelect.options].find((o) => o.value === daysFromSource);
+    if (opt) daysSelect.value = daysFromSource;
+  }
+  copyClassModal.classList.remove('hidden');
+  if (nameInput) nameInput.focus();
+}
+
+function closeCopyClassModal() {
+  if (copyClassModal) copyClassModal.classList.add('hidden');
+}
+
+document.querySelectorAll('.copy-class-btn').forEach((btn) => {
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const classId = btn.getAttribute('data-class-id');
+    const days = btn.getAttribute('data-class-days') || '';
+    if (classId) openCopyClassModal(classId, days);
+  });
+});
+
+document.getElementById('copyClassModalCancel')?.addEventListener('click', closeCopyClassModal);
+copyClassModal?.addEventListener('click', (e) => {
+  if (e.target === copyClassModal) closeCopyClassModal();
+});
+
+copyClassForm?.addEventListener('submit', () => {
+  const submitBtn = document.getElementById('copyClassSubmitBtn');
+  if (!submitBtn) return;
+  submitBtn.disabled = true;
+  submitBtn.classList.add('opacity-60', 'cursor-not-allowed');
+  submitBtn.textContent = 'Copying...';
+});
+</script>
+{% endblock %}
