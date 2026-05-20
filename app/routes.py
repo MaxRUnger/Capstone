@@ -1774,10 +1774,13 @@ def create_assignment(class_id):
 
     # Validate required fields
     name = (data.get('name') or '').strip()
-    homework_group = (data.get('homework_group') or '').strip()
+    homework_group = Homework.normalize_homework_group(data.get('homework_group'))
 
     if not name or not homework_group:
-        return jsonify({"success": False, "error": "Missing or invalid required fields (name, homework_group)."}), 400
+        return jsonify({
+            "success": False,
+            "error": "Missing or invalid required fields (name, homework_group). Use Exam1, Exam2, Exam3, or FExam.",
+        }), 400
 
     enabled_exam_cols = Homework.normalize_enabled_exam_score_column_list(
         data.get("enabled_exam_score_columns") or data.get("exam_score_columns") or []
@@ -1831,9 +1834,16 @@ def update_assignment(class_id, assignment_id):
     else:
         enabled_exam_cols = None
 
+    homework_group = Homework.normalize_homework_group(data.get('homework_group'))
+    if not (data.get('name') or '').strip() or not homework_group:
+        return jsonify({
+            "success": False,
+            "error": "Missing or invalid required fields (name, homework_group). Use Exam1, Exam2, Exam3, or FExam.",
+        }), 400
+
     update_fields = {
-        "name": data['name'],
-        "homework_group": data['homework_group'],
+        "name": (data.get('name') or '').strip(),
+        "homework_group": homework_group,
         "date_returned": data.get('date_returned'),
         "revision_due": data.get('revision_due'),
     }
@@ -2666,45 +2676,55 @@ def create_lo_handler(class_id):
         if form_type == 'save_assignment':
             # Save assignment + link selected LOs
             assignment_name = request.form.get('assignment_name', '').strip()
-            hw_group = request.form.get('hw_group', '')
+            hw_group_raw = request.form.get('hw_group', '')
+            hw_group = Homework.normalize_homework_group(hw_group_raw)
             date_returned = request.form.get('date_returned') or None
             revision_due = request.form.get('revision_due') or None
-            selected_lo_ids = request.form.getlist('selected_los')  # Use getlist for multiple
+            selected_lo_ids = request.form.getlist('selected_los')
             assignment_id = request.form.get('assignment_id')
 
-            if assignment_name:
+            if assignment_name and not hw_group:
+                logger.warning(
+                    "Rejected assignment save: invalid homework_group %r",
+                    hw_group_raw,
+                )
+            elif assignment_name and hw_group:
                 try:
                     if assignment_id:
-                        # Update existing assignment, scoped by class_id so a
-                        # leaked id from another class can't be touched here.
                         supabase_admin.table("assignments").update({
                             "name": assignment_name,
                             "homework_group": hw_group,
                             "date_returned": date_returned,
-                            "revision_due": revision_due
+                            "revision_due": revision_due,
                         }).eq("id", assignment_id).eq("class_id", class_id).execute()
 
-                        # Delete existing links and batch re-insert
-                        supabase_admin.table("assignment_objectives").delete().eq("assignment_id", assignment_id).execute()
-                        ao_rows = [{"assignment_id": assignment_id, "learning_objective_id": lo_id}
-                                   for lo_id in selected_lo_ids if lo_id.strip()]
+                        supabase_admin.table("assignment_objectives").delete().eq(
+                            "assignment_id", assignment_id
+                        ).execute()
+                        ao_rows = [
+                            {"assignment_id": assignment_id, "learning_objective_id": lo_id}
+                            for lo_id in selected_lo_ids if lo_id.strip()
+                        ]
                         if ao_rows:
                             supabase_admin.table("assignment_objectives").insert(ao_rows).execute()
                     else:
-                        # Create new assignment
                         result = supabase_admin.table("assignments").insert({
                             "class_id": class_id,
                             "name": assignment_name,
                             "homework_group": hw_group,
                             "date_returned": date_returned,
-                            "revision_due": revision_due
+                            "revision_due": revision_due,
                         }).execute()
 
-                        # Batch link selected LOs to this assignment
                         if result.data:
-                            assignment_id = result.data[0]['id']
-                            ao_rows = [{"assignment_id": assignment_id, "learning_objective_id": lo_id}
-                                       for lo_id in selected_lo_ids if lo_id.strip()]
+                            new_assignment_id = result.data[0]['id']
+                            ao_rows = [
+                                {
+                                    "assignment_id": new_assignment_id,
+                                    "learning_objective_id": lo_id,
+                                }
+                                for lo_id in selected_lo_ids if lo_id.strip()
+                            ]
                             if ao_rows:
                                 supabase_admin.table("assignment_objectives").insert(ao_rows).execute()
                 except Exception as e:
@@ -3140,27 +3160,6 @@ def api_assignment_grades(class_id, assignment_id):
         # HW % is shared by all assignments in the same homework_group (see Homework.get_hw_scores_map_for_assignment)
         hw_map = Homework.get_hw_scores_map_for_assignment(class_id, assignment_id)
 
-        # Load imported exam-score columns (EX1/EX2/.../FEX) from homework_scores.
-        exam_keys_by_col = _exam_storage_keys_for_class(class_id)
-        # Also include namespaced keys persisted during import.
-        try:
-            ex_rows = (
-                supabase_admin.table("homework_scores")
-                .select("homework_group")
-                .eq("class_id", class_id)
-                .ilike("homework_group", "EXAM::%")
-                .execute()
-            )
-            for r in (ex_rows.data or []):
-                hg = str(r.get("homework_group") or "").strip()
-                if not hg.upper().startswith("EXAM::"):
-                    continue
-                col = hg.split("::", 1)[1].strip().upper()
-                if col and Homework.is_import_sheet_exam_score_column(col):
-                    exam_keys_by_col.setdefault(col, set()).add(hg)
-        except Exception as e:
-            logger.error("Error loading exam fallback keys for class %s: %s", class_id, e)
-
         def _exam_col_sort_key(col: str):
             m = re.match(r"^EX(\d+)$", str(col).upper())
             if m:
@@ -3175,40 +3174,15 @@ def api_assignment_grades(class_id, assignment_id):
         # IMPORTANT: Speed Grader should only show exam columns explicitly enabled
         # on the currently selected assignment (not every class-level exam key).
         exam_columns = sorted(set(enabled_on_assignment), key=_exam_col_sort_key)
-        exam_scores: Dict[str, Dict[str, Any]] = {c: {} for c in exam_columns}
-
-        # Single homework_scores fetch covering every key across all enabled exam columns.
-        key_to_col: Dict[str, str] = {}
+        exam_scores: Dict[str, Dict[str, Any]] = {}
         for col in exam_columns:
-            col_keys = [k for k in exam_keys_by_col.get(col, set()) if k]
-            if not col_keys:
-                col_keys = [f"EXAM::{col}"]
-            for k in col_keys:
-                key_to_col.setdefault(k, col)
-
-        if key_to_col:
-            try:
-                CHUNK = 200
-                all_keys = list(key_to_col.keys())
-                for i in range(0, len(all_keys), CHUNK):
-                    batch = all_keys[i:i + CHUNK]
-                    rows = (
-                        supabase_admin.table("homework_scores")
-                        .select("student_id, score_pct, homework_group")
-                        .eq("class_id", class_id)
-                        .in_("homework_group", batch)
-                        .execute()
-                    )
-                    for r in (rows.data or []):
-                        sid = str(r.get("student_id") or "")
-                        if not sid:
-                            continue
-                        col = key_to_col.get(r.get("homework_group"))
-                        if not col:
-                            continue
-                        exam_scores[col][sid] = r.get("score_pct")
-            except Exception as e:
-                logger.error("Error loading exam scores: %s", e)
+            hg = Homework.exam_column_to_homework_group(col)
+            if hg:
+                exam_scores[col] = Homework.get_hw_scores_map_for_homework_group(
+                    class_id, hg
+                )
+            else:
+                exam_scores[col] = {}
 
         # Compute revision eligibility per student (HW >= 65% or pass used)
         eligibility = {}
@@ -3230,6 +3204,64 @@ def api_assignment_grades(class_id, assignment_id):
         return _safe_api_error("Could not load assignment grades", 500, log_detail=e)
 
 
+def _promote_non_counting_masteries_for_student(class_id: str, student_id: str) -> int:
+    """When a student uses an HW pass, restore all their non-counting M/MR rows."""
+    lo_ids = Course.get_lo_ids_for_class(class_id)
+    if not lo_ids:
+        return 0
+    try:
+        resp = supabase_admin.table("grades").select(
+            "student_id, learning_objective_id, assignment_id, top_score, counts_for_mastery"
+        ).eq("student_id", student_id).in_("learning_objective_id", lo_ids).in_(
+            "top_score", ["M", "MR"]
+        ).execute()
+    except Exception as e:
+        logger.warning(
+            "promote non-counting masteries select failed (wide): %s", e
+        )
+        try:
+            resp = supabase_admin.table("grades").select(
+                "student_id, learning_objective_id, assignment_id, top_score"
+            ).eq("student_id", student_id).in_("learning_objective_id", lo_ids).in_(
+                "top_score", ["M", "MR"]
+            ).execute()
+        except Exception:
+            return 0
+
+    rows = []
+    for g in resp.data or []:
+        if g.get("counts_for_mastery") is not False:
+            continue
+        row = {
+            "student_id": student_id,
+            "learning_objective_id": g["learning_objective_id"],
+            "top_score": g["top_score"],
+            "counts_for_mastery": True,
+        }
+        aid = g.get("assignment_id")
+        if aid is not None:
+            row["assignment_id"] = aid
+        rows.append(row)
+
+    if not rows:
+        return 0
+
+    try:
+        supabase_admin.table("grades").upsert(
+            rows, on_conflict="student_id,learning_objective_id,assignment_id"
+        ).execute()
+    except Exception as e:
+        msg = str(e)
+        if "counts_for_mastery" in msg or "PGRST204" in msg or "schema cache" in msg.lower():
+            logger.warning(
+                "promote non-counting masteries upsert skipped (migration not run): %s",
+                e,
+            )
+            return 0
+        raise
+    return len(rows)
+
+
 @main_bp.route("/api/class/<class_id>/save-hw-percentage", methods=["POST"])
 @api_login_required
 def save_hw_percentage(class_id):
@@ -3246,10 +3278,15 @@ def save_hw_percentage(class_id):
         if score != -1:
             score = max(0, min(100, score))
         # Accept IDs with incidental whitespace from client-side state.
+        class_id = str(class_id).strip()
         assignment_id = str(assignment_id).strip()
+        if not _assignment_belongs_to_class(class_id, assignment_id):
+            return jsonify({"success": False, "error": "Assignment not found for this class"}), 404
+
         hw_key = Homework.resolve_hw_group_storage_key(class_id, assignment_id)
         if hw_key is None:
-            return jsonify({"success": False, "error": "Assignment not found for this class"}), 404
+            client_hg = Homework.normalize_homework_group(data.get("homework_group"))
+            hw_key = client_hg or assignment_id
         hw_group = str(hw_key).strip()
         row = {
             "student_id": student_id,
@@ -3263,7 +3300,11 @@ def save_hw_percentage(class_id):
             on_conflict="student_id,class_id,homework_group",
         ).execute()
 
-        return jsonify({"success": True})
+        promoted = 0
+        if score == -1:
+            promoted = _promote_non_counting_masteries_for_student(class_id, student_id)
+
+        return jsonify({"success": True, "promoted_masteries": promoted})
     except Exception as e:
         logger.error("saving hw percentage failed: %s", e)
         return _safe_api_error("Could not save homework score", 500, log_detail=e)

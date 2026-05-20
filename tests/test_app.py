@@ -129,8 +129,23 @@ class TestHomeworkImportSheetColumn(unittest.TestCase):
         self.assertTrue(Homework.is_import_sheet_hw_column("  HW%  "))
         self.assertTrue(Homework.is_import_sheet_hw_column("Homework"))
         self.assertTrue(Homework.is_import_sheet_hw_column("HW1"))
+        self.assertTrue(Homework.is_import_sheet_hw_column("Exam1"))
+        self.assertTrue(Homework.is_import_sheet_hw_column("FExam"))
         self.assertFalse(Homework.is_import_sheet_hw_column("EX1"))
         self.assertFalse(Homework.is_import_sheet_hw_column("A7"))
+
+    def test_exam_column_to_homework_group(self):
+        self.assertEqual(Homework.exam_column_to_homework_group("EX1"), "Exam1")
+        self.assertEqual(Homework.exam_column_to_homework_group("fex"), "FExam")
+        self.assertIsNone(Homework.exam_column_to_homework_group("HW1"))
+
+    def test_normalize_homework_group(self):
+        self.assertEqual(Homework.normalize_homework_group("Exam1"), "Exam1")
+        self.assertEqual(Homework.normalize_homework_group("Exam 2"), "Exam2")
+        self.assertEqual(Homework.normalize_homework_group("fexam"), "FExam")
+        self.assertIsNone(Homework.normalize_homework_group("EX1"))
+        self.assertIsNone(Homework.normalize_homework_group("HW 1"))
+        self.assertIsNone(Homework.normalize_homework_group(""))
 
     def test_normalize_enabled_exam_score_column_list(self):
         self.assertEqual(
@@ -651,6 +666,82 @@ class TestSaveGradesAutoConvertHwGuard(unittest.TestCase):
         self.assertEqual(len(captured_rows), 1)
         self.assertEqual(captured_rows[0]["top_score"], "M")
         self.assertEqual(captured_rows[0]["counts_for_mastery"], True)
+
+
+class TestHwPassPromotesNonCountingMasteries(unittest.TestCase):
+    """save_hw_percentage with score=-1 flips non-counting M/MR to counting."""
+
+    def setUp(self):
+        self.app = create_app()
+        self.app.config["TESTING"] = True
+        self.client = self.app.test_client()
+
+    def test_hw_pass_promotes_non_counting_masteries(self):
+        from app import routes as r
+
+        captured_upserts = []
+
+        def make_query(table_name):
+            q = MagicMock()
+            if table_name == "homework_scores":
+                q.upsert.return_value.execute.return_value = MagicMock()
+            elif table_name == "grades":
+                q.select.return_value.eq.return_value.in_.return_value.in_.return_value.execute.return_value = MagicMock(
+                    data=[
+                        {
+                            "student_id": "stu-1",
+                            "learning_objective_id": "lo-x",
+                            "assignment_id": "asg-1",
+                            "top_score": "M",
+                            "counts_for_mastery": False,
+                        }
+                    ]
+                )
+
+                def upsert(rows, **kw):
+                    captured_upserts.extend(rows)
+                    return MagicMock(execute=MagicMock(return_value=MagicMock()))
+
+                q.upsert.side_effect = upsert
+            return q
+
+        sa = MagicMock()
+        sa.table.side_effect = make_query
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["csrf_token"] = "test-csrf"
+
+        headers = {"X-CSRF-Token": "test-csrf"}
+
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(
+                    r.Homework,
+                    "resolve_hw_group_storage_key",
+                    return_value="hw-g1",
+                ), \
+                unittest.mock.patch.object(
+                    r.Course,
+                    "get_lo_ids_for_class",
+                    return_value=["lo-x"],
+                ):
+            rv = self.client.post(
+                "/api/class/class-1/save-hw-percentage",
+                json={
+                    "student_id": "stu-1",
+                    "score": -1,
+                    "assignment_id": "asg-1",
+                },
+                headers=headers,
+            )
+
+        self.assertEqual(rv.status_code, 200)
+        body = rv.get_json()
+        self.assertTrue(body.get("success"))
+        self.assertEqual(body.get("promoted_masteries"), 1)
+        self.assertEqual(len(captured_upserts), 1)
+        self.assertTrue(captured_upserts[0].get("counts_for_mastery"))
 
 
 if __name__ == '__main__':

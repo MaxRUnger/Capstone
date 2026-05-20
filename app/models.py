@@ -446,6 +446,44 @@ class Homework:
     # requires real homework engagement.
     EXAM_GRADE_HW_THRESHOLD = 65
     REVISION_TO_M_HW_THRESHOLD = 75
+    ALLOWED_HOMEWORK_GROUPS = ("Exam1", "Exam2", "Exam3", "FExam")
+    EXAM_COLUMN_TO_HOMEWORK_GROUP = {
+        "EX1": "Exam1",
+        "EX2": "Exam2",
+        "EX3": "Exam3",
+        "FEX": "FExam",
+    }
+
+    @staticmethod
+    def exam_column_to_homework_group(exam_col) -> Optional[str]:
+        """Map speed-grader exam column codes to shared homework_group labels."""
+        if exam_col is None:
+            return None
+        key = re.sub(r"\s+", "", str(exam_col).strip().upper())
+        return Homework.EXAM_COLUMN_TO_HOMEWORK_GROUP.get(key)
+
+    @staticmethod
+    def normalize_homework_group(raw) -> Optional[str]:
+        """Map UI/import labels to one of Exam1, Exam2, Exam3, FExam."""
+        if raw is None:
+            return None
+        s = str(raw).strip()
+        if not s:
+            return None
+        compact = re.sub(r"[\s_\-]+", "", s).upper()
+        aliases = {
+            "EXAM1": "Exam1",
+            "EXAM2": "Exam2",
+            "EXAM3": "Exam3",
+            "FEXAM": "FExam",
+            "FINALEXAM": "FExam",
+        }
+        if compact in aliases:
+            return aliases[compact]
+        for canon in Homework.ALLOWED_HOMEWORK_GROUPS:
+            if compact == re.sub(r"[\s_\-]+", "", canon).upper():
+                return canon
+        return None
 
     @staticmethod
     def is_import_sheet_hw_column(name) -> bool:
@@ -471,6 +509,8 @@ class Homework:
         if re.match(r"^HW[-\d]*$", n) or re.match(r"^HW \d", n) or n.startswith("HW "):
             return True
         if re.match(r"^HW\d{1,3}$", n):
+            return True
+        if Homework.normalize_homework_group(s):
             return True
         return False
 
@@ -639,17 +679,82 @@ class Homework:
         All assignments that share the same homework_group label use one HW % row per student.
         If the assignment has no group label, fall back to assignment_id (legacy behavior).
         """
-        try:
-            resp = supabase_admin.table("assignments").select("homework_group").eq(
-                "id", assignment_id
-            ).eq("class_id", class_id).limit(1).execute()
-            if not resp.data:
-                return None
-            hg = (resp.data[0].get("homework_group") or "").strip()
-            return hg if hg else assignment_id
-        except Exception as e:
-            logger.error("Error resolving homework group for assignment %s: %s", assignment_id, e)
+        assignment_id = str(assignment_id or "").strip()
+        class_id = str(class_id or "").strip()
+        if not assignment_id or not class_id:
             return None
+        try:
+            resp = supabase_admin.table("assignments").select(
+                "homework_group, class_id"
+            ).eq("id", assignment_id).limit(1).execute()
+        except Exception as e:
+            logger.error(
+                "Error resolving homework group for assignment %s: %s",
+                assignment_id,
+                e,
+            )
+            return None
+        if not resp.data:
+            return None
+        row = resp.data[0]
+        if str(row.get("class_id") or "").strip() != class_id:
+            return None
+        hg_raw = (row.get("homework_group") or "").strip()
+        if not hg_raw:
+            return assignment_id
+        canonical = Homework.normalize_homework_group(hg_raw)
+        return canonical or hg_raw
+
+    @staticmethod
+    def get_hw_scores_map_for_homework_group(class_id, homework_group):
+        """Return {student_id: score_pct} for a canonical homework group (Exam1, …)."""
+        class_id = str(class_id or "").strip()
+        hg = Homework.normalize_homework_group(homework_group) or str(
+            homework_group or ""
+        ).strip()
+        if not class_id or not hg:
+            return {}
+        hw_map: Dict[str, Any] = {}
+        try:
+            sib = (
+                supabase_admin.table("assignments")
+                .select("id")
+                .eq("class_id", class_id)
+                .eq("homework_group", hg)
+                .execute()
+            )
+            sib_ids = [r["id"] for r in (sib.data or []) if r.get("id")]
+            if sib_ids:
+                leg = (
+                    supabase_admin.table("homework_scores")
+                    .select("student_id, score_pct")
+                    .eq("class_id", class_id)
+                    .in_("homework_group", sib_ids)
+                    .execute()
+                )
+                for r in (leg.data or []):
+                    sid = str(r.get("student_id") or "").strip()
+                    if sid:
+                        hw_map[sid] = r.get("score_pct")
+            cur = (
+                supabase_admin.table("homework_scores")
+                .select("student_id, score_pct")
+                .eq("class_id", class_id)
+                .eq("homework_group", hg)
+                .execute()
+            )
+            for r in (cur.data or []):
+                sid = str(r.get("student_id") or "").strip()
+                if sid:
+                    hw_map[sid] = r.get("score_pct")
+        except Exception as e:
+            logger.error(
+                "Error loading homework scores for group %s in class %s: %s",
+                hg,
+                class_id,
+                e,
+            )
+        return hw_map
 
     @staticmethod
     def get_hw_scores_map_for_assignment(class_id, assignment_id):

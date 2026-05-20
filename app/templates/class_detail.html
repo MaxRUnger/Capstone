@@ -14,7 +14,7 @@
   {% set total_students = students|length %}
   {% set total_all_students = all_students|length %}
   {% set total_los = learning_objectives|length %}
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+  <div class="grid grid-cols-1 sm:grid-cols-3 gap-4">
     <button type="button" onclick="document.getElementById('studentManagementModal').classList.remove('hidden')" class="text-left bg-white dark:bg-slate-800 rounded-xl p-6 shadow-sm hover:scale-[1.02] transition-transform">
       <div class="flex items-start justify-between">
         <div>
@@ -115,7 +115,6 @@
           <div class="assignment-content mt-4 hidden">
             <div class="space-y-4">
               <div class="text-sm text-slate-600 dark:text-slate-400">
-                <span class="mark-only"><strong>Homework Group:</strong> {{ assignment.homework_group }}<br></span>
                 <span class="mark-only">{% if assignment.date_returned %}<strong>Date Returned:</strong> {{ assignment.date_returned }}<br>{% endif %}</span>
                 <span class="mark-only">{% if assignment.revision_due %}<strong>Revision Due:</strong> {{ assignment.revision_due }}<br>{% endif %}</span>
               </div>
