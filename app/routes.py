@@ -18,6 +18,7 @@ variable ``MULTI_WORKER=1`` to log a one-time warning at startup (see
 """
 
 import csv
+import hmac
 import io
 import json
 import logging
@@ -1219,7 +1220,8 @@ def login_page():
 
 @main_bp.route("/signup")
 def signup_page():
-    return render_template("signup.html")
+    from config import Config
+    return render_template("signup.html", invite_code_required=bool(Config.SIGNUP_INVITE_CODE))
 
 @main_bp.route("/logout")
 def logout():
@@ -1268,6 +1270,13 @@ def login():
 def signup():
     data = request.get_json()
     try:
+        from config import Config
+        invite_code_env = (Config.SIGNUP_INVITE_CODE or "").strip()
+        if invite_code_env:
+            submitted = (data.get("invite_code") or "").strip()
+            if not submitted or not hmac.compare_digest(submitted, invite_code_env):
+                return jsonify({"success": False, "message": "Invalid invite code."}), 403
+
         login_redirect_url = f"{_public_base_url()}/login"
         result = supabase.auth.sign_up({
             "email": data.get("email"),
