@@ -1272,8 +1272,8 @@ def signup():
     try:
         from config import Config
         invite_code_env = (Config.SIGNUP_INVITE_CODE or "").strip()
+        submitted = (data.get("invite_code") or "").strip()
         if invite_code_env:
-            submitted = (data.get("invite_code") or "").strip()
             if not submitted or not hmac.compare_digest(submitted, invite_code_env):
                 return jsonify({"success": False, "message": "Invalid invite code."}), 403
 
@@ -1285,7 +1285,8 @@ def signup():
                 "email_redirect_to": login_redirect_url,
                 "data": {
                     "full_name": data.get("name"),
-                    "role": "instructor"
+                    "role": "instructor",
+                    "invite_code": submitted
                 }
             }
         })
