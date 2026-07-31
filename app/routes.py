@@ -2681,87 +2681,27 @@ def create_lo_handler(class_id):
         return redirect(url_for('main.instructor_dashboard'))
 
     if request.method == "POST":
-        form_type = request.form.get('form_type', 'create_lo')
+        # Create a new learning objective. (Assignment creation/editing is
+        # handled separately by create_assignment / update_assignment, which
+        # the current UI actually calls.)
+        lo_code = request.form.get('code', '').strip()
+        lo_description = request.form.get('description', '').strip()
+        lo_required_ms = request.form.get('required_ms', 2)
 
-        if form_type == 'save_assignment':
-            # Save assignment + link selected LOs
-            assignment_name = request.form.get('assignment_name', '').strip()
-            hw_group_raw = request.form.get('hw_group', '')
-            hw_group = Homework.normalize_homework_group(hw_group_raw)
-            date_returned = request.form.get('date_returned') or None
-            revision_due = request.form.get('revision_due') or None
-            selected_lo_ids = request.form.getlist('selected_los')
-            assignment_id = request.form.get('assignment_id')
+        if lo_code:
+            try:
+                _insert_learning_objectives_compat({
+                    "class_id": class_id,
+                    "vendor_code": lo_code,
+                    "description": lo_description or None,
+                    "required_ms": int(lo_required_ms)
+                })
+            except Exception as e:
+                logger.error("Error creating LO: %s", e)
 
-            if assignment_name and not hw_group:
-                logger.warning(
-                    "Rejected assignment save: invalid homework_group %r",
-                    hw_group_raw,
-                )
-            elif assignment_name and hw_group:
-                try:
-                    if assignment_id:
-                        supabase_admin.table("assignments").update({
-                            "name": assignment_name,
-                            "homework_group": hw_group,
-                            "date_returned": date_returned,
-                            "revision_due": revision_due,
-                        }).eq("id", assignment_id).eq("class_id", class_id).execute()
-
-                        supabase_admin.table("assignment_objectives").delete().eq(
-                            "assignment_id", assignment_id
-                        ).execute()
-                        ao_rows = [
-                            {"assignment_id": assignment_id, "learning_objective_id": lo_id}
-                            for lo_id in selected_lo_ids if lo_id.strip()
-                        ]
-                        if ao_rows:
-                            supabase_admin.table("assignment_objectives").insert(ao_rows).execute()
-                    else:
-                        result = supabase_admin.table("assignments").insert({
-                            "class_id": class_id,
-                            "name": assignment_name,
-                            "homework_group": hw_group,
-                            "date_returned": date_returned,
-                            "revision_due": revision_due,
-                        }).execute()
-
-                        if result.data:
-                            new_assignment_id = result.data[0]['id']
-                            ao_rows = [
-                                {
-                                    "assignment_id": new_assignment_id,
-                                    "learning_objective_id": lo_id,
-                                }
-                                for lo_id in selected_lo_ids if lo_id.strip()
-                            ]
-                            if ao_rows:
-                                supabase_admin.table("assignment_objectives").insert(ao_rows).execute()
-                except Exception as e:
-                    logger.error("Error saving assignment: %s", e)
-
-            return redirect(url_for('main.class_assignments', class_id=class_id))
-
-        else:
-            # Create a new learning objective
-            lo_code = request.form.get('code', '').strip()
-            lo_description = request.form.get('description', '').strip()
-            lo_required_ms = request.form.get('required_ms', 2)
-
-            if lo_code:
-                try:
-                    _insert_learning_objectives_compat({
-                        "class_id": class_id,
-                        "vendor_code": lo_code,
-                        "description": lo_description or None,
-                        "required_ms": int(lo_required_ms)
-                    })
-                except Exception as e:
-                    logger.error("Error creating LO: %s", e)
-
-            if request.form.get("return_to", "").strip() == "dashboard":
-                return redirect(url_for("main.class_detail", class_id=class_id))
-            return redirect(url_for('main.class_assignments', class_id=class_id))
+        if request.form.get("return_to", "").strip() == "dashboard":
+            return redirect(url_for("main.class_detail", class_id=class_id))
+        return redirect(url_for('main.class_assignments', class_id=class_id))
 
     # GET requests just redirect back to the objectives page (modal handles creation)
     return redirect(url_for('main.class_assignments', class_id=class_id))
@@ -3450,13 +3390,40 @@ def get_available_students(class_id):
     if not _instructor_owns_class(class_id):
         return jsonify({"success": False, "error": "Forbidden"}), 403
     try:
-        all_students = supabase_admin.table("profiles").select("id, full_name") \
-            .eq("role", "student").execute().data or []
         enrolled_ids = {e['student_id'] for e in
                         supabase_admin.table("enrollments").select("student_id")
                         .eq("class_id", class_id).execute().data or []}
+
+        # Only offer students who already have a relationship with this
+        # instructor (enrolled in one of their other classes) — never a
+        # dump of every student profile in the deployment.
+        instructor_classes = Course.get_all_for_instructor(session["user_id"]) or []
+        instructor_class_ids = [c["id"] for c in instructor_classes if c.get("id")]
+
+        candidate_ids: set = set()
+        if instructor_class_ids:
+            enr_resp = (
+                supabase_admin.table("enrollments")
+                .select("student_id")
+                .in_("class_id", instructor_class_ids)
+                .execute()
+            )
+            candidate_ids = {r["student_id"] for r in (enr_resp.data or []) if r.get("student_id")}
+        candidate_ids -= enrolled_ids
+
+        all_students = []
+        if candidate_ids:
+            prof_resp = (
+                supabase_admin.table("profiles")
+                .select("id, full_name")
+                .eq("role", "student")
+                .in_("id", list(candidate_ids))
+                .execute()
+            )
+            all_students = prof_resp.data or []
+
         available = sorted(
-            [s for s in all_students if s['id'] not in enrolled_ids],
+            all_students,
             key=lambda s: _student_sort_key_last_name(s.get("full_name")),
         )
         for s in available:
@@ -3547,8 +3514,64 @@ def _build_student_upload_enrollment_indexes(class_id: str):
     return enrolled_set, enrolled_by_email, enrolled_by_name, missing_email_by_name
 
 
-def _build_profiles_by_email_for_rows(rows: List[Dict[str, str]]) -> Dict[str, Dict[str, Any]]:
-    """Return global profile lookup by normalized email for provided CSV rows."""
+def _profile_ids_with_enrollment_elsewhere(profile_ids: List[str], class_id: str) -> set:
+    """Subset of profile_ids already enrolled in a class owned by a DIFFERENT
+    instructor than the one who owns class_id.
+
+    Used to avoid silently attaching a globally-matched profile (by email or
+    name) that already belongs to a different instructor's roster onto this
+    instructor's class. Deliberately NOT triggered by enrollment in another
+    class owned by the SAME instructor — that's normal multi-class reuse and
+    must keep working. Fails closed: a lookup error is treated as "claimed
+    elsewhere" so we never attach when the safety check itself is broken.
+    """
+    ids = [str(pid) for pid in set(profile_ids) if pid]
+    if not ids:
+        return set()
+    try:
+        owner_id = _class_instructor_id(class_id)
+        resp = (
+            supabase_admin.table("enrollments")
+            .select("student_id, class_id")
+            .in_("student_id", ids)
+            .execute()
+        )
+        rows = [r for r in (resp.data or []) if r.get("student_id")]
+        other_class_ids = {
+            str(r["class_id"]) for r in rows
+            if r.get("class_id") and str(r["class_id"]) != str(class_id)
+        }
+        if not other_class_ids:
+            return set()
+
+        classes_resp = (
+            supabase_admin.table("classes")
+            .select("id, instructor_id")
+            .in_("id", list(other_class_ids))
+            .execute()
+        )
+        foreign_class_ids = {
+            str(c["id"]) for c in (classes_resp.data or [])
+            if c.get("id") and not _user_ids_equal(c.get("instructor_id"), owner_id)
+        }
+        if not foreign_class_ids:
+            return set()
+        return {
+            str(r["student_id"]) for r in rows
+            if str(r.get("class_id")) in foreign_class_ids
+        }
+    except Exception as e:
+        logger.error("enrollment-elsewhere lookup failed: %s", e)
+        return set(ids)
+
+
+def _build_profiles_by_email_for_rows(rows: List[Dict[str, str]], class_id: str) -> Dict[str, Dict[str, Any]]:
+    """Return global profile lookup by normalized email for provided CSV rows.
+
+    Excludes matches already enrolled in a different class — a global email
+    match belonging to another instructor's roster is treated as "no match"
+    so we never silently attach a stranger's account to this class.
+    """
     provided_email_keys = {
         _student_email_key(r.get("email") or "")
         for r in rows
@@ -3562,7 +3585,14 @@ def _build_profiles_by_email_for_rows(rows: List[Dict[str, str]]) -> Dict[str, D
             .in_("email", list(provided_email_keys))
             .execute()
         )
-        for p in (global_email_resp.data or []):
+        candidates = global_email_resp.data or []
+        claimed_elsewhere = _profile_ids_with_enrollment_elsewhere(
+            [str(p.get("id")) for p in candidates if p.get("id")], class_id
+        )
+        for p in candidates:
+            pid = str(p.get("id") or "")
+            if pid and pid in claimed_elsewhere:
+                continue
             ek = _student_email_key(p.get("email") or "")
             if ek:
                 profiles_by_email[ek] = p
@@ -3587,7 +3617,7 @@ def api_upload_students_to_class(class_id):
         enrolled_set, enrolled_by_email, enrolled_by_name, missing_email_by_name = (
             _build_student_upload_enrollment_indexes(class_id)
         )
-        profiles_by_email = _build_profiles_by_email_for_rows(rows)
+        profiles_by_email = _build_profiles_by_email_for_rows(rows, class_id)
 
         stats = {
             "created_profiles": 0,
@@ -3674,6 +3704,29 @@ def api_upload_students_to_class(class_id):
                     if lookup.data:
                         found = lookup.data[0]
                         existing_id = str(found.get("id"))
+                        if existing_id in _profile_ids_with_enrollment_elsewhere([existing_id], class_id):
+                            # Email belongs to another instructor's student — don't
+                            # attach; create a separate profile without that email.
+                            new_id = str(uuid4())
+                            supabase_admin.table("profiles").insert({
+                                "id": new_id,
+                                "full_name": full_name,
+                                "role": "student",
+                            }).execute()
+                            supabase_admin.table("enrollments").insert({
+                                "class_id": class_id,
+                                "student_id": new_id,
+                            }).execute()
+                            enrolled_set.add(new_id)
+                            enrolled_by_name.setdefault(name_key, []).append(
+                                {"id": new_id, "full_name": full_name, "email": ""}
+                            )
+                            stats["created_profiles"] += 1
+                            warnings.append(
+                                f"Email {email} is already used by another account — "
+                                f"created a separate profile for {full_name} without that email."
+                            )
+                            continue
                         if existing_id not in enrolled_set:
                             supabase_admin.table("enrollments").insert({
                                 "class_id": class_id,
@@ -3756,7 +3809,7 @@ def api_preview_upload_students(class_id):
         _, enrolled_by_email, enrolled_by_name, missing_email_by_name = (
             _build_student_upload_enrollment_indexes(class_id)
         )
-        profiles_by_email = _build_profiles_by_email_for_rows(rows)
+        profiles_by_email = _build_profiles_by_email_for_rows(rows, class_id)
 
         preview_rows: List[Dict[str, Any]] = []
         stats = {
@@ -4030,6 +4083,20 @@ def api_import_grades():
         except Exception as e:
             logger.error("Bulk profile lookup failed: %s", e)
 
+    # A name match against the global profiles table can coincidentally hit
+    # another instructor's student. Only reuse a match with no enrollment in
+    # a different class; otherwise drop it so a fresh profile is created
+    # below instead of merging into a stranger's roster.
+    if profile_id_by_name:
+        claimed_elsewhere = _profile_ids_with_enrollment_elsewhere(
+            list(profile_id_by_name.values()), class_id
+        )
+        if claimed_elsewhere:
+            profile_id_by_name = {
+                name: pid for name, pid in profile_id_by_name.items()
+                if pid not in claimed_elsewhere
+            }
+
     # Build missing-profile insert payload (preserve original semantics: new uuid + role=student).
     new_profile_rows: List[Dict[str, Any]] = []
     for nm in unique_names:
@@ -4106,7 +4173,7 @@ def api_import_grades():
         # Build grade rows to batch-upsert later
         grades = student.get('grades', {}) or {}
         exam_scores = student.get('exam_scores', {}) or {}
-        parsed_hw = Homework.parse_hw_score_pct(student.get("homework_pct"))
+        parsed_hw = Homework.parse_import_hw_pct(student.get("homework_pct"))
         if assignment_id and hw_storage_key and parsed_hw is not None:
             hw_rows.append(
                 {
