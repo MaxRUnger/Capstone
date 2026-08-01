@@ -241,6 +241,20 @@
                 return m ? String(m.getAttribute('content') || '') : '';
             }
 
+            function ensureCsrfOnForm(form) {
+                if (!form || form.tagName !== 'FORM') return;
+                var method = String(form.getAttribute('method') || 'GET').toUpperCase();
+                if (['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(method) < 0) return;
+                if (form.querySelector('input[name="csrf_token"]')) return;
+                var token = csrfToken();
+                if (!token) return;
+                var hidden = document.createElement('input');
+                hidden.type = 'hidden';
+                hidden.name = 'csrf_token';
+                hidden.value = token;
+                form.appendChild(hidden);
+            }
+
             var originalFetch = window.fetch;
             window.fetch = function (input, init) {
                 init = init || {};
@@ -257,19 +271,16 @@
                 return originalFetch(input, init);
             };
 
+            // Native form.submit() does not fire the submit event, so also
+            // inject CSRF for programmatic submits (e.g. Create Objective).
+            var originalFormSubmit = HTMLFormElement.prototype.submit;
+            HTMLFormElement.prototype.submit = function () {
+                ensureCsrfOnForm(this);
+                return originalFormSubmit.call(this);
+            };
+
             document.addEventListener('submit', function (evt) {
-                var form = evt.target;
-                if (!form || form.tagName !== 'FORM') return;
-                var method = String(form.getAttribute('method') || 'GET').toUpperCase();
-                if (['POST', 'PUT', 'PATCH', 'DELETE'].indexOf(method) < 0) return;
-                if (form.querySelector('input[name="csrf_token"]')) return;
-                var token = csrfToken();
-                if (!token) return;
-                var hidden = document.createElement('input');
-                hidden.type = 'hidden';
-                hidden.name = 'csrf_token';
-                hidden.value = token;
-                form.appendChild(hidden);
+                ensureCsrfOnForm(evt.target);
             }, true);
         })();
 
