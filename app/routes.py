@@ -1217,11 +1217,6 @@ def load_assignments_for_class(class_id, desc=False):
 @main_bp.route("/")
 @main_bp.route("/login")
 def login_page():
-    logger.warning(
-        "[M5-DEBUG] remote_addr=%s raw_XFF=%r",
-        request.remote_addr,
-        request.headers.get("X-Forwarded-For"),
-    )
     return render_template("login.html")
 
 @main_bp.route("/signup")
@@ -1253,15 +1248,42 @@ def login():
             "email": data.get("email"), "password": data.get("password")
         })
         if result.user:
-            actual_role = result.user.user_metadata.get('role', 'student')
+            user_id = result.user.id
+            metadata_role = result.user.user_metadata.get('role', 'student')
+
+            # profiles.role is the DB-authoritative source for authorization
+            # decorators (@api_instructor_required etc). Trusting the JWT's
+            # embedded user_metadata directly would mean a user who can edit
+            # their own Auth metadata (via the Supabase client SDK) could
+            # self-promote. We only fall back to the metadata role when no
+            # profile row exists yet (a brand-new account); once a profile
+            # exists, its role is authoritative and is never overwritten by
+            # metadata again (see ensure_profile_exists call below).
+            existing_role = None
+            try:
+                prof_resp = (
+                    supabase_admin.table("profiles")
+                    .select("role")
+                    .eq("id", user_id)
+                    .limit(1)
+                    .execute()
+                )
+                if prof_resp.data:
+                    existing_role = (prof_resp.data[0].get("role") or "").strip() or None
+            except Exception as e:
+                logger.error("profiles.role lookup failed for %s: %s", user_id, e)
+
+            actual_role = existing_role or metadata_role
             session.clear()
-            session['user_id'] = result.user.id
+            session['user_id'] = user_id
             session['role'] = actual_role
             session['full_name'] = result.user.user_metadata.get('full_name', '')
             session['csrf_token'] = secrets.token_urlsafe(32)
-            # Ensure profile exists on every login in case it was missed at signup
+            # Ensure profile exists on every login in case it was missed at signup.
+            # `role` here only matters for the INSERT path (brand-new profile);
+            # for an existing profile it re-affirms the same DB value read above.
             ensure_profile_exists(
-                result.user.id,
+                user_id,
                 full_name=result.user.user_metadata.get('full_name'),
                 role=actual_role
             )
@@ -1935,6 +1957,39 @@ def _assignment_belongs_to_class(class_id: str, assignment_id: str) -> bool:
         val = False
     cache[ck] = val
     return val
+
+
+def _enrolled_student_ids_for_class(class_id: str) -> set:
+    """Set of student_ids with an enrollment row in class_id."""
+    cache = _request_cache()
+    ck = ("_enrolled_student_ids_for_class", str(class_id))
+    if ck in cache:
+        return cache[ck]
+    ids: set = set()
+    try:
+        resp = (
+            supabase_admin.table("enrollments")
+            .select("student_id")
+            .eq("class_id", class_id)
+            .execute()
+        )
+        ids = {str(r["student_id"]) for r in (resp.data or []) if r.get("student_id")}
+    except Exception as e:
+        logger.error("enrollment lookup failed for class %s: %s", class_id, e)
+    cache[ck] = ids
+    return ids
+
+
+def _student_enrolled_in_class(class_id: str, student_id: str) -> bool:
+    """True only if student_id has a real enrollment row in class_id.
+
+    Fails closed (returns False) on lookup error or missing ids — grade/HW/
+    exam/pass writes must never succeed for a student the DB can't confirm
+    is actually on this class's roster.
+    """
+    if not class_id or not student_id:
+        return False
+    return str(student_id) in _enrolled_student_ids_for_class(class_id)
 
 
 def _learning_objective_belongs_to_class(class_id: str, lo_id: str) -> bool:
@@ -2723,6 +2778,13 @@ def support():
 @main_bp.route("/add_class", methods=["POST"])
 @login_required
 def add_class():
+    # Defense-in-depth: the create_class_token below is only ever issued by
+    # instructor_dashboard (which itself checks role == 'instructor'), so a
+    # non-instructor session shouldn't be able to reach this point at all
+    # today. Checking the role directly here too means this can't silently
+    # regress if the token-issuing flow is ever refactored.
+    if (session.get('role') or '').strip().lower() != 'instructor':
+        return redirect(url_for('main.login_page'))
 
     if not request.form.get("name"):
         return "Class name is required.", 400
@@ -2864,6 +2926,9 @@ def api_update_grade():
         if not class_id or not _instructor_owns_class(str(class_id)):
             return jsonify({"success": False, "error": "Forbidden"}), 403
 
+        if not _student_enrolled_in_class(str(class_id), str(data.get('student_id') or '')):
+            return jsonify({"success": False, "error": "Student is not enrolled in this class"}), 403
+
         Grade.update_score(student_id=data['student_id'], lo_id=data['lo_id'], 
                             top_score=data['top_score'], second_score=data.get('second_score'),
                             assignment_id=data.get('assignment_id'))
@@ -2900,6 +2965,7 @@ def save_grades(class_id):
         if assignment_id and not _assignment_belongs_to_class(class_id, str(assignment_id)):
             return jsonify({"success": False, "error": "Invalid assignment for class"}), 400
         class_lo_ids = set(Course.get_lo_ids_for_class(class_id) or [])
+        enrolled_student_ids = _enrolled_student_ids_for_class(class_id)
         auto_convert = _class_auto_convert_m_enabled(class_id) if assignment_id else False
         hw_map = Homework.get_hw_scores_map_for_assignment(class_id, assignment_id) if assignment_id else {}
 
@@ -2915,6 +2981,8 @@ def save_grades(class_id):
             if not (lo_id and grade_value):
                 continue
             if lo_id not in class_lo_ids:
+                continue
+            if str(student_id).strip() not in enrolled_student_ids:
                 continue
             normalized = Grade.normalize_score(grade_value)
             if not normalized:
@@ -3238,6 +3306,8 @@ def save_hw_percentage(class_id):
         assignment_id = str(assignment_id).strip()
         if not _assignment_belongs_to_class(class_id, assignment_id):
             return jsonify({"success": False, "error": "Assignment not found for this class"}), 404
+        if not _student_enrolled_in_class(class_id, str(student_id).strip()):
+            return jsonify({"success": False, "error": "Student is not enrolled in this class"}), 403
 
         hw_key = Homework.resolve_hw_group_storage_key(class_id, assignment_id)
         if hw_key is None:
@@ -3278,6 +3348,8 @@ def save_exam_score(class_id):
         score = data.get("score")
         if not student_id or not exam_col:
             return jsonify({"success": False, "error": "student_id and exam_col required"}), 400
+        if not _student_enrolled_in_class(class_id, str(student_id)):
+            return jsonify({"success": False, "error": "Student is not enrolled in this class"}), 403
         if not Homework.is_import_sheet_exam_score_column(exam_col):
             return jsonify({"success": False, "error": "Invalid exam column"}), 400
 
@@ -3323,6 +3395,8 @@ def use_free_pass(class_id):
         student_id = data.get('student_id')
         if not student_id:
             return jsonify({"success": False, "error": "student_id required"}), 400
+        if not _student_enrolled_in_class(class_id, str(student_id)):
+            return jsonify({"success": False, "error": "Student is not enrolled in this class"}), 403
 
         passes_allowed = 2
 
@@ -3365,6 +3439,8 @@ def return_free_pass(class_id):
         student_id = data.get('student_id')
         if not student_id:
             return jsonify({"success": False, "error": "student_id required"}), 400
+        if not _student_enrolled_in_class(class_id, str(student_id)):
+            return jsonify({"success": False, "error": "Student is not enrolled in this class"}), 403
 
         passes_allowed = 2
 
@@ -4282,7 +4358,7 @@ def api_import_grades():
 
 
 @main_bp.route("/api/analyze-grade-pdf", methods=["POST"])
-@api_login_required
+@api_instructor_required
 @rate_limited("analyze_grade_pdf", limit=30, window_sec=900)
 def analyze_grade_pdf():
     """
