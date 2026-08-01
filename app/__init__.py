@@ -12,6 +12,7 @@ import secrets
 import hmac
 from flask import Flask, session, request, jsonify
 from flask_cors import CORS
+from werkzeug.middleware.proxy_fix import ProxyFix
 from config import Config
 
 def create_app(config_class=Config):
@@ -20,6 +21,14 @@ def create_app(config_class=Config):
     
     
     app.secret_key = config_class.SECRET_KEY
+
+    # Railway's edge is the only proxy in front of this app, so trust exactly
+    # one X-Forwarded-For / X-Forwarded-Proto hop. Without this, a client can
+    # set their own X-Forwarded-For header and have it trusted verbatim by
+    # anything that reads request.remote_addr or the header directly (e.g.
+    # the rate limiter's _client_ip() in app/routes.py), trivially bypassing
+    # per-IP rate limits.
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=0, x_port=0, x_prefix=0)
     
     # `supports_credentials=True` is required so the browser sends the session
     # cookie on cross-origin XHRs; `allow_headers` includes the custom CSRF

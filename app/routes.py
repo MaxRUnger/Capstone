@@ -752,9 +752,10 @@ def api_instructor_required(f):
 
 
 def _client_ip() -> str:
-    forwarded = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip()
-    if forwarded:
-        return forwarded
+    # ProxyFix (registered in app/__init__.py) already resolves the real
+    # client IP into `remote_addr`, trusting exactly one hop (Railway's
+    # edge). Reading X-Forwarded-For directly here would let a client set
+    # their own value and have it trusted as-is, defeating this rate limiter.
     return (request.remote_addr or "unknown").strip()
 
 
@@ -1216,6 +1217,11 @@ def load_assignments_for_class(class_id, desc=False):
 @main_bp.route("/")
 @main_bp.route("/login")
 def login_page():
+    logger.warning(
+        "[M5-DEBUG] remote_addr=%s raw_XFF=%r",
+        request.remote_addr,
+        request.headers.get("X-Forwarded-For"),
+    )
     return render_template("login.html")
 
 @main_bp.route("/signup")
