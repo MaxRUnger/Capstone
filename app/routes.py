@@ -691,8 +691,9 @@ def import_learning_objectives_rows(class_id: str, rows: List[Dict[str, Any]]) -
             _insert_learning_objectives_compat(piece)
             inserted += len(piece)
         except Exception as e:
-            logger.error("LO batch insert failed: %s", e)
-            errors.append(str(e))
+            err_id = str(uuid4())
+            logger.error("[%s] LO batch insert failed: %s", err_id, e)
+            errors.append(f"Import failed (ref {err_id}).")
             break
     return inserted, skipped, errors
 
@@ -2276,9 +2277,11 @@ def _send_via_resend(to_email: str, subject: str, body_text: str) -> Tuple[bool,
     api_key = (os.environ.get("RESEND_API_KEY") or "").strip()
     from_email = (os.environ.get("REPORTS_FROM_EMAIL") or "").strip()
     if not api_key:
-        return False, "Missing RESEND_API_KEY environment variable."
+        logger.error("Email send blocked: RESEND_API_KEY is not configured")
+        return False, "Email is not configured."
     if not from_email:
-        return False, "Missing REPORTS_FROM_EMAIL environment variable."
+        logger.error("Email send blocked: REPORTS_FROM_EMAIL is not configured")
+        return False, "Email is not configured."
 
     payload = {
         "from": from_email,
@@ -4402,9 +4405,12 @@ def analyze_grade_pdf():
         logger.info("Analyzer ready: %s", analyzer is not None)
         
         if analyzer is None:
+            logger.error(
+                "Grade sheet analysis unavailable: GEMINI_API_KEY not configured or google-genai not installed"
+            )
             return jsonify({
                 "success": False,
-                "error": "Gemini not properly configured. Set GEMINI_API_KEY and install: pip install google-genai"
+                "error": "Grade sheet analysis is not configured."
             }), 500
         
         # Read file content and enforce server-side size/signature checks.
