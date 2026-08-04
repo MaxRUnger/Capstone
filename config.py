@@ -75,7 +75,17 @@ class Config:
     SESSION_REFRESH_EACH_REQUEST = _env_bool("SESSION_REFRESH_EACH_REQUEST", True)
 
     # CORS strict allowlist (credentials-enabled).
-    # Railway / prod should set this explicitly, e.g. https://app.example.com
+    # Railway / prod must set this explicitly, e.g. https://app.example.com --
+    # otherwise a production deploy would silently fall back to a localhost-only
+    # allowlist with no warning, breaking every legitimate cross-origin request
+    # while giving no signal anything is wrong. Fail loudly instead, matching
+    # the SECRET_KEY pattern above (H-A).
+    _cors_env_raw = os.environ.get("CORS_ALLOWED_ORIGINS")
+    if IS_PRODUCTION and not (_cors_env_raw or "").strip():
+        raise RuntimeError(
+            "CORS_ALLOWED_ORIGINS is required in production (comma-separated "
+            "list of allowed origins, e.g. https://app.example.com)."
+        )
     CORS_ALLOWED_ORIGINS = _env_list(
         "CORS_ALLOWED_ORIGINS",
         "http://localhost:5000,http://127.0.0.1:5000",
