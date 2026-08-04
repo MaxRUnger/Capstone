@@ -182,6 +182,12 @@ def _consume_one_time_form_token(namespace: str, token: str) -> bool:
 
 DEFAULT_REQUIRED_MS = 2
 
+# Shared caps for all bulk-import entry points (CSV and JSON body alike).
+# Bytes cap matches the pre-existing LO CSV limit; row cap keeps a single
+# request from blocking a worker on thousands of upserts / DoS-ing memory.
+MAX_IMPORT_UPLOAD_BYTES = 5 * 1024 * 1024
+MAX_IMPORT_ROWS = 2000
+
 
 def _normalize_csv_key(key: Any) -> str:
     nk = str(key or "").strip().lower().lstrip("\ufeff")
@@ -202,6 +208,21 @@ def _csv_row_norm_keys(row: Dict[str, Any]) -> Dict[str, str]:
         else:
             out[nk] = str(v).strip()
     return out
+
+
+def _csv_formula_safe(value: Any) -> str:
+    """Neutralize CSV/spreadsheet formula injection (OWASP CSV injection).
+
+    A name/title/description stored verbatim here could later be opened in
+    Excel/Sheets (e.g. via a future export) and execute as a formula if it
+    starts with =, +, -, or @. Prefixing with a single quote forces every
+    major spreadsheet app to treat it as literal text; it's invisible in
+    plain HTML/JSON contexts where the value is just displayed as-is.
+    """
+    s = str(value or "")
+    if s and s[0] in ("=", "+", "-", "@"):
+        return "'" + s
+    return s
 
 
 def parse_learning_objectives_csv_text(text: str) -> Tuple[List[Dict[str, Any]], List[str]]:
@@ -243,9 +264,9 @@ def parse_learning_objectives_csv_text(text: str) -> Tuple[List[Dict[str, Any]],
                 required_ms = DEFAULT_REQUIRED_MS
         rows_out.append(
             {
-                "vendor_code": title,
+                "vendor_code": _csv_formula_safe(title),
                 "required_ms": required_ms,
-                "description": desc or None,
+                "description": _csv_formula_safe(desc) or None,
             }
         )
     if not rows_out:
@@ -524,7 +545,7 @@ def parse_students_csv_text(text: str) -> Tuple[List[Dict[str, str]], List[str]]
         if not full_name:
             continue
         email = _student_email_key(row.get("email") or row.get("student_email") or "")
-        rows.append({"full_name": full_name, "email": email})
+        rows.append({"full_name": _csv_formula_safe(full_name), "email": email})
 
     if not rows:
         return [], ["No student rows found"]
@@ -1537,6 +1558,43 @@ def add_student(class_id):
     except Exception as e:
         return _safe_api_error("Could not add student", 500, log_detail=e)
 
+def _log_grade_deletions(rows: List[Dict[str, Any]], class_id: str, changed_by: Optional[str]) -> None:
+    """Best-effort audit log for grade rows about to be hard-deleted.
+
+    Reads pre-delete values so grade_change_log retains history even though the
+    grades table itself has no soft-delete. Must never raise — a missing/not-yet-
+    migrated audit table or a logging failure should never block the actual delete.
+    """
+    if not rows:
+        return
+    log_rows = [
+        {
+            "student_id": r.get("student_id"),
+            "class_id": class_id,
+            "learning_objective_id": r.get("learning_objective_id"),
+            "assignment_id": r.get("assignment_id"),
+            "operation": "DELETE",
+            "old_value": {
+                "top_score": r.get("top_score"),
+                "second_score": r.get("second_score"),
+                "counts_for_mastery": r.get("counts_for_mastery"),
+            },
+            "new_value": None,
+            "changed_by": changed_by,
+        }
+        for r in rows
+    ]
+    # Chunk large batches (e.g. delete_class on a big roster) so one insert
+    # call doesn't hit request/payload limits, matching api_import_grades.
+    chunk_size = 150
+    for i in range(0, len(log_rows), chunk_size):
+        chunk = log_rows[i:i + chunk_size]
+        try:
+            supabase_admin.table("grade_change_log").insert(chunk).execute()
+        except Exception as e:
+            logger.warning("grade_change_log insert skipped (table may not exist yet): %s", e)
+
+
 @main_bp.route("/class/<class_id>/students/<student_id>/delete", methods=["POST"])
 @api_instructor_required
 def delete_student_from_class(class_id, student_id):
@@ -1549,6 +1607,13 @@ def delete_student_from_class(class_id, student_id):
         # Remove grades scoped to this class
         lo_ids = Course.get_lo_ids_for_class(class_id)
         if lo_ids:
+            try:
+                existing = supabase_admin.table("grades").select(
+                    "student_id, learning_objective_id, assignment_id, top_score, second_score, counts_for_mastery"
+                ).eq("student_id", student_id).in_("learning_objective_id", lo_ids).execute()
+                _log_grade_deletions(existing.data or [], class_id, session['user_id'])
+            except Exception as e:
+                logger.warning("Could not audit-log grade deletions for student %s: %s", student_id, e)
             supabase_admin.table("grades").delete().eq("student_id", student_id).in_("learning_objective_id", lo_ids).execute()
 
         # Remove homework scores for this class
@@ -1589,6 +1654,13 @@ def delete_class(class_id):
 
         if lo_ids:
             supabase_admin.table("assignment_objectives").delete().in_("learning_objective_id", lo_ids).execute()
+            try:
+                existing = supabase_admin.table("grades").select(
+                    "student_id, learning_objective_id, assignment_id, top_score, second_score, counts_for_mastery"
+                ).in_("learning_objective_id", lo_ids).execute()
+                _log_grade_deletions(existing.data or [], class_id, session['user_id'])
+            except Exception as e:
+                logger.warning("Could not audit-log grade deletions for class %s: %s", class_id, e)
             supabase_admin.table("grades").delete().in_("learning_objective_id", lo_ids).execute()
             supabase_admin.table("learning_objectives").delete().in_("id", lo_ids).execute()
 
@@ -2052,6 +2124,13 @@ def delete_lo(class_id, lo_id):
         # First delete assignment_objectives links
         supabase_admin.table("assignment_objectives").delete().eq("learning_objective_id", lo_id).execute()
         # Then delete grades
+        try:
+            existing = supabase_admin.table("grades").select(
+                "student_id, learning_objective_id, assignment_id, top_score, second_score, counts_for_mastery"
+            ).eq("learning_objective_id", lo_id).execute()
+            _log_grade_deletions(existing.data or [], class_id, session['user_id'])
+        except Exception as e:
+            logger.warning("Could not audit-log grade deletions for lo %s: %s", lo_id, e)
         supabase_admin.table("grades").delete().eq("learning_objective_id", lo_id).execute()
         # Then delete the LO
         supabase_admin.table("learning_objectives").delete().eq("id", lo_id).eq("class_id", class_id).execute()
@@ -2128,7 +2207,7 @@ def _parse_lo_csv_upload() -> Tuple[Optional[str], Optional[List[Dict[str, Any]]
         return "Upload a .csv file", None, []
     try:
         raw = f.read()
-        if len(raw) > 5 * 1024 * 1024:
+        if len(raw) > MAX_IMPORT_UPLOAD_BYTES:
             return "CSV must be 5MB or smaller", None, []
         text = raw.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -2136,6 +2215,8 @@ def _parse_lo_csv_upload() -> Tuple[Optional[str], Optional[List[Dict[str, Any]]
     rows, parse_warnings = parse_learning_objectives_csv_text(text)
     if not rows:
         return parse_warnings[0] if parse_warnings else "No objectives to import", None, parse_warnings
+    if len(rows) > MAX_IMPORT_ROWS:
+        return f"CSV has too many rows (max {MAX_IMPORT_ROWS})", None, parse_warnings
     return None, rows, parse_warnings
 
 
@@ -2147,7 +2228,10 @@ def _parse_student_csv_upload() -> Tuple[Optional[str], Optional[List[Dict[str, 
     if not f.filename.lower().endswith(".csv"):
         return "Upload a .csv file", None, []
     try:
-        text = f.read().decode("utf-8-sig", errors="replace")
+        raw = f.read()
+        if len(raw) > MAX_IMPORT_UPLOAD_BYTES:
+            return "CSV must be 5MB or smaller", None, []
+        text = raw.decode("utf-8-sig", errors="replace")
     except Exception:
         return "Could not read CSV file", None, []
 
@@ -2158,6 +2242,8 @@ def _parse_student_csv_upload() -> Tuple[Optional[str], Optional[List[Dict[str, 
             None,
             parse_warnings,
         )
+    if len(rows) > MAX_IMPORT_ROWS:
+        return f"CSV has too many rows (max {MAX_IMPORT_ROWS})", None, parse_warnings
     return None, rows, parse_warnings
 
 
@@ -2196,6 +2282,8 @@ def api_import_learning_objectives(class_id):
     raw_rows = data.get("rows")
     if not isinstance(raw_rows, list) or len(raw_rows) == 0:
         return jsonify({"success": False, "error": "Missing or empty rows array"}), 400
+    if len(raw_rows) > MAX_IMPORT_ROWS:
+        return jsonify({"success": False, "error": f"Too many rows (max {MAX_IMPORT_ROWS})"}), 400
 
     rows: List[Dict[str, Any]] = []
     for item in raw_rows:
@@ -2754,11 +2842,16 @@ def create_lo_handler(class_id):
 
         if lo_code:
             try:
+                req_ms = int(lo_required_ms)
+            except (TypeError, ValueError):
+                req_ms = DEFAULT_REQUIRED_MS
+            req_ms = max(1, min(5, req_ms))
+            try:
                 _insert_learning_objectives_compat({
                     "class_id": class_id,
                     "vendor_code": lo_code,
                     "description": lo_description or None,
-                    "required_ms": int(lo_required_ms)
+                    "required_ms": req_ms
                 })
             except Exception as e:
                 logger.error("Error creating LO: %s", e)
@@ -2934,7 +3027,7 @@ def api_update_grade():
 
         Grade.update_score(student_id=data['student_id'], lo_id=data['lo_id'], 
                             top_score=data['top_score'], second_score=data.get('second_score'),
-                            assignment_id=data.get('assignment_id'))
+                            assignment_id=data.get('assignment_id'), changed_by=session['user_id'])
         return jsonify({"success": True})
     except Exception as e:
         return _safe_api_error("Could not update grade", 500, log_detail=e)
@@ -2974,18 +3067,24 @@ def save_grades(class_id):
 
         # Pre-collect the (student, lo) pairs we're about to write so we can
         # batch-fetch the existing rows in ONE query and implement first-entry-
-        # only stickiness for the counts_for_mastery flag.
+        # only stickiness for the counts_for_mastery flag. Cells with an empty/
+        # cleared value are routed to `to_clear` instead of being silently
+        # dropped -- an explicit clear should delete any existing grade row.
         incoming = []
+        to_clear = []
         for key, grade_value in grades_dict.items():
             parts = key.split('|')
             if len(parts) != 2:
                 continue
             student_id, lo_id = parts
-            if not (lo_id and grade_value):
+            if not lo_id:
                 continue
             if lo_id not in class_lo_ids:
                 continue
             if str(student_id).strip() not in enrolled_student_ids:
+                continue
+            if not grade_value:
+                to_clear.append({'student_id': student_id, 'lo_id': lo_id})
                 continue
             normalized = Grade.normalize_score(grade_value)
             if not normalized:
@@ -3070,6 +3169,7 @@ def save_grades(class_id):
                 "learning_objective_id": lo_id,
                 "top_score": normalized,
                 "counts_for_mastery": counts_for_mastery,
+                "last_modified_by": session['user_id'],
             }
             if assignment_id:
                 row["assignment_id"] = assignment_id
@@ -3082,14 +3182,14 @@ def save_grades(class_id):
                 ).execute()
             except Exception as schema_err:
                 # Fallback for deployments that have not yet run the migration:
-                # strip counts_for_mastery and try again so saves don't 400.
+                # strip counts_for_mastery/last_modified_by and try again so saves don't 400.
                 msg = str(schema_err)
-                if "counts_for_mastery" in msg or "PGRST204" in msg or "schema cache" in msg.lower():
+                if "counts_for_mastery" in msg or "last_modified_by" in msg or "PGRST204" in msg or "schema cache" in msg.lower():
                     logger.debug(
-                        "save_grades upsert failed on counts_for_mastery (migration not run); retrying without it"
+                        "save_grades upsert failed on counts_for_mastery/last_modified_by (migration not run); retrying without them"
                     )
                     legacy_rows = [
-                        {k: v for k, v in r.items() if k != 'counts_for_mastery'}
+                        {k: v for k, v in r.items() if k not in ('counts_for_mastery', 'last_modified_by')}
                         for r in grade_rows
                     ]
                     supabase_admin.table("grades").upsert(
@@ -3097,6 +3197,58 @@ def save_grades(class_id):
                     ).execute()
                 else:
                     raise
+
+        # Cleared cells: delete the existing grade row (if any) for this exact
+        # student+LO+assignment combination, scoped to the same assignment
+        # context as this save so a clear never touches a different
+        # assignment's grade for the same LO. A pre-fetch confirms a row
+        # actually exists first -- clearing an already-empty cell must stay a
+        # silent no-op, not an error.
+        if to_clear:
+            clear_sids = list({it['student_id'] for it in to_clear})
+            clear_lo_ids = list({it['lo_id'] for it in to_clear})
+            clear_keys = {f"{it['student_id']}|{it['lo_id']}" for it in to_clear}
+            cleared_rows: List[Dict[str, Any]] = []
+            try:
+                clear_q = supabase_admin.table("grades").select(
+                    "student_id, learning_objective_id, assignment_id, top_score, second_score, counts_for_mastery"
+                ).in_("student_id", clear_sids).in_("learning_objective_id", clear_lo_ids)
+                clear_q = (
+                    clear_q.eq("assignment_id", assignment_id)
+                    if assignment_id
+                    else clear_q.is_("assignment_id", "null")
+                )
+                clear_resp = clear_q.execute()
+                # Intersect against the exact requested keys -- the IN/IN query
+                # above can return the cartesian product of sids x lo_ids, which
+                # may include pairs that were never actually requested to clear.
+                for r in (clear_resp.data or []):
+                    k = f"{r.get('student_id')}|{r.get('learning_objective_id')}"
+                    if k in clear_keys:
+                        cleared_rows.append(r)
+            except Exception as e:
+                logger.error("save_grades clear pre-fetch failed: %s", e)
+                cleared_rows = []
+
+            if cleared_rows:
+                _log_grade_deletions(cleared_rows, class_id, session['user_id'])
+                for r in cleared_rows:
+                    try:
+                        del_q = supabase_admin.table("grades").delete() \
+                            .eq("student_id", r["student_id"]) \
+                            .eq("learning_objective_id", r["learning_objective_id"])
+                        del_q = (
+                            del_q.eq("assignment_id", assignment_id)
+                            if assignment_id
+                            else del_q.is_("assignment_id", "null")
+                        )
+                        del_q.execute()
+                    except Exception as e:
+                        logger.error(
+                            "save_grades: failed to clear grade for student=%s lo=%s: %s",
+                            r.get("student_id"), r.get("learning_objective_id"), e,
+                        )
+
         return jsonify({"success": True})
     except Exception as e:
         return _safe_api_error("Could not save grades", 500, log_detail=e)
@@ -3231,7 +3383,7 @@ def api_assignment_grades(class_id, assignment_id):
         return _safe_api_error("Could not load assignment grades", 500, log_detail=e)
 
 
-def _promote_non_counting_masteries_for_student(class_id: str, student_id: str) -> int:
+def _promote_non_counting_masteries_for_student(class_id: str, student_id: str, changed_by: str = None) -> int:
     """When a student uses an HW pass, restore all their non-counting M/MR rows."""
     lo_ids = Course.get_lo_ids_for_class(class_id)
     if not lo_ids:
@@ -3265,6 +3417,8 @@ def _promote_non_counting_masteries_for_student(class_id: str, student_id: str) 
             "top_score": g["top_score"],
             "counts_for_mastery": True,
         }
+        if changed_by is not None:
+            row["last_modified_by"] = changed_by
         aid = g.get("assignment_id")
         if aid is not None:
             row["assignment_id"] = aid
@@ -3331,7 +3485,7 @@ def save_hw_percentage(class_id):
 
         promoted = 0
         if score == -1:
-            promoted = _promote_non_counting_masteries_for_student(class_id, student_id)
+            promoted = _promote_non_counting_masteries_for_student(class_id, student_id, changed_by=session['user_id'])
 
         return jsonify({"success": True, "promoted_masteries": promoted})
     except Exception as e:
@@ -4054,6 +4208,8 @@ def api_import_grades():
         return jsonify({"success": False, "error": "Forbidden"}), 403
     if assignment_id and not _assignment_belongs_to_class(str(class_id), str(assignment_id)):
         return jsonify({"success": False, "error": "Invalid assignment for class"}), 400
+    if len(students) > MAX_IMPORT_ROWS:
+        return jsonify({"success": False, "error": f"Too many students in one import (max {MAX_IMPORT_ROWS})"}), 400
 
     # Keep import-only numeric columns (e.g., EX1/FEX) out of mastery LO creation/linking.
     extracted_los = [
@@ -4284,7 +4440,8 @@ def api_import_grades():
                 "student_id": profile_id,
                 "learning_objective_id": lo_id,
                 "top_score": normalized,
-                "assignment_id": assignment_id
+                "assignment_id": assignment_id,
+                "last_modified_by": session['user_id'],
             })
 
         for exam_col, raw_score in exam_scores.items():
@@ -4324,6 +4481,21 @@ def api_import_grades():
                 ).execute()
                 logger.info("Upserted %d grades", len(chunk))
             except Exception as upsert_err:
+                msg = str(upsert_err)
+                if "last_modified_by" in msg or "PGRST204" in msg or "schema cache" in msg.lower():
+                    # Fallback for deployments that haven't run the last_modified_by migration yet.
+                    try:
+                        legacy_chunk = [
+                            {k: v for k, v in r.items() if k != 'last_modified_by'}
+                            for r in chunk
+                        ]
+                        supabase_admin.table("grades").upsert(
+                            legacy_chunk, on_conflict="student_id,learning_objective_id,assignment_id"
+                        ).execute()
+                        logger.info("Upserted %d grades (legacy, no last_modified_by column)", len(legacy_chunk))
+                        continue
+                    except Exception as retry_err:
+                        upsert_err = retry_err
                 logger.error("Grade upsert error: %s", upsert_err)
     except Exception as e:
         logger.error("Error processing grades in bulk: %s", e)

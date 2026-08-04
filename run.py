@@ -9,4 +9,9 @@ if __name__ == '__main__':
     # request (e.g. delete) can show "connection reset" / "Failed to fetch". Set
     # FLASK_NO_RELOADER=1 for a stable single process while testing UI flows.
     use_reloader = os.environ.get("FLASK_NO_RELOADER", "").lower() not in ("1", "true", "yes")
-    app.run(debug=True, host="127.0.0.1", port=5000, use_reloader=use_reloader)
+    # Debug defaults to OFF. This file is never invoked by the gunicorn/Procfile
+    # production path, but explicitly gating it means running `python run.py`
+    # against a misconfigured environment can't accidentally enable Werkzeug's
+    # interactive debugger (arbitrary code execution risk) by default.
+    debug = os.environ.get("FLASK_DEBUG", "").strip().lower() in ("1", "true", "yes")
+    app.run(debug=debug, host="127.0.0.1", port=5000, use_reloader=use_reloader)

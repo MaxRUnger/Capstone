@@ -225,7 +225,7 @@ class Grade:
         return None
 
     @staticmethod
-    def update_score(student_id, lo_id, top_score, second_score=None, assignment_id=None):
+    def update_score(student_id, lo_id, top_score, second_score=None, assignment_id=None, changed_by=None):
         """Upserts a grade for a student, learning objective, and assignment.
 
         The database enforces that scores are one of the mastery codes (e.g. M, R, P, X).
@@ -245,10 +245,20 @@ class Grade:
             data["second_score"] = normalized_second
         if assignment_id is not None:
             data["assignment_id"] = assignment_id
+        if changed_by is not None:
+            data["last_modified_by"] = changed_by
 
         # Ensure `upsert` updates existing grades instead of throwing on duplicates.
         # Supabase requires specifying the conflict target for proper behavior.
-        return supabase_admin.table("grades").upsert(data, on_conflict="student_id,learning_objective_id,assignment_id").execute()
+        try:
+            return supabase_admin.table("grades").upsert(data, on_conflict="student_id,learning_objective_id,assignment_id").execute()
+        except Exception as e:
+            msg = str(e)
+            if changed_by is not None and ("last_modified_by" in msg or "PGRST204" in msg or "schema cache" in msg.lower()):
+                # Fallback for deployments that haven't run the last_modified_by migration yet.
+                data.pop("last_modified_by", None)
+                return supabase_admin.table("grades").upsert(data, on_conflict="student_id,learning_objective_id,assignment_id").execute()
+            raise
 
     @staticmethod
     def get_overdue_revisions(class_id):
