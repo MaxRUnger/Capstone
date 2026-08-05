@@ -86,12 +86,6 @@ function isHomeworkHeader(lo) {
   return false;
 }
 
-function isExamScoreHeader(lo) {
-  if (lo == null || typeof lo !== 'string') return false;
-  const n = lo.trim().toUpperCase().replace(/\s+/g, '');
-  return /^EX\d{1,3}$/.test(n) || n === 'FEX';
-}
-
 function extractionPathLabel(path) {
   if (path === 'pdf_table') return 'Extracted from PDF table (local, fast).';
   if (path === 'pdf_text') return 'Extracted from PDF text layout (local).';
@@ -296,7 +290,7 @@ function runLOComparison() {
   const content = document.getElementById('loComparisonContent');
   if (!section || !content || !uploadedPDFData) return;
 
-  const scannedLOs = (uploadedPDFData.learning_objectives || []).filter(lo => !isExamScoreHeader(lo));
+  const scannedLOs = uploadedPDFData.learning_objectives || [];
   const assignSet = new Set(assignmentLOs.map(v => v.toUpperCase()));
 
   const matched = [];
@@ -432,12 +426,6 @@ function displayExtractedLOs(data) {
       `<span class="inline-block bg-emerald-100 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300 px-3 py-1 rounded-full text-sm font-medium" title="Stored as class homework %, not a learning objective">${escapeHTML(data.homework_column)} (homework %)</span>`
     );
   }
-  const examCols = Array.isArray(data.exam_score_columns) ? data.exam_score_columns : [];
-  examCols.forEach(function (col) {
-    parts.push(
-      `<span class="inline-block bg-violet-100 dark:bg-violet-900/40 text-violet-800 dark:text-violet-300 px-3 py-1 rounded-full text-sm font-medium" title="Stored as numeric exam score, not a mastery learning objective">${escapeHTML(col)} (exam score)</span>`
-    );
-  });
   if (los.length > 0) {
     los.forEach(function (lo) {
       parts.push(`<span class="inline-block bg-blue-100 dark:bg-blue-900/40 text-blue-800 dark:text-blue-300 px-3 py-1 rounded-full text-sm font-medium">${escapeHTML(lo)}</span>`);
@@ -478,21 +466,11 @@ function displayExtractedData(data) {
       }
       delete s.grades[h];
     });
-    // Legacy: move EX/FEX-style numeric columns out of mastery grades
-    Object.keys(s.grades).forEach(h => {
-      if (!isExamScoreHeader(h)) return;
-      const raw = s.grades[h];
-      if (!s.exam_scores) s.exam_scores = {};
-      if (raw != null && String(raw).trim() !== '') {
-        s.exam_scores[h] = String(raw).replace(/%$/, '').trim();
-      }
-      delete s.grades[h];
-    });
   });
 
   if (Array.isArray(data.learning_objectives)) {
     data.learning_objectives = data.learning_objectives.filter(
-      lo => !isHomeworkHeader(lo) && !isExamScoreHeader(lo)
+      lo => !isHomeworkHeader(lo)
     );
   }
 
@@ -503,12 +481,11 @@ function displayExtractedData(data) {
   // Filter LO headers: only show columns the user approved
   const allLOs = (data.learning_objectives && data.learning_objectives.length > 0)
     ? data.learning_objectives : [];
-  const examHeaders = (data.exam_score_columns || []).filter(isExamScoreHeader);
   // Only columns that belong to the assignment or were explicitly approved as extras
   const loHeaders = approvedSet.size > 0
     ? allLOs.filter(lo => approvedSet.has(lo.toUpperCase()))
     : [];
-  const tableHeaders = [...examHeaders, ...loHeaders];
+  const tableHeaders = loHeaders;
 
   // Update the LO badges on Step 3 to reflect filtered set
   const loContainer = document.getElementById('extractedLOs');
@@ -526,9 +503,6 @@ function displayExtractedData(data) {
       loContainer.innerHTML = '<p class="text-slate-500 dark:text-slate-400 text-sm">No approved learning objectives to display.</p>';
     }
   }
-
-  // Numeric exam-score columns are rendered as number inputs, not LO letter-grade cells.
-  const numericCols = new Set(examHeaders.map(String));
 
   const showHomework =
     !!data.homework_column ||
@@ -566,22 +540,13 @@ function displayExtractedData(data) {
 
     tableHeaders.forEach((lo, colIdx) => {
       const ac = colIdx + colOffset;
-      const raw = numericCols.has(lo)
-        ? (((student.exam_scores || {})[lo] != null) ? (student.exam_scores || {})[lo] : '')
-        : ((student.grades && student.grades[lo]) ? student.grades[lo] : '');
-      if (numericCols.has(lo)) {
-        html += `<td class="border border-slate-300 dark:border-slate-600 px-1 py-1 text-center">
-          <input type="text" class="grade-input-numeric" value="${escapeHTML(raw)}" data-row="${rowIdx}" data-col="${ac}" data-lo="${escapeHTML(lo)}"
-            oninput="updateExtractedGrade(${rowIdx}, '${escapeHTML(lo)}', this.value)">
-        </td>`;
-      } else {
-        const grade = VALID_GRADES.has(String(raw).toUpperCase()) ? String(raw).toUpperCase() : raw;
-        html += `<td class="border border-slate-300 dark:border-slate-600 px-1 py-1 text-center">
-          <div class="grade-cell" tabindex="0" data-grade="${escapeHTML(grade)}" data-row="${rowIdx}" data-col="${ac}" data-lo="${escapeHTML(lo)}" data-student-index="${rowIdx}">
-            ${escapeHTML(grade) || '<span class="text-slate-300 dark:text-slate-600 text-xs select-none">\u2014</span>'}
-          </div>
-        </td>`;
-      }
+      const raw = (student.grades && student.grades[lo]) ? student.grades[lo] : '';
+      const grade = VALID_GRADES.has(String(raw).toUpperCase()) ? String(raw).toUpperCase() : raw;
+      html += `<td class="border border-slate-300 dark:border-slate-600 px-1 py-1 text-center">
+        <div class="grade-cell" tabindex="0" data-grade="${escapeHTML(grade)}" data-row="${rowIdx}" data-col="${ac}" data-lo="${escapeHTML(lo)}" data-student-index="${rowIdx}">
+          ${escapeHTML(grade) || '<span class="text-slate-300 dark:text-slate-600 text-xs select-none">\u2014</span>'}
+        </div>
+      </td>`;
     });
 
     html += '</tr>';
@@ -605,9 +570,9 @@ function escapeHTML(str) {
 
 // `__gradeHandlersBound` is the only guard that prevents the delegated
 // listeners from being attached multiple times if `attachGradeCellHandlers`
-// is called more than once (e.g. on re-render). HW% and exam-score inputs
-// keep their own per-input listeners because they need native focus/blur and
-// validation that doesn't fit a delegated keydown model.
+// is called more than once (e.g. on re-render). HW% inputs keep their own
+// per-input listeners because they need native focus/blur and validation
+// that doesn't fit a delegated keydown model.
 let __gradeHandlersBound = false;
 
 function attachGradeCellHandlers() {
@@ -698,7 +663,6 @@ function moveFocus(row, col) {
   // Try grade-cell first, then HW %, then other numeric inputs
   let next = document.querySelector(`#extractedStudentsTable .grade-cell[data-row="${row}"][data-col="${col}"]`);
   if (!next) next = document.querySelector(`#extractedStudentsTable .grade-input-hw[data-row="${row}"][data-col="${col}"]`);
-  if (!next) next = document.querySelector(`#extractedStudentsTable .grade-input-numeric[data-row="${row}"][data-col="${col}"]`);
   if (!next) return;
   next.focus();
   // `scrollIntoView` triggers a layout flush even when the target is already
@@ -727,11 +691,6 @@ function updateExtractedStudentName(idx, value) {
 function updateExtractedGrade(idx, lo, value) {
   if (!uploadedPDFData || !uploadedPDFData.students || !uploadedPDFData.students[idx]) return;
   const s = uploadedPDFData.students[idx];
-  if (isExamScoreHeader(lo)) {
-    if (!s.exam_scores) s.exam_scores = {};
-    s.exam_scores[lo] = String(value == null ? '' : value).trim();
-    return;
-  }
   if (!s.grades) s.grades = {};
   s.grades[lo] = value.trim().toUpperCase();
 }
@@ -790,16 +749,9 @@ async function handleFormSubmit(e) {
   const hasHomework = (uploadedPDFData.students || []).some(
     s => s.homework_pct != null && String(s.homework_pct).trim() !== ''
   );
-  const hasExamScores = (uploadedPDFData.students || []).some(
-    s => Object.keys(s.exam_scores || {}).some(k => {
-      if (!isExamScoreHeader(k)) return false;
-      const t = String((s.exam_scores || {})[k] == null ? '' : (s.exam_scores || {})[k]).trim();
-      return t !== '';
-    })
-  );
-  if (includeLOs.size === 0 && !hasHomework && !hasExamScores) {
+  if (includeLOs.size === 0 && !hasHomework) {
     alert(
-      'Nothing to import: add learning objectives to this assignment (or approve extra columns in step 2), and/or enter homework % or exam score values, then try again.'
+      'Nothing to import: add learning objectives to this assignment (or approve extra columns in step 2), and/or enter homework % values, then try again.'
     );
     return;
   }
@@ -819,20 +771,13 @@ async function handleFormSubmit(e) {
   // Filter each student's grades to only include the approved LOs (not homework)
   const filteredStudents = uploadedPDFData.students.map(s => {
     const grades = {};
-    const exam_scores = {};
     Object.keys(s.grades || {}).forEach(lo => {
       if (isHomeworkHeader(lo)) return;
-      if (isExamScoreHeader(lo)) return;
       if (includeLOs.has(lo.toUpperCase())) {
         grades[lo] = s.grades[lo];
       }
     });
-    Object.keys(s.exam_scores || {}).forEach(col => {
-      if (!isExamScoreHeader(col)) return;
-      const t = String(s.exam_scores[col] == null ? '' : s.exam_scores[col]).trim();
-      if (t !== '') exam_scores[col] = t;
-    });
-    const out = { name: s.name, grades, exam_scores };
+    const out = { name: s.name, grades };
     if (s.homework_pct != null && String(s.homework_pct).trim() !== '') {
       out.homework_pct = s.homework_pct;
     }
@@ -847,8 +792,7 @@ async function handleFormSubmit(e) {
     class_id: classId,
     assignment_id: assignmentId,
     students: filteredStudents,
-    learning_objectives: filteredLOs,
-    exam_score_columns: (uploadedPDFData.exam_score_columns || []).filter(isExamScoreHeader)
+    learning_objectives: filteredLOs
   };
 
   try {

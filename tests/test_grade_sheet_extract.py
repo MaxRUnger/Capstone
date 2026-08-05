@@ -78,15 +78,16 @@ def test_canonicalize_import_sheet_header():
 
 
 def test_normalize_data_canonicalizes_column_keys():
+    # "Exam 1" canonicalizes to "EX1" (see canonicalize_import_sheet_header), but since
+    # the exam-score feature is removed, EX1 is now just a plain LO/grade column.
     a = object.__new__(GradeSheetGeminiAnalyzer)
     raw = {
         "learning_objectives": ["Exam 1", "A7"],
         "students": [{"name": "Jane Doe", "grades": {"Exam 1": "88", "A7": "M"}}],
     }
     out = GradeSheetGeminiAnalyzer._normalize_data(a, raw)
-    assert out["exam_score_columns"] == ["EX1"]
-    assert out["learning_objectives"] == ["A7"]
-    assert out["students"][0]["exam_scores"].get("EX1") == "88"
+    assert out["learning_objectives"] == ["EX1", "A7"]
+    assert out["students"][0]["grades"].get("EX1") == "88"
     assert out["students"][0]["grades"].get("A7") == "M"
 
 
@@ -97,5 +98,4 @@ def test_normalize_data_duplicate_headers_merge_first_nonempty():
         "students": [{"name": "Jane Doe", "grades": {"EX1": "", "Exam 1": "91"}}],
     }
     out = GradeSheetGeminiAnalyzer._normalize_data(a, raw)
-    assert out["exam_score_columns"] == ["EX1"]
-    assert out["students"][0]["exam_scores"].get("EX1") == "91"
+    assert out["students"][0]["grades"].get("EX1") == "91"

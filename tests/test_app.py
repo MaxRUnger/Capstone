@@ -129,41 +129,54 @@ class TestHomeworkImportSheetColumn(unittest.TestCase):
         self.assertTrue(Homework.is_import_sheet_hw_column("  HW%  "))
         self.assertTrue(Homework.is_import_sheet_hw_column("Homework"))
         self.assertTrue(Homework.is_import_sheet_hw_column("HW1"))
-        self.assertTrue(Homework.is_import_sheet_hw_column("Exam1"))
-        self.assertTrue(Homework.is_import_sheet_hw_column("FExam"))
         self.assertFalse(Homework.is_import_sheet_hw_column("EX1"))
         self.assertFalse(Homework.is_import_sheet_hw_column("A7"))
 
-    def test_exam_column_to_homework_group(self):
-        self.assertEqual(Homework.exam_column_to_homework_group("EX1"), "Exam1")
-        self.assertEqual(Homework.exam_column_to_homework_group("fex"), "FExam")
-        self.assertIsNone(Homework.exam_column_to_homework_group("HW1"))
-
     def test_normalize_homework_group(self):
-        self.assertEqual(Homework.normalize_homework_group("Exam1"), "Exam1")
-        self.assertEqual(Homework.normalize_homework_group("Exam 2"), "Exam2")
-        self.assertEqual(Homework.normalize_homework_group("fexam"), "FExam")
-        self.assertIsNone(Homework.normalize_homework_group("EX1"))
-        self.assertIsNone(Homework.normalize_homework_group("HW 1"))
+        # homework_group is a free-form grouping key: trim + collapse whitespace only.
+        self.assertEqual(Homework.normalize_homework_group("Quiz 1"), "Quiz 1")
+        self.assertEqual(Homework.normalize_homework_group("  Chapter  5   HW  "), "Chapter 5 HW")
+        self.assertEqual(Homework.normalize_homework_group("EX1"), "EX1")
         self.assertIsNone(Homework.normalize_homework_group(""))
+        self.assertIsNone(Homework.normalize_homework_group("   "))
+        self.assertIsNone(Homework.normalize_homework_group(None))
 
-    def test_normalize_enabled_exam_score_column_list(self):
-        self.assertEqual(
-            Homework.normalize_enabled_exam_score_column_list(["FEX", "EX1", "EX1", "bad", "ex2"]),
-            ["EX1", "EX2", "FEX"],
-        )
-        self.assertEqual(Homework.normalize_enabled_exam_score_column_list([]), [])
-        self.assertEqual(Homework.normalize_enabled_exam_score_column_list(None), [])
-        # jsonb occasionally arrives as a JSON string from the DB client
-        self.assertEqual(
-            Homework.normalize_enabled_exam_score_column_list('["EX1", "bad"]'),
-            ["EX1"],
-        )
-        # dict-shaped legacy / hand-edited rows
-        self.assertEqual(
-            Homework.normalize_enabled_exam_score_column_list({"EX1": True, "EX2": 1}),
-            ["EX1", "EX2"],
-        )
+    def test_canonicalize_homework_group_for_class_reuses_existing_casing(self):
+        # If a differently-cased label already exists for this class, reuse
+        # its exact casing so the two assignments share one HW group instead
+        # of silently splitting into two ("Quiz 1" vs "quiz 1").
+        with unittest.mock.patch.object(Homework, "normalize_homework_group", wraps=Homework.normalize_homework_group):
+            mock_table = MagicMock()
+            mock_table.select.return_value.eq.return_value.execute.return_value = MagicMock(
+                data=[{"homework_group": "Quiz 1"}, {"homework_group": "Unit 3"}]
+            )
+            with unittest.mock.patch("app.models.supabase_admin") as sa:
+                sa.table.return_value = mock_table
+                self.assertEqual(
+                    Homework.canonicalize_homework_group_for_class("class-1", "quiz 1"),
+                    "Quiz 1",
+                )
+                self.assertEqual(
+                    Homework.canonicalize_homework_group_for_class("class-1", "  QUIZ   1  "),
+                    "Quiz 1",
+                )
+                # A genuinely new label is returned as typed (trim/whitespace only).
+                self.assertEqual(
+                    Homework.canonicalize_homework_group_for_class("class-1", "Midterm"),
+                    "Midterm",
+                )
+
+    def test_canonicalize_homework_group_for_class_handles_empty_and_lookup_errors(self):
+        self.assertIsNone(Homework.canonicalize_homework_group_for_class("class-1", ""))
+        self.assertIsNone(Homework.canonicalize_homework_group_for_class("class-1", None))
+        with unittest.mock.patch("app.models.supabase_admin") as sa:
+            sa.table.side_effect = Exception("boom")
+            # Lookup failures shouldn't block assignment creation — fall back
+            # to the normalized candidate as-is.
+            self.assertEqual(
+                Homework.canonicalize_homework_group_for_class("class-1", "Quiz 1"),
+                "Quiz 1",
+            )
 
     def test_parse_import_hw_pct(self):
         self.assertEqual(Homework.parse_import_hw_pct("85"), 85)

@@ -264,14 +264,12 @@ class GradeSheetGeminiAnalyzer:
             raw_lines: List[str] = []
             headers = list(extracted['learning_objectives'])
             hw_lbl = extracted.get('homework_column')
-            exam_cols = list(extracted.get('exam_score_columns') or [])
             has_hw = any((s.get('homework_pct') or '').strip() for s in extracted['students'])
-            line_headers = headers + exam_cols + ([hw_lbl] if (hw_lbl and has_hw) else [])
+            line_headers = headers + ([hw_lbl] if (hw_lbl and has_hw) else [])
             if line_headers:
                 raw_lines.append('Name | ' + ' | '.join(line_headers))
             for s in extracted['students']:
                 cells = [str(s['grades'].get(h, '')) for h in headers]
-                cells.extend([str((s.get("exam_scores") or {}).get(h, "")) for h in exam_cols])
                 if hw_lbl and has_hw:
                     cells.append(str(s.get('homework_pct', '')))
                 raw_lines.append(f"{s['name']} | {' | '.join(cells)}")
@@ -280,7 +278,6 @@ class GradeSheetGeminiAnalyzer:
                 'students': extracted['students'],
                 'learning_objectives': extracted['learning_objectives'],
                 'homework_column': extracted.get('homework_column'),
-                'exam_score_columns': extracted.get('exam_score_columns', []),
                 'raw_text': '\n'.join(raw_lines),
                 'success': True,
                 'extraction_path': extraction_path,
@@ -474,8 +471,8 @@ class GradeSheetGeminiAnalyzer:
     def _normalize_data(self, data: Dict) -> Dict:
         """Normalize and validate the extracted data.
 
-        Splits homework and numeric exam-score columns out of the LO list so they are
-        not stored as learning objectives or coerced to mastery codes.
+        Splits homework columns out of the LO list so they are not stored as
+        learning objectives or coerced to mastery codes.
         """
         raw_headers = [
             str(x).strip()
@@ -528,14 +525,9 @@ class GradeSheetGeminiAnalyzer:
         valid_marks = {'M', 'MR', 'X', 'R', 'P', 'A', 'RQ', '/'}
 
         hw_headers = [h for h in learning_objectives if Homework.is_import_sheet_hw_column(h)]
-        exam_headers = [
-            h for h in learning_objectives
-            if Homework.is_import_sheet_exam_score_column(h)
-        ]
         lo_only = [
             h for h in learning_objectives
             if not Homework.is_import_sheet_hw_column(h)
-            and not Homework.is_import_sheet_exam_score_column(h)
         ]
 
         first_hw_label = hw_headers[0] if hw_headers else None
@@ -549,7 +541,6 @@ class GradeSheetGeminiAnalyzer:
             grades: Dict[str, str] = {}
             raw_grades = s.get('grades', {}) or {}
             homework_pct: Optional[str] = None
-            exam_scores: Dict[str, str] = {}
 
             for h in learning_objectives:
                 if h not in raw_grades:
@@ -564,15 +555,6 @@ class GradeSheetGeminiAnalyzer:
                         m = str(mark).strip()
                         if re.match(r"^\d+\.?\d*%?$", m):
                             homework_pct = m.rstrip("%")
-                elif Homework.is_import_sheet_exam_score_column(h):
-                    parsed_exam = Homework.parse_import_exam_score(mark)
-                    if parsed_exam is not None:
-                        # Keep as string for editable UI parity with other extracted values.
-                        exam_scores[h] = str(parsed_exam).rstrip("0").rstrip(".")
-                    elif str(mark).strip() != "":
-                        m = str(mark).strip().rstrip("%").strip()
-                        if re.match(r"^\d+\.?\d*$", m):
-                            exam_scores[h] = m
                 else:
                     mark_str = str(mark).strip().upper()
                     if mark_str in ('✓', '✔', 'CHECK', 'PASS', 'YES'):
@@ -584,13 +566,11 @@ class GradeSheetGeminiAnalyzer:
                 'name': name,
                 'grades': grades,
                 'homework_pct': homework_pct,
-                'exam_scores': exam_scores,
             })
 
         return {
             'learning_objectives': lo_only,
             'homework_column': first_hw_label,
-            'exam_score_columns': exam_headers,
             'students': students
         }
 

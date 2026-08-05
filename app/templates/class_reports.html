@@ -562,7 +562,6 @@ function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
     ? '.hw-score-display'
     : '.hw-score-display[data-assignment-id="' + String(scopeAssignmentId) + '"]';
 
-  renderExamColumnsInReports([], {}, scopeAssignmentId);
   if (!assignmentId) {
     _applyHwScoresInScope(scope, {});
     // No assignment context: re-apply the server-rendered counts_for_mastery
@@ -574,7 +573,6 @@ function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
   const cacheKey = String(assignmentId);
   if (__assignmentGradesCache.has(cacheKey)) {
     const cached = __assignmentGradesCache.get(cacheKey);
-    renderExamColumnsInReports(cached.examColumns, cached.examScores, scopeAssignmentId);
     _applyHwScoresInScope(scope, cached.hwScores);
     _applyCountsForMasteryInScope(scopeAssignmentId, cached.countsMap, cached.gradesMap);
     return;
@@ -586,74 +584,14 @@ function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
       if (!data.success) return;
       const payload = {
         hwScores: data.hw_scores || {},
-        examScores: data.exam_scores || {},
-        examColumns: Array.isArray(data.exam_columns) ? data.exam_columns : [],
         countsMap: data.counts_for_mastery_map || {},
         gradesMap: data.grades || {},
       };
       __assignmentGradesCache.set(cacheKey, payload);
-      renderExamColumnsInReports(payload.examColumns, payload.examScores, scopeAssignmentId);
       _applyHwScoresInScope(scope, payload.hwScores);
       _applyCountsForMasteryInScope(scopeAssignmentId, payload.countsMap, payload.gradesMap);
     })
     .catch(e => console.error('Error loading HW scores:', e));
-}
-
-function renderExamColumnsInReports(examColumns, examScoresByCol, scopeAssignmentId) {
-  const scopeSuffix = (scopeAssignmentId === undefined || scopeAssignmentId === null || String(scopeAssignmentId) === '')
-    ? ''
-    : '[data-assignment-id="' + String(scopeAssignmentId) + '"]';
-  const removeList = document.querySelectorAll('th.exam-score-col-header' + scopeSuffix + ', td.exam-score-col-cell' + scopeSuffix);
-  for (let i = 0; i < removeList.length; i++) removeList[i].remove();
-
-  const tableSelector = (scopeAssignmentId === undefined || scopeAssignmentId === null || String(scopeAssignmentId) === '')
-    ? '#all-students-table'
-    : '#view-all-assignments table[data-assignment-id="' + String(scopeAssignmentId) + '"]';
-  const table = document.querySelector(tableSelector);
-  if (!table) return;
-  const headerRow = table.querySelector('thead tr');
-  const hwHeader = table.querySelector('th[data-hw-col-header]');
-  if (!headerRow || !hwHeader) return;
-
-  const cols = examColumns || [];
-  const scopeAttr = String(scopeAssignmentId || '');
-
-  if (cols.length) {
-    // Build everything into a DocumentFragment first so the browser only
-    // re-flows once per row, not once per cell. Critical for classes with
-    // many students and the full FEX/EX1-3 set enabled.
-    const headerFrag = document.createDocumentFragment();
-    for (let c = 0; c < cols.length; c++) {
-      const col = cols[c];
-      const th = document.createElement('th');
-      th.className = 'exam-score-col-header text-center px-3 py-3 font-medium text-slate-500 dark:text-slate-400 text-xs';
-      th.setAttribute('data-assignment-id', scopeAttr);
-      th.innerHTML = '<div class="text-xs font-bold text-slate-800 dark:text-white">' + escapeHtml(col) + '</div>';
-      headerFrag.appendChild(th);
-    }
-    headerRow.insertBefore(headerFrag, hwHeader);
-  }
-
-  const rows = table.querySelectorAll('tbody tr.student-row');
-  for (let r = 0; r < rows.length; r++) {
-    const row = rows[r];
-    const sid = String(row.getAttribute('data-student-id') || '');
-    const hwCell = row.querySelector('td[data-hw-cell]');
-    if (!hwCell) continue;
-    if (!cols.length) continue;
-    const rowFrag = document.createDocumentFragment();
-    for (let c = 0; c < cols.length; c++) {
-      const col = cols[c];
-      const td = document.createElement('td');
-      td.className = 'exam-score-col-cell px-3 py-3 text-center';
-      td.setAttribute('data-assignment-id', scopeAttr);
-      const colMap = examScoresByCol[col] || {};
-      const raw = (sid in colMap) ? colMap[sid] : '';
-      td.innerHTML = '<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-violet-100 dark:bg-violet-900/40 text-violet-700 dark:text-violet-300">' + escapeHtml(raw === '' || raw == null ? '—' : String(raw)) + '</span>';
-      rowFrag.appendChild(td);
-    }
-    row.insertBefore(rowFrag, hwCell);
-  }
 }
 
 // --- Report tab toggle ---
@@ -1461,7 +1399,7 @@ async function exportGradeSheetPdf(btn) {
 
     // Drop the per-row "Email" column from the export entirely. Locate it by
     // matching the Email-All button rather than a hard-coded index, so the
-    // export still works if column order shifts (e.g. exam columns inserted).
+    // export still works if column order shifts.
     const allHeaderThs = Array.from(table.querySelectorAll('thead tr th'));
     const emailHeaderIdx = allHeaderThs.findIndex(function (th) {
       return th.querySelector('#emailAllBtn');
@@ -1479,12 +1417,6 @@ async function exportGradeSheetPdf(btn) {
     });
     const hwColIdx = headerCells.findIndex(function (th) {
       return th.hasAttribute('data-hw-col-header');
-    });
-    const examColMap = {};
-    headerCells.forEach(function (th, idx) {
-      if (!th.classList.contains('exam-score-col-header')) return;
-      const label = printableCellText(th).toUpperCase().trim();
-      if (label) examColMap[idx] = label;
     });
 
     const body = [];

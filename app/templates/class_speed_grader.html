@@ -278,7 +278,7 @@
   height: 0;
 }
 
-/* Also pin the HW % column so the "exam score bubbles" don't drift when scrolling LO columns. */
+/* Pin the HW % column so it doesn't drift when scrolling LO columns. */
 #graderTableScrollWrap {
   --student-col-width: 200px; /* fallback; set precisely via JS */
 }
@@ -292,23 +292,6 @@
 .dark #graderTable th[data-hw-col-header],
 .dark #graderTable td[data-hw-cell] {
   background: #1e293b; /* slate-800 */
-}
-
-#graderTable.grader-exam-mode th[data-hw-col-header],
-#graderTable.grader-exam-mode td[data-hw-cell] {
-  display: none !important;
-}
-/* Pin only the first exam column beside the student name; additional exam cols scroll with LOs. */
-#graderTable.grader-exam-mode th.exam-score-col-header.exam-score-col-first,
-#graderTable.grader-exam-mode td.exam-score-col-cell.exam-score-col-first {
-  position: sticky;
-  left: var(--student-col-width);
-  z-index: 12;
-  background: #ffffff;
-}
-.dark #graderTable.grader-exam-mode th.exam-score-col-header.exam-score-col-first,
-.dark #graderTable.grader-exam-mode td.exam-score-col-cell.exam-score-col-first {
-  background: #1e293b;
 }
 
 /* Keep HW bubble text (HW Pass / eligibility) on one line. */
@@ -330,7 +313,7 @@
 }
 
 /* Keep the student and HW columns compact (sized to their content / min-width),
-   and let LO + exam columns use natural widths; horizontal scroll shows extra columns. */
+   and let LO columns use natural widths; horizontal scroll shows extra columns. */
 #graderTable thead th.sticky,
 #graderTable tbody td.sticky,
 #graderTable th[data-hw-col-header],
@@ -466,7 +449,6 @@ const REVISION_M_MIN = 75;
 const examGradeEligible = {};
 const revisionEligible = {};
 let hasUnsavedChanges = false;
-let graderExamAssignmentMode = false;
 
 function markUnsavedChanges() {
   hasUnsavedChanges = true;
@@ -488,56 +470,6 @@ function hiddenHwCellForStudent(studentId) {
     return null;
   }
   return row ? row.querySelector('td[data-hw-cell] .hw-cell') : null;
-}
-
-function formatExamScoreFromHw(raw) {
-  if (raw === -1 || raw === '-1') return 'HW Pass';
-  if (raw === null || raw === undefined || raw === '') return '—';
-  const n = parseInt(String(raw), 10);
-  if (!Number.isFinite(n)) return '—';
-  return String(n);
-}
-
-function lookupStudentScoreInMap(map, sid, sidKey) {
-  if (!map || typeof map !== 'object') return undefined;
-  if (Object.prototype.hasOwnProperty.call(map, sid)) return map[sid];
-  if (sidKey && Object.prototype.hasOwnProperty.call(map, sidKey)) return map[sidKey];
-  for (const k of Object.keys(map)) {
-    if (normalizeStudentKeyForMap(k) === sidKey) return map[k];
-  }
-  return undefined;
-}
-
-function syncExamScoreDisplays(hwScores, examScoresByCol, examColumns) {
-  document.querySelectorAll('td.exam-score-col-cell').forEach(function (td) {
-    const row = td.closest('tr[data-student-row]');
-    if (!row) return;
-    const sid = String(row.getAttribute('data-student-id') || '');
-    const sidKey = normalizeStudentKeyForMap(sid);
-    const col = String(td.getAttribute('data-exam-col') || '').trim().toUpperCase();
-    const colMap = (examScoresByCol && col && examScoresByCol[col]) ? examScoresByCol[col] : {};
-    const raw = lookupStudentScoreInMap(colMap, sid, sidKey);
-    const label = formatExamScoreFromHw(raw);
-    const span = td.querySelector('.exam-score-display');
-    if (span) {
-      span.textContent = label;
-      const groupLabel = EXAM_COL_TO_HW_GROUP[col] || col || 'exam';
-      span.title = 'Homework % for ' + groupLabel + ' (read-only)';
-    }
-  });
-}
-
-/** Update read-only exam badge(s) for one student on the column matching this assignment's homework group. */
-function patchExamScoreForStudent(studentId, rawScore) {
-  const examCol = homeworkGroupToExamCol(getActiveAssignmentHwGroup());
-  if (!examCol) return;
-  const sid = String(studentId || '');
-  const sidKey = normalizeStudentKeyForMap(sid);
-  const colPatch = {};
-  colPatch[examCol] = {};
-  if (sid) colPatch[examCol][sid] = rawScore;
-  if (sidKey) colPatch[examCol][sidKey] = rawScore;
-  syncExamScoreDisplays({}, colPatch, []);
 }
 
 function syncHiddenHwCellFromScore(studentId, rawScore) {
@@ -588,29 +520,6 @@ function recomputeUnsavedState() {
   hasUnsavedChanges = gradeHistory.length > 0 || hwDirty;
 }
 
-function sortExamColumnCodes(cols) {
-  const order = { EX1: 0, EX2: 1, EX3: 2, FEX: 3 };
-  const seen = {};
-  return (Array.isArray(cols) ? cols : [])
-    .map(function (c) { return String(c || '').trim().toUpperCase(); })
-    .filter(function (c) {
-      if (!c || seen[c]) return false;
-      seen[c] = true;
-      return true;
-    })
-    .sort(function (a, b) { return (order[a] ?? 99) - (order[b] ?? 99); });
-}
-
-function assignmentHasExamColumns(assignment) {
-  return sortExamColumnCodes(assignment && assignment.enabled_exam_score_columns).length > 0;
-}
-
-function setGraderExamAssignmentMode(examMode) {
-  graderExamAssignmentMode = !!examMode;
-  const table = document.getElementById('graderTable');
-  if (table) table.classList.toggle('grader-exam-mode', graderExamAssignmentMode);
-}
-
 function getActiveAssignmentId() {
   const sel = document.getElementById('assignmentFilter');
   const v = sel ? String(sel.value || '').trim() : '';
@@ -621,28 +530,6 @@ function getActiveAssignmentHwGroup() {
   const sel = document.getElementById('assignmentFilter');
   if (!sel || sel.selectedIndex < 0) return '';
   return String(sel.options[sel.selectedIndex].getAttribute('data-group') || '').trim();
-}
-
-const HOMEWORK_GROUP_TO_EXAM_COL = {
-  Exam1: 'EX1',
-  Exam2: 'EX2',
-  Exam3: 'EX3',
-  FExam: 'FEX'
-};
-const EXAM_COL_TO_HW_GROUP = {
-  EX1: 'Exam1',
-  EX2: 'Exam2',
-  EX3: 'Exam3',
-  FEX: 'FExam'
-};
-
-function homeworkGroupToExamCol(homeworkGroup) {
-  const hg = String(homeworkGroup || '').trim();
-  if (!hg) return '';
-  if (HOMEWORK_GROUP_TO_EXAM_COL[hg]) return HOMEWORK_GROUP_TO_EXAM_COL[hg];
-  const compact = hg.replace(/[\s_\-]+/g, '');
-  const aliases = { Exam1: 'EX1', Exam2: 'EX2', Exam3: 'EX3', FExam: 'FEX' };
-  return aliases[compact] || '';
 }
 
 function populateHwScoreInputs(hwScores) {
@@ -656,13 +543,6 @@ function populateHwScoreInputs(hwScores) {
     }
     syncHiddenHwCellFromScore(sidRaw, raw);
   });
-}
-
-function buildExamScoreCellHtml(studentId, examCol) {
-  const groupLabel = EXAM_COL_TO_HW_GROUP[examCol] || examCol || 'exam';
-  return '<span class="exam-score-display inline-flex items-center justify-center min-w-[3.5rem] px-2 py-1 text-[11px] font-bold rounded-full text-white bg-violet-600/90 select-none cursor-default"'
-    + ' data-student-id="' + escapeHtml(studentId) + '" data-exam-col="' + escapeHtml(examCol) + '"'
-    + ' title="Homework % for ' + escapeHtml(groupLabel) + ' (read-only)">—</span>';
 }
 
 function hwPercentageSaveBody(studentId, score) {
@@ -1182,11 +1062,6 @@ function filterByAssignment() {
   const assignment = assignmentData.find(a => a.id === assignmentId);
   if (!assignment) return;
 
-  const examMode = assignmentHasExamColumns(assignment);
-  setGraderExamAssignmentMode(examMode);
-  const earlyExamCols = sortExamColumnCodes(assignment.enabled_exam_score_columns);
-  renderExamColumns({}, earlyExamCols, examMode);
-
   const linkedLoIds = new Set((assignment.assignment_objectives || []).map(ao => String(ao.learning_objective_id)));
   // When an assignment has no LOs explicitly linked (legacy/PDF-imported rows
   // never edited in the UI) show every class LO column so grades still surface
@@ -1249,61 +1124,12 @@ function filterByAssignment() {
       }
 
       const hwScores = coerceStudentKeyedMap(data.hw_scores || {});
-      const examScores = data.exam_scores || {};
-      const examColumns = sortExamColumnCodes(data.exam_columns);
-      renderExamColumns(examScores, examColumns, examMode);
       populateHwScoreInputs(hwScores);
-      syncExamScoreDisplays(hwScores, examScores, examColumns);
       if (window.graderTableSyncScrollMetrics) {
         window.requestAnimationFrame(window.graderTableSyncScrollMetrics);
       }
     })
     .catch(e => console.error('Error loading assignment grades:', e));
-}
-
-function renderExamColumns(examScoresByCol, examColumns, examMode) {
-  const removeList = document.querySelectorAll('th.exam-score-col-header, td.exam-score-col-cell');
-  for (let i = 0; i < removeList.length; i++) removeList[i].remove();
-
-  const headerRow = document.querySelector('#graderTable thead tr');
-  const hwHeader = document.querySelector('th[data-hw-col-header]');
-  if (!headerRow || !hwHeader) return;
-
-  const cols = sortExamColumnCodes(examColumns);
-  if (!cols.length || !examMode) return;
-
-  const headerFrag = document.createDocumentFragment();
-  for (let i = 0; i < cols.length; i++) {
-    const col = String(cols[i] || '').trim().toUpperCase();
-    const th = document.createElement('th');
-    th.className = 'exam-score-col-header px-2 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[70px]'
-      + (i === 0 ? ' exam-score-col-first' : '');
-    th.innerHTML = '<span class="block text-xs font-bold text-slate-800 dark:text-white">' + escapeHtml(col) + '</span>';
-    headerFrag.appendChild(th);
-  }
-  headerRow.insertBefore(headerFrag, hwHeader);
-
-  const rows = document.querySelectorAll('tr[data-student-row]');
-  for (let r = 0; r < rows.length; r++) {
-    const row = rows[r];
-    const sid = String(row.getAttribute('data-student-id') || '');
-    const hwCell = row.querySelector('td[data-hw-cell]');
-    if (!hwCell) continue;
-    const rowFrag = document.createDocumentFragment();
-    for (let c = 0; c < cols.length; c++) {
-      const examCol = String(cols[c] || '').trim().toUpperCase();
-      const td = document.createElement('td');
-      td.className = 'exam-score-col-cell px-3 py-3 text-center' + (c === 0 ? ' exam-score-col-first' : '');
-      td.setAttribute('data-exam-col', examCol);
-      td.innerHTML = buildExamScoreCellHtml(sid, examCol);
-      rowFrag.appendChild(td);
-    }
-    row.insertBefore(rowFrag, hwCell);
-  }
-
-  if (window.graderTableSyncScrollMetrics) {
-    window.requestAnimationFrame(window.graderTableSyncScrollMetrics);
-  }
 }
 
 // Auto-select first assignment on load
@@ -1374,7 +1200,6 @@ if (graderTableEl) {
         const data = await res.json().catch(function () { return {}; });
         if (!res.ok || !data.success) throw new Error(data.error || 'Failed');
         input.dataset.lastSaved = String(val);
-        if (graderExamAssignmentMode) patchExamScoreForStudent(studentId, val);
         recomputeUnsavedState();
       } catch (err) {
         console.error('Error saving HW %:', err);
@@ -1430,7 +1255,6 @@ if (graderTableEl) {
         inputEl.classList.add('hidden');
         inputEl.dataset.lastSaved = '-1';
         syncHiddenHwCellFromScore(studentId, -1);
-        patchExamScoreForStudent(studentId, -1);
         markUnsavedChanges();
         promoteNonCountingMasteriesInDom(studentId);
       } catch (err) {
@@ -1455,7 +1279,6 @@ if (graderTableEl) {
       const restored = String(cb.dataset.prevScore || '').trim();
       const restoredScore = restored === '' ? null : Math.max(0, Math.min(100, parseInt(restored, 10) || 0));
       syncHiddenHwCellFromScore(studentId, restoredScore == null ? '' : restoredScore);
-      patchExamScoreForStudent(studentId, restoredScore == null ? '' : restoredScore);
       markUnsavedChanges();
       if (getActiveAssignmentId()) {
         const saveScore = restored === '' ? 0 : Math.max(0, Math.min(100, parseInt(restored, 10) || 0));

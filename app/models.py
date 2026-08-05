@@ -456,44 +456,18 @@ class Homework:
     # requires real homework engagement.
     EXAM_GRADE_HW_THRESHOLD = 65
     REVISION_TO_M_HW_THRESHOLD = 75
-    ALLOWED_HOMEWORK_GROUPS = ("Exam1", "Exam2", "Exam3", "FExam")
-    EXAM_COLUMN_TO_HOMEWORK_GROUP = {
-        "EX1": "Exam1",
-        "EX2": "Exam2",
-        "EX3": "Exam3",
-        "FEX": "FExam",
-    }
-
-    @staticmethod
-    def exam_column_to_homework_group(exam_col) -> Optional[str]:
-        """Map speed-grader exam column codes to shared homework_group labels."""
-        if exam_col is None:
-            return None
-        key = re.sub(r"\s+", "", str(exam_col).strip().upper())
-        return Homework.EXAM_COLUMN_TO_HOMEWORK_GROUP.get(key)
 
     @staticmethod
     def normalize_homework_group(raw) -> Optional[str]:
-        """Map UI/import labels to one of Exam1, Exam2, Exam3, FExam."""
+        """Normalize a free-form homework/assignment-group label.
+
+        Trims and collapses internal whitespace only; any non-empty label is
+        valid (homework_group is a free-form grouping key, not a fixed list).
+        """
         if raw is None:
             return None
-        s = str(raw).strip()
-        if not s:
-            return None
-        compact = re.sub(r"[\s_\-]+", "", s).upper()
-        aliases = {
-            "EXAM1": "Exam1",
-            "EXAM2": "Exam2",
-            "EXAM3": "Exam3",
-            "FEXAM": "FExam",
-            "FINALEXAM": "FExam",
-        }
-        if compact in aliases:
-            return aliases[compact]
-        for canon in Homework.ALLOWED_HOMEWORK_GROUPS:
-            if compact == re.sub(r"[\s_\-]+", "", canon).upper():
-                return canon
-        return None
+        s = re.sub(r"\s+", " ", str(raw).strip())
+        return s or None
 
     @staticmethod
     def is_import_sheet_hw_column(name) -> bool:
@@ -520,20 +494,7 @@ class Homework:
             return True
         if re.match(r"^HW\d{1,3}$", n):
             return True
-        if Homework.normalize_homework_group(s):
-            return True
         return False
-
-    @staticmethod
-    def is_import_sheet_exam_score_column(name) -> bool:
-        """True for numeric exam-score columns from scans (not mastery LO columns).
-
-        Examples: EX1, EX2, EX3, FEX.
-        """
-        if not name or not str(name).strip():
-            return False
-        n = re.sub(r"\s+", "", str(name).strip().upper())
-        return bool(re.match(r"^EX\d{1,3}$", n) or n == "FEX")
 
     @staticmethod
     def canonicalize_import_sheet_header(name) -> str:
@@ -581,47 +542,6 @@ class Homework:
         return t
 
     @staticmethod
-    def normalize_enabled_exam_score_column_list(raw) -> List[str]:
-        """Return a de-duplicated list of allowed exam column codes from API/UI (EX1–EX3, FEX).
-
-        Accepts the shapes Supabase / PostgREST sometimes return for json/jsonb:
-        a Python ``list``, a JSON **string**, a single code string, or a **dict**
-        mapping column codes to truthy flags (legacy / hand-edited rows).
-        """
-        allowed_order = ("EX1", "EX2", "EX3", "FEX")
-        allowed = set(allowed_order)
-        items: List[Any] = []
-
-        if raw is None:
-            items = []
-        elif isinstance(raw, list):
-            items = raw
-        elif isinstance(raw, dict):
-            items = list(raw.keys())
-        elif isinstance(raw, str):
-            s = raw.strip()
-            if not s:
-                items = []
-            elif s.startswith("[") or s.startswith("{"):
-                try:
-                    parsed = json.loads(s)
-                    return Homework.normalize_enabled_exam_score_column_list(parsed)
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    items = [s]
-            else:
-                items = [s]
-        else:
-            items = [raw]
-
-        out: List[str] = []
-        for x in items:
-            u = re.sub(r"\s+", "", str(x).strip().upper())
-            if u in allowed and u not in out:
-                out.append(u)
-        order = {k: i for i, k in enumerate(allowed_order)}
-        return sorted(out, key=lambda c: order.get(c, 99))
-
-    @staticmethod
     def parse_import_hw_pct(value) -> Optional[int]:
         """Parse a homework cell to an integer 0–100, or -1 (free pass), or None if not parseable.
 
@@ -646,27 +566,6 @@ class Homework:
         return max(0, min(100, iv))
 
     @staticmethod
-    def parse_import_exam_score(value) -> Optional[float]:
-        """Parse exam score cell as a numeric score (0-100), preserving decimals."""
-        if value is None:
-            return None
-        s = str(value).strip()
-        if not s:
-            return None
-        s = s.rstrip("%").strip()
-        if not re.match(r"^-?\d+(\.\d+)?$", s):
-            return None
-        try:
-            v = float(s)
-        except ValueError:
-            return None
-        if v < 0:
-            v = 0.0
-        if v > 100:
-            v = 100.0
-        return round(v, 2)
-
-    @staticmethod
     def is_exam_grade_eligible_hw_score(score):
         """True if the student may receive in-class exam marks for this HW row."""
         if score is None:
@@ -681,6 +580,46 @@ class Homework:
         if score is None or score == -1:
             return False
         return score >= Homework.REVISION_TO_M_HW_THRESHOLD
+
+    @staticmethod
+    def canonicalize_homework_group_for_class(class_id, raw):
+        """Normalize a homework_group label, reusing an existing label's exact
+        casing for this class if one already matches case-insensitively.
+
+        homework_group is free-form text, but assignments only share one HW %
+        per student when their `homework_group` values are byte-identical
+        (see resolve_hw_group_storage_key / get_hw_scores_map_for_homework_group).
+        Without this, typing "Quiz 1" for one assignment and "quiz 1" for
+        another would silently create two separate HW groups even though the
+        instructor meant the same one. Returns None if `raw` normalizes to
+        nothing.
+        """
+        candidate = Homework.normalize_homework_group(raw)
+        if not candidate:
+            return None
+        class_id = str(class_id or "").strip()
+        if not class_id:
+            return candidate
+        try:
+            resp = (
+                supabase_admin.table("assignments")
+                .select("homework_group")
+                .eq("class_id", class_id)
+                .execute()
+            )
+        except Exception as e:
+            logger.error(
+                "Error looking up existing homework groups for class %s: %s",
+                class_id,
+                e,
+            )
+            return candidate
+        target = candidate.lower()
+        for row in resp.data or []:
+            existing = Homework.normalize_homework_group(row.get("homework_group"))
+            if existing and existing.lower() == target:
+                return existing
+        return candidate
 
     @staticmethod
     def resolve_hw_group_storage_key(class_id, assignment_id):
@@ -717,7 +656,7 @@ class Homework:
 
     @staticmethod
     def get_hw_scores_map_for_homework_group(class_id, homework_group):
-        """Return {student_id: score_pct} for a canonical homework group (Exam1, …)."""
+        """Return {student_id: score_pct} for a normalized homework_group label."""
         class_id = str(class_id or "").strip()
         hg = Homework.normalize_homework_group(homework_group) or str(
             homework_group or ""

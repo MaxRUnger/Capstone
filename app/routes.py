@@ -322,100 +322,6 @@ def _allowed_grade_upload_signature(file_bytes: bytes, filename: str) -> bool:
     return False
 
 
-def _load_assignment_enabled_exam_score_columns(class_id: str, assignment_id: str) -> List[str]:
-    """Exam columns (EX1, EX2, EX3, FEX) enabled on this assignment for empty-column UI.
-
-    `enabled_exam_score_columns` was added in a later schema migration. On
-    deployments that haven't run it yet the column is missing entirely; we
-    detect that via PostgREST error markers (`PGRST204`, "schema cache") and
-    fall back to an empty list rather than 500-ing the whole page.
-    """
-    cache = _request_cache() if "_request_cache" in globals() else None
-    ck = ("_load_assignment_enabled_exam_score_columns", str(class_id), str(assignment_id))
-    if cache is not None and ck in cache:
-        return cache[ck]
-    val: List[str] = []
-    try:
-        r = (
-            supabase_admin.table("assignments")
-            .select("enabled_exam_score_columns")
-            .eq("id", assignment_id)
-            .eq("class_id", class_id)
-            .limit(1)
-            .execute()
-        )
-        if r.data:
-            raw = r.data[0].get("enabled_exam_score_columns")
-            if raw is not None:
-                # Do not gate on isinstance(list, …): jsonb may arrive as a
-                # JSON string or dict; normalize handles all supported shapes.
-                val = Homework.normalize_enabled_exam_score_column_list(raw)
-    except Exception as e:
-        err = str(e).lower()
-        if "enabled_exam_score_columns" in str(e) or "pgrst204" in err or "schema cache" in err:
-            val = []
-        else:
-            logger.error(
-                "Error loading enabled_exam_score_columns for assignment %s: %s",
-                assignment_id,
-                e,
-            )
-            val = []
-    if cache is not None:
-        cache[ck] = val
-    return val
-
-
-def _assignments_insert_compat(row: Dict[str, Any]):
-    """Insert assignment; omit enabled_exam_score_columns if the column is not deployed yet."""
-    try:
-        return supabase_admin.table("assignments").insert(row).execute()
-    except Exception as e:
-        if "enabled_exam_score_columns" in row and (
-            "enabled_exam_score_columns" in str(e)
-            or "PGRST204" in str(e)
-            or "schema cache" in str(e).lower()
-        ):
-            row2 = {k: v for k, v in row.items() if k != "enabled_exam_score_columns"}
-            logger.warning(
-                "assignments insert without enabled_exam_score_columns (run scripts/add_assignments_enabled_exam_score_columns.sql): %s",
-                e,
-            )
-            return supabase_admin.table("assignments").insert(row2).execute()
-        raise
-
-
-def _assignments_update_compat(assignment_id: str, class_id: str, fields: Dict[str, Any]):
-    """Update assignment row; omit enabled_exam_score_columns if the column is missing."""
-    try:
-        return (
-            supabase_admin.table("assignments")
-            .update(fields)
-            .eq("id", assignment_id)
-            .eq("class_id", class_id)
-            .execute()
-        )
-    except Exception as e:
-        if "enabled_exam_score_columns" in fields and (
-            "enabled_exam_score_columns" in str(e)
-            or "PGRST204" in str(e)
-            or "schema cache" in str(e).lower()
-        ):
-            fields2 = {k: v for k, v in fields.items() if k != "enabled_exam_score_columns"}
-            logger.warning(
-                "assignments update without enabled_exam_score_columns (run scripts/add_assignments_enabled_exam_score_columns.sql): %s",
-                e,
-            )
-            return (
-                supabase_admin.table("assignments")
-                .update(fields2)
-                .eq("id", assignment_id)
-                .eq("class_id", class_id)
-                .execute()
-            )
-        raise
-
-
 def _request_cache() -> Dict[str, Any]:
     """Per-request memoization bucket. Safe outside request context (returns module dict).
 
@@ -440,37 +346,6 @@ def _request_cache() -> Dict[str, Any]:
         except NameError:
             _no_request_cache = {}  # type: ignore[assignment]
         return _no_request_cache  # type: ignore[name-defined,return-value]
-
-
-def _exam_storage_keys_for_class(class_id: str) -> Dict[str, set]:
-    """Return exam column -> homework_scores storage keys for this class."""
-    cache = _request_cache()
-    ck = ("_exam_storage_keys_for_class", str(class_id))
-    if ck in cache:
-        return cache[ck]
-    out: Dict[str, set] = {}
-    try:
-        asg_resp = (
-            supabase_admin.table("assignments")
-            .select("id, name, homework_group")
-            .eq("class_id", class_id)
-            .execute()
-        )
-        for a in (asg_resp.data or []):
-            aid = a.get("id")
-            if not aid:
-                continue
-            name_u = str(a.get("name") or "").strip().upper()
-            hg_raw = str(a.get("homework_group") or "").strip()
-            hg_u = hg_raw.upper()
-            storage_key = hg_raw if hg_raw else str(aid)
-            for candidate in (hg_u, name_u):
-                if candidate and Homework.is_import_sheet_exam_score_column(candidate):
-                    out.setdefault(candidate, set()).add(storage_key)
-    except Exception as e:
-        logger.error("Error building exam storage keys for class %s: %s", class_id, e)
-    cache[ck] = out
-    return out
 
 
 def _class_auto_convert_m_enabled(class_id: str) -> bool:
@@ -1179,19 +1054,10 @@ def _process_enrollments(class_data):
     return active_students, all_students, lo_lookup
 
 
-# Two projection variants for assignments. The wide select is preferred; the
-# fallback drops `enabled_exam_score_columns` for deployments that haven't run
-# `scripts/add_assignments_enabled_exam_score_columns.sql`. We deliberately
-# enumerate columns instead of `select("*")` so adding new columns later
-# doesn't accidentally widen the payload for every page that loads
-# assignments.
-_ASSIGNMENT_BASE_COLS = (
-    "id, class_id, name, homework_group, date_returned, revision_due, "
-    "enabled_exam_score_columns, created_at, "
-    "assignment_objectives(learning_objective_id, "
-    "learning_objectives(id, vendor_code, description))"
-)
-_ASSIGNMENT_FALLBACK_COLS = (
+# We deliberately enumerate columns instead of `select("*")` so adding new
+# columns later doesn't accidentally widen the payload for every page that
+# loads assignments.
+_ASSIGNMENT_COLS = (
     "id, class_id, name, homework_group, date_returned, revision_due, created_at, "
     "assignment_objectives(learning_objective_id, "
     "learning_objectives(id, vendor_code, description))"
@@ -1202,32 +1068,19 @@ def load_assignments_for_class(class_id, desc=False):
     """Load assignments with linked LOs for a class.
 
     Centralizes the repeated assignment query used by multiple route handlers and
-    selects only the columns templates/APIs read. Falls back if ``enabled_exam_score_columns``
-    is not yet present in the deployed schema.
+    selects only the columns templates/APIs read.
 
     Returns:
         list of assignment dicts (empty list on error).
     """
     try:
         assignments_result = supabase_admin.table("assignments") \
-            .select(_ASSIGNMENT_BASE_COLS) \
+            .select(_ASSIGNMENT_COLS) \
             .eq("class_id", class_id) \
             .order("created_at", desc=desc) \
             .execute()
         return assignments_result.data or []
     except Exception as e:
-        msg = str(e)
-        if "enabled_exam_score_columns" in msg or "PGRST204" in msg or "schema cache" in msg.lower():
-            try:
-                assignments_result = supabase_admin.table("assignments") \
-                    .select(_ASSIGNMENT_FALLBACK_COLS) \
-                    .eq("class_id", class_id) \
-                    .order("created_at", desc=desc) \
-                    .execute()
-                return assignments_result.data or []
-            except Exception as inner:
-                logger.error("Error loading assignments fallback for class %s: %s", class_id, inner)
-                return []
         logger.error("Error loading assignments for class %s: %s", class_id, e)
         return []
 
@@ -1885,28 +1738,23 @@ def create_assignment(class_id):
 
     # Validate required fields
     name = (data.get('name') or '').strip()
-    homework_group = Homework.normalize_homework_group(data.get('homework_group'))
+    homework_group = Homework.canonicalize_homework_group_for_class(class_id, data.get('homework_group'))
 
     if not name or not homework_group:
         return jsonify({
             "success": False,
-            "error": "Missing or invalid required fields (name, homework_group). Use Exam1, Exam2, Exam3, or FExam.",
+            "error": "Missing or invalid required fields (name, homework_group).",
         }), 400
-
-    enabled_exam_cols = Homework.normalize_enabled_exam_score_column_list(
-        data.get("enabled_exam_score_columns") or data.get("exam_score_columns") or []
-    )
 
     try:
         # Create new assignment
-        result = _assignments_insert_compat({
+        result = supabase_admin.table("assignments").insert({
             "class_id": class_id,
             "name": name,
             "homework_group": homework_group,
             "date_returned": data.get('date_returned'),
             "revision_due": data.get('revision_due'),
-            "enabled_exam_score_columns": enabled_exam_cols,
-        })
+        }).execute()
         
         # Link selected LOs to this assignment (batch insert)
         if result.data:
@@ -1931,25 +1779,11 @@ def update_assignment(class_id, assignment_id):
         return jsonify({"success": False, "error": "Invalid assignment for class"}), 400
 
     data = request.get_json() or {}
-    has_exam_payload = (
-        "enabled_exam_score_columns" in data
-        or "exam_score_columns" in data
-    )
-    if has_exam_payload:
-        enabled_raw = data.get("enabled_exam_score_columns")
-        if enabled_raw is None:
-            enabled_raw = data.get("exam_score_columns")
-        if not isinstance(enabled_raw, list):
-            enabled_raw = []
-        enabled_exam_cols = Homework.normalize_enabled_exam_score_column_list(enabled_raw)
-    else:
-        enabled_exam_cols = None
-
-    homework_group = Homework.normalize_homework_group(data.get('homework_group'))
+    homework_group = Homework.canonicalize_homework_group_for_class(class_id, data.get('homework_group'))
     if not (data.get('name') or '').strip() or not homework_group:
         return jsonify({
             "success": False,
-            "error": "Missing or invalid required fields (name, homework_group). Use Exam1, Exam2, Exam3, or FExam.",
+            "error": "Missing or invalid required fields (name, homework_group).",
         }), 400
 
     update_fields = {
@@ -1958,12 +1792,12 @@ def update_assignment(class_id, assignment_id):
         "date_returned": data.get('date_returned'),
         "revision_due": data.get('revision_due'),
     }
-    if enabled_exam_cols is not None:
-        update_fields["enabled_exam_score_columns"] = enabled_exam_cols
 
     try:
         # Update assignment
-        _assignments_update_compat(assignment_id, class_id, update_fields)
+        supabase_admin.table("assignments").update(update_fields).eq(
+            "id", assignment_id
+        ).eq("class_id", class_id).execute()
         
         # Update linked LOs — delete existing, batch insert new
         supabase_admin.table("assignment_objectives").delete().eq("assignment_id", assignment_id).execute()
@@ -3339,30 +3173,6 @@ def api_assignment_grades(class_id, assignment_id):
         # HW % is shared by all assignments in the same homework_group (see Homework.get_hw_scores_map_for_assignment)
         hw_map = Homework.get_hw_scores_map_for_assignment(class_id, assignment_id)
 
-        def _exam_col_sort_key(col: str):
-            m = re.match(r"^EX(\d+)$", str(col).upper())
-            if m:
-                return (0, int(m.group(1)))
-            if str(col).upper() == "FEX":
-                return (1, 0)
-            return (2, str(col))
-
-        enabled_on_assignment = _load_assignment_enabled_exam_score_columns(
-            class_id, assignment_id
-        )
-        # IMPORTANT: Speed Grader should only show exam columns explicitly enabled
-        # on the currently selected assignment (not every class-level exam key).
-        exam_columns = sorted(set(enabled_on_assignment), key=_exam_col_sort_key)
-        exam_scores: Dict[str, Dict[str, Any]] = {}
-        for col in exam_columns:
-            hg = Homework.exam_column_to_homework_group(col)
-            if hg:
-                exam_scores[col] = Homework.get_hw_scores_map_for_homework_group(
-                    class_id, hg
-                )
-            else:
-                exam_scores[col] = {}
-
         # Compute revision eligibility per student (HW >= 65% or pass used)
         eligibility = {}
         for sid, score in hw_map.items():
@@ -3375,8 +3185,6 @@ def api_assignment_grades(class_id, assignment_id):
             "grades": grades_map,
             "counts_for_mastery_map": counts_for_mastery_map,
             "hw_scores": hw_map,
-            "exam_scores": exam_scores,
-            "exam_columns": exam_columns,
             "revision_eligible": eligibility,
         })
     except Exception as e:
@@ -3491,55 +3299,6 @@ def save_hw_percentage(class_id):
     except Exception as e:
         logger.error("saving hw percentage failed: %s", e)
         return _safe_api_error("Could not save homework score", 500, log_detail=e)
-
-
-@main_bp.route("/api/class/<class_id>/save-exam-score", methods=["POST"])
-@api_login_required
-def save_exam_score(class_id):
-    try:
-        if not _instructor_owns_class(class_id):
-            return jsonify({"success": False, "error": "Forbidden"}), 403
-        data = request.get_json() or {}
-        student_id = data.get("student_id")
-        exam_col = str(data.get("exam_col") or "").strip().upper()
-        score = data.get("score")
-        if not student_id or not exam_col:
-            return jsonify({"success": False, "error": "student_id and exam_col required"}), 400
-        if not _student_enrolled_in_class(class_id, str(student_id)):
-            return jsonify({"success": False, "error": "Student is not enrolled in this class"}), 403
-        if not Homework.is_import_sheet_exam_score_column(exam_col):
-            return jsonify({"success": False, "error": "Invalid exam column"}), 400
-
-        parsed = Homework.parse_import_exam_score(score)
-        # Empty clears exam score row(s) for this student+column.
-        is_clear = parsed is None and str(score if score is not None else "").strip() == ""
-
-        keys = set(_exam_storage_keys_for_class(class_id).get(exam_col, set()))
-        keys.add(f"EXAM::{exam_col}")
-        if not keys:
-            return jsonify({"success": False, "error": "No storage keys found for exam column"}), 400
-
-        if is_clear:
-            for k in keys:
-                supabase_admin.table("homework_scores").delete().eq("student_id", student_id).eq("class_id", class_id).eq("homework_group", k).execute()
-            return jsonify({"success": True})
-
-        if parsed is None:
-            return jsonify({"success": False, "error": "Score must be numeric 0-100"}), 400
-
-        rows = [{
-            "student_id": student_id,
-            "class_id": class_id,
-            "homework_group": k,
-            "score_pct": parsed,
-        } for k in keys]
-        supabase_admin.table("homework_scores").upsert(
-            rows, on_conflict="student_id,class_id,homework_group"
-        ).execute()
-        return jsonify({"success": True})
-    except Exception as e:
-        logger.error("saving exam score failed: %s", e)
-        return _safe_api_error("Could not save exam score", 500, log_detail=e)
 
 
 @main_bp.route("/api/class/<class_id>/use_pass", methods=["POST"])
@@ -4211,11 +3970,10 @@ def api_import_grades():
     if len(students) > MAX_IMPORT_ROWS:
         return jsonify({"success": False, "error": f"Too many students in one import (max {MAX_IMPORT_ROWS})"}), 400
 
-    # Keep import-only numeric columns (e.g., EX1/FEX) out of mastery LO creation/linking.
+    # Keep import-only HW % columns out of mastery LO creation/linking.
     extracted_los = [
         lo for lo in extracted_los
         if not Homework.is_import_sheet_hw_column(lo)
-        and not Homework.is_import_sheet_exam_score_column(lo)
     ]
 
     # Load existing LOs for the class (map by code and optional description text)
@@ -4253,8 +4011,6 @@ def api_import_grades():
     imported = 0
     grade_rows = []
     hw_rows = []
-    exam_score_rows = []
-    exam_storage_keys_by_col = _exam_storage_keys_for_class(class_id)
     hw_storage_key = (
         Homework.resolve_hw_group_storage_key(class_id, assignment_id)
         if assignment_id
@@ -4413,7 +4169,6 @@ def api_import_grades():
 
         # Build grade rows to batch-upsert later
         grades = student.get('grades', {}) or {}
-        exam_scores = student.get('exam_scores', {}) or {}
         parsed_hw = Homework.parse_import_hw_pct(student.get("homework_pct"))
         if assignment_id and hw_storage_key and parsed_hw is not None:
             hw_rows.append(
@@ -4443,27 +4198,6 @@ def api_import_grades():
                 "assignment_id": assignment_id,
                 "last_modified_by": session['user_id'],
             })
-
-        for exam_col, raw_score in exam_scores.items():
-            if not exam_col:
-                continue
-            exam_col_norm = str(exam_col).strip().upper()
-            if not Homework.is_import_sheet_exam_score_column(exam_col_norm):
-                continue
-            parsed_exam = Homework.parse_import_exam_score(raw_score)
-            if parsed_exam is None:
-                continue
-            storage_keys = set(exam_storage_keys_by_col.get(exam_col_norm, set()))
-            # Keep namespaced fallback so raw exam imports remain recoverable even if
-            # no assignment key currently matches this exam column.
-            storage_keys.add(f"EXAM::{exam_col_norm}")
-            for exam_group_key in storage_keys:
-                exam_score_rows.append({
-                    "student_id": profile_id,
-                    "class_id": class_id,
-                    "homework_group": exam_group_key,
-                    "score_pct": parsed_exam,
-                })
 
         imported += 1
 
@@ -4500,7 +4234,7 @@ def api_import_grades():
     except Exception as e:
         logger.error("Error processing grades in bulk: %s", e)
 
-    # Persist exam-score numeric columns in homework_scores using namespaced group keys.
+    # Persist homework % scores in homework_scores.
     try:
         if hw_rows:
             chunk_size = 150
@@ -4510,25 +4244,14 @@ def api_import_grades():
                     chunk, on_conflict="student_id,class_id,homework_group"
                 ).execute()
             logger.info("Upserted %d homework %% scores from import", len(hw_rows))
-
-        chunk_size = 150
-        for i in range(0, len(exam_score_rows), chunk_size):
-            chunk = exam_score_rows[i:i + chunk_size]
-            if not chunk:
-                continue
-            supabase_admin.table("homework_scores").upsert(
-                chunk, on_conflict="student_id,class_id,homework_group"
-            ).execute()
-            logger.info("Upserted %d exam numeric scores", len(chunk))
     except Exception as e:
-        logger.error("Error processing exam numeric scores in bulk: %s", e)
+        logger.error("Error processing homework scores in bulk: %s", e)
 
     return jsonify({
         "success": True,
         "imported_students": imported,
         "imported_grades": len(grade_rows),
         "imported_hw_scores": len(hw_rows),
-        "imported_exam_scores": len(exam_score_rows),
     }), 200
 
 
@@ -4600,7 +4323,6 @@ def analyze_grade_pdf():
             "data": {
                 "students": extracted_data.get('students', []),
                 "learning_objectives": extracted_data.get('learning_objectives', []),
-                "exam_score_columns": extracted_data.get('exam_score_columns', []),
                 "raw_text": extracted_data.get('raw_text', ''),
                 "extraction_path": extracted_data.get('extraction_path', 'vision'),
             }

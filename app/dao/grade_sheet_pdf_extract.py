@@ -49,7 +49,7 @@ def _looks_like_name_cell(s: str) -> bool:
 
 
 def _header_tokens_reasonable(headers: List[str]) -> bool:
-    """At least one column looks like HW, exam, LO code, or generic text header."""
+    """At least one column looks like HW, LO code, or generic text header."""
     if not headers:
         return False
     hits = 0
@@ -60,13 +60,9 @@ def _header_tokens_reasonable(headers: List[str]) -> bool:
         c = Homework.canonicalize_import_sheet_header(raw)
         if Homework.is_import_sheet_hw_column(raw) or Homework.is_import_sheet_hw_column(c):
             hits += 1
-        elif Homework.is_import_sheet_exam_score_column(
-            raw
-        ) or Homework.is_import_sheet_exam_score_column(c):
-            hits += 1
         else:
             ch = re.sub(r"\s+", "", (c or raw).upper())
-            if re.match(r"^(LO|EX|FEX)", ch):
+            if re.match(r"^LO", ch):
                 hits += 1
             elif re.match(r"^[A-Z]{1,4}\d{1,4}$", ch):
                 hits += 1
