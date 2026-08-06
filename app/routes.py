@@ -1830,6 +1830,15 @@ def delete_assignment(class_id, assignment_id):
         if not owner_check.data:
             return jsonify({"success": False, "error": "Not found"}), 404
 
+        # Audit-log grades that will be removed by ON DELETE CASCADE on assignments.
+        try:
+            existing = supabase_admin.table("grades").select(
+                "student_id, learning_objective_id, assignment_id, top_score, second_score, counts_for_mastery"
+            ).eq("assignment_id", assignment_id).execute()
+            _log_grade_deletions(existing.data or [], class_id, session['user_id'])
+        except Exception as e:
+            logger.warning("Could not audit-log grade deletions for assignment %s: %s", assignment_id, e)
+
         # First delete assignment_objectives links
         supabase_admin.table("assignment_objectives").delete().eq("assignment_id", assignment_id).execute()
         # Then delete the assignment, scoped by class_id so a leaked id can't cross classes.
