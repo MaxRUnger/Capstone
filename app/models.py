@@ -29,6 +29,12 @@ logger = logging.getLogger(__name__)
 #   it is restored to "M" automatically once HW rises (see routes.save_hw_percentage).
 MASTERY_GRADES = ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A', 'I')
 
+# Assignment type labels stored on assignments.assignment_type.
+# 'mastery_opp' and 'exam' use the existing per-LO required_ms path;
+# only 'project' uses required_total_masteries + get_project_mastery_progress.
+ASSIGNMENT_TYPES = ('mastery_opp', 'exam', 'project')
+ASSIGNMENT_TYPE_PROJECT = 'project'
+
 
 class Course:
     @staticmethod
@@ -175,6 +181,143 @@ class Course:
         except Exception as e:
             logger.error("Database error in get_full_class_data: %s", e, exc_info=True)
             return None
+
+    @staticmethod
+    def get_assignment_lo_ids(assignment_id):
+        """Return learning_objective_id strings linked via assignment_objectives.
+
+        Model-layer equivalent of routes._assignment_lo_ids (no request cache).
+        """
+        if not assignment_id:
+            return []
+        try:
+            ao_resp = (
+                supabase_admin.table("assignment_objectives")
+                .select("learning_objective_id")
+                .eq("assignment_id", assignment_id)
+                .execute()
+            )
+            return [
+                str(r["learning_objective_id"])
+                for r in (ao_resp.data or [])
+                if r.get("learning_objective_id")
+            ]
+        except Exception as e:
+            logger.error(
+                "get_assignment_lo_ids: failed for assignment %s: %s",
+                assignment_id, e,
+            )
+            return []
+
+    @staticmethod
+    def get_project_mastery_progress(student_id, assignment_id):
+        """Return project-pool mastery progress for one student + assignment.
+
+        Only meaningful when ``assignment_type = 'project'``. Sums that student's
+        counted M/MR grades (``Grade.is_mastery_mark`` and
+        ``counts_for_mastery is not False``; missing flag → counts) across every
+        learning objective linked via ``assignment_objectives``, across any
+        assignment — matching how per-LO mastery already accumulates
+        cross-assignment today — then compares the sum to
+        ``required_total_masteries``.
+
+        Returns:
+            None if the assignment is missing or not a project.
+            dict with keys:
+              - mastery_count (int)
+              - required_total_masteries (int; None coerced to 0)
+              - is_complete (bool)
+              - progress_label (str, e.g. ``"3 of 5"``)
+        """
+        if not student_id or not assignment_id:
+            return None
+        try:
+            asg_resp = (
+                supabase_admin.table("assignments")
+                .select("id, assignment_type, required_total_masteries")
+                .eq("id", assignment_id)
+                .limit(1)
+                .execute()
+            )
+            assignment = (asg_resp.data or [None])[0]
+        except Exception as e:
+            logger.error(
+                "get_project_mastery_progress: failed to load assignment %s: %s",
+                assignment_id, e,
+            )
+            return None
+
+        if not assignment:
+            return None
+        if (assignment.get("assignment_type") or "mastery_opp") != ASSIGNMENT_TYPE_PROJECT:
+            return None
+
+        required = assignment.get("required_total_masteries")
+        try:
+            required_n = int(required) if required is not None else 0
+        except (TypeError, ValueError):
+            required_n = 0
+        if required_n < 0:
+            required_n = 0
+
+        lo_ids = Course.get_assignment_lo_ids(assignment_id)
+
+        mastery_count = 0
+        if lo_ids:
+            try:
+                try:
+                    grades_resp = (
+                        supabase_admin.table("grades")
+                        .select(
+                            "learning_objective_id, top_score, counts_for_mastery, assignment_id"
+                        )
+                        .eq("student_id", student_id)
+                        .in_("learning_objective_id", lo_ids)
+                        .execute()
+                    )
+                except Exception as schema_err:
+                    # Deployments that have not run counts_for_mastery migration.
+                    logger.debug(
+                        "get_project_mastery_progress: wide grades select failed; falling back: %s",
+                        schema_err,
+                    )
+                    grades_resp = (
+                        supabase_admin.table("grades")
+                        .select("learning_objective_id, top_score, assignment_id")
+                        .eq("student_id", student_id)
+                        .in_("learning_objective_id", lo_ids)
+                        .execute()
+                    )
+                mastery_count = Course._count_counted_masteries(grades_resp.data or [])
+            except Exception as e:
+                logger.error(
+                    "get_project_mastery_progress: failed to load grades for student %s: %s",
+                    student_id, e,
+                )
+                mastery_count = 0
+
+        return {
+            "mastery_count": mastery_count,
+            "required_total_masteries": required_n,
+            "is_complete": mastery_count >= required_n,
+            "progress_label": f"{mastery_count} of {required_n}",
+        }
+
+    @staticmethod
+    def _count_counted_masteries(grades):
+        """Count M/MR rows that count toward mastery.
+
+        Same rule as _aggregate_lo_grades / routes free-pass promotion:
+        ``Grade.is_mastery_mark(top)`` and ``counts_for_mastery is not False``
+        (missing/None → counts, matching legacy rows).
+        """
+        count = 0
+        for g in grades or []:
+            if not Grade.is_mastery_mark(g.get("top_score")):
+                continue
+            if g.get("counts_for_mastery") is not False:
+                count += 1
+        return count
 
 
 class Grade:

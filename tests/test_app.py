@@ -21,7 +21,13 @@ sys.modules.setdefault('app.authentication', MagicMock(
     supabase_admin=_mock_supabase_admin,
 ))
 
-from app.models import Grade, Homework, MASTERY_GRADES
+from app.models import (
+    Course,
+    Grade,
+    Homework,
+    MASTERY_GRADES,
+    ASSIGNMENT_TYPE_PROJECT,
+)
 from app.routes import (
     organize_by_learning_objectives,
     normalize_profile,
@@ -755,6 +761,171 @@ class TestHwPassPromotesNonCountingMasteries(unittest.TestCase):
         self.assertEqual(body.get("promoted_masteries"), 1)
         self.assertEqual(len(captured_upserts), 1)
         self.assertTrue(captured_upserts[0].get("counts_for_mastery"))
+
+
+# ==========================================================================
+# Project mastery progress (assignment_type = 'project')
+# ==========================================================================
+
+class TestProjectMasteryProgress(unittest.TestCase):
+    """Course.get_project_mastery_progress — pooled M/MR across linked LOs."""
+
+    def _patch_supabase(self, assignment, ao_rows, grade_rows):
+        """Return a context manager that mocks the three table queries."""
+        def table_side_effect(name):
+            m = MagicMock()
+            if name == "assignments":
+                m.select.return_value.eq.return_value.limit.return_value.execute.return_value = (
+                    MagicMock(data=[assignment] if assignment else [])
+                )
+            elif name == "assignment_objectives":
+                m.select.return_value.eq.return_value.execute.return_value = (
+                    MagicMock(data=ao_rows)
+                )
+            elif name == "grades":
+                m.select.return_value.eq.return_value.in_.return_value.execute.return_value = (
+                    MagicMock(data=grade_rows)
+                )
+            else:
+                m.select.return_value.execute.return_value = MagicMock(data=[])
+            return m
+
+        sa = MagicMock()
+        sa.table.side_effect = table_side_effect
+        return unittest.mock.patch("app.models.supabase_admin", sa)
+
+    def test_student_meets_project_threshold(self):
+        assignment = {
+            "id": "proj-1",
+            "assignment_type": "project",
+            "required_total_masteries": 5,
+        }
+        ao_rows = [
+            {"learning_objective_id": "lo-a"},
+            {"learning_objective_id": "lo-b"},
+        ]
+        grade_rows = [
+            {"learning_objective_id": "lo-a", "top_score": "M", "counts_for_mastery": True},
+            {"learning_objective_id": "lo-a", "top_score": "MR", "counts_for_mastery": True},
+            {"learning_objective_id": "lo-b", "top_score": "M", "counts_for_mastery": True},
+            {"learning_objective_id": "lo-b", "top_score": "M", "counts_for_mastery": True},
+            {"learning_objective_id": "lo-b", "top_score": "M", "counts_for_mastery": True},
+        ]
+        with self._patch_supabase(assignment, ao_rows, grade_rows):
+            result = Course.get_project_mastery_progress("stu-1", "proj-1")
+        self.assertIsNotNone(result)
+        self.assertEqual(result["mastery_count"], 5)
+        self.assertEqual(result["required_total_masteries"], 5)
+        self.assertTrue(result["is_complete"])
+        self.assertEqual(result["progress_label"], "5 of 5")
+
+    def test_student_below_project_threshold(self):
+        assignment = {
+            "id": "proj-1",
+            "assignment_type": "project",
+            "required_total_masteries": 5,
+        }
+        ao_rows = [{"learning_objective_id": "lo-a"}]
+        grade_rows = [
+            {"learning_objective_id": "lo-a", "top_score": "M", "counts_for_mastery": True},
+            {"learning_objective_id": "lo-a", "top_score": "MR", "counts_for_mastery": True},
+            {"learning_objective_id": "lo-a", "top_score": "R", "counts_for_mastery": True},
+        ]
+        with self._patch_supabase(assignment, ao_rows, grade_rows):
+            result = Course.get_project_mastery_progress("stu-1", "proj-1")
+        self.assertEqual(result["mastery_count"], 2)
+        self.assertEqual(result["required_total_masteries"], 5)
+        self.assertFalse(result["is_complete"])
+        self.assertEqual(result["progress_label"], "2 of 5")
+
+    def test_grades_spread_across_multiple_linked_los(self):
+        """Masteries on different linked LOs (and any assignment) all pool together."""
+        assignment = {
+            "id": "proj-1",
+            "assignment_type": "project",
+            "required_total_masteries": 4,
+        }
+        ao_rows = [
+            {"learning_objective_id": "lo-a"},
+            {"learning_objective_id": "lo-b"},
+            {"learning_objective_id": "lo-c"},
+        ]
+        grade_rows = [
+            {"learning_objective_id": "lo-a", "top_score": "M",
+             "assignment_id": "asg-other", "counts_for_mastery": True},
+            {"learning_objective_id": "lo-b", "top_score": "MR",
+             "assignment_id": "asg-2", "counts_for_mastery": True},
+            {"learning_objective_id": "lo-c", "top_score": "M",
+             "assignment_id": "proj-1", "counts_for_mastery": True},
+            {"learning_objective_id": "lo-c", "top_score": "M",
+             "assignment_id": "asg-3", "counts_for_mastery": True},
+        ]
+        with self._patch_supabase(assignment, ao_rows, grade_rows):
+            result = Course.get_project_mastery_progress("stu-1", "proj-1")
+        self.assertEqual(result["mastery_count"], 4)
+        self.assertTrue(result["is_complete"])
+        self.assertEqual(result["progress_label"], "4 of 4")
+
+    def test_non_counting_masteries_excluded(self):
+        assignment = {
+            "id": "proj-1",
+            "assignment_type": "project",
+            "required_total_masteries": 2,
+        }
+        ao_rows = [{"learning_objective_id": "lo-a"}]
+        grade_rows = [
+            {"learning_objective_id": "lo-a", "top_score": "M", "counts_for_mastery": True},
+            {"learning_objective_id": "lo-a", "top_score": "M", "counts_for_mastery": False},
+            {"learning_objective_id": "lo-a", "top_score": "MR", "counts_for_mastery": False},
+        ]
+        with self._patch_supabase(assignment, ao_rows, grade_rows):
+            result = Course.get_project_mastery_progress("stu-1", "proj-1")
+        self.assertEqual(result["mastery_count"], 1)
+        self.assertFalse(result["is_complete"])
+
+    def test_mastery_opp_assignment_returns_none(self):
+        assignment = {
+            "id": "asg-1",
+            "assignment_type": "mastery_opp",
+            "required_total_masteries": 5,
+        }
+        with self._patch_supabase(assignment, [{"learning_objective_id": "lo-a"}], [
+            {"learning_objective_id": "lo-a", "top_score": "M", "counts_for_mastery": True},
+        ]):
+            self.assertIsNone(Course.get_project_mastery_progress("stu-1", "asg-1"))
+
+    def test_exam_assignment_returns_none(self):
+        assignment = {
+            "id": "exam-1",
+            "assignment_type": "exam",
+            "required_total_masteries": None,
+        }
+        with self._patch_supabase(assignment, [], []):
+            self.assertIsNone(Course.get_project_mastery_progress("stu-1", "exam-1"))
+
+    def test_count_counted_masteries_helper_matches_aggregate_rule(self):
+        """Pure helper: None/missing counts_for_mastery defaults to counting."""
+        grades = [
+            {"top_score": "M"},  # missing flag → counts
+            {"top_score": "MR", "counts_for_mastery": None},
+            {"top_score": "M", "counts_for_mastery": False},
+            {"top_score": "R", "counts_for_mastery": True},
+            {"top_score": "I", "counts_for_mastery": True},
+        ]
+        self.assertEqual(Course._count_counted_masteries(grades), 2)
+
+    def test_aggregate_lo_grades_still_per_lo_for_existing_types(self):
+        """Sanity: per-LO required_ms path is unchanged by project feature."""
+        lo_lookup = {
+            "1": {"id": "1", "name": "LO", "vendor_code": "L1", "required_ms": 2},
+        }
+        raw = [
+            {"learning_objective_id": "1", "top_score": "M", "counts_for_mastery": True},
+            {"learning_objective_id": "1", "top_score": "MR", "counts_for_mastery": True},
+        ]
+        out = _aggregate_lo_grades(raw, lo_lookup)
+        self.assertEqual(out[0]["m_count"], 2)
+        self.assertTrue(out[0]["is_passed"])
 
 
 if __name__ == '__main__':
