@@ -526,7 +526,7 @@
       </div>
       <div>
         <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-1.5">Pieces</label>
-        <p class="text-xs text-slate-400 dark:text-slate-500 mb-2">Private single-use objectives for this Qualification only. They are not shared with the class LO pool.</p>
+        <p class="text-xs text-slate-400 dark:text-slate-500 mb-2">Private to this Project. Create new pieces or attach existing ones; mastery pools across Qualifications that share a piece.</p>
         <div class="flex flex-wrap items-end gap-2">
           <div class="flex-1 min-w-[10rem]">
             <label class="block text-xs text-slate-500 dark:text-slate-400 mb-1" for="qualificationPieceNameInput">Name</label>
@@ -540,11 +540,16 @@
           </div>
           <button type="button" onclick="addQualificationPiece()"
             class="px-4 py-2.5 bg-slate-100 dark:bg-slate-700 hover:bg-slate-200 dark:hover:bg-slate-600 text-slate-700 dark:text-slate-200 rounded-lg text-sm font-medium transition-colors">
-            Add
+            Add new piece
           </button>
         </div>
+        <div id="qualificationAttachExistingHost" class="mt-3">
+          <p class="text-xs font-medium text-slate-500 dark:text-slate-400 mb-1.5">Attach existing piece</p>
+          <div id="qualificationAttachExistingList" class="flex flex-wrap gap-2"></div>
+          <p id="qualificationAttachExistingEmpty" class="hidden text-xs text-slate-400 dark:text-slate-500">No other Project pieces available to attach.</p>
+        </div>
         <div id="qualificationPiecesList" class="mt-3 space-y-2 border border-slate-200 dark:border-slate-600 rounded-lg p-3 min-h-[2.5rem]">
-          <p id="qualificationPiecesEmpty" class="text-xs text-slate-400 dark:text-slate-500">No pieces yet. Add at least one before saving.</p>
+          <p id="qualificationPiecesEmpty" class="text-xs text-slate-400 dark:text-slate-500">No pieces yet. Add or attach at least one before saving.</p>
         </div>
       </div>
       <div id="qualificationFormError" class="hidden text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900/50 rounded-lg px-3 py-2"></div>
@@ -556,10 +561,12 @@
   </div>
 </div>
 
+<script id="classIdJson" type="application/json">{{ class_id | tojson }}</script>
 <script>
-const CLASS_ID = {{ class_id | tojson }};
+const CLASS_ID = JSON.parse(document.getElementById('classIdJson').textContent);
 let activeManageProject = null;
 let qualificationPiecesDraft = [];
+let projectPiecesCatalog = [];
 
 function addDays(dateStr, days) {
   const d = new Date(dateStr + 'T00:00:00');
@@ -1165,6 +1172,89 @@ function showQualificationFormError(msg) {
   el.classList.remove('hidden');
 }
 
+function draftPieceIdSet() {
+  const ids = new Set();
+  qualificationPiecesDraft.forEach(function (piece) {
+    if (piece && piece.id) ids.add(String(piece.id));
+  });
+  return ids;
+}
+
+function renderQualificationAttachExistingList() {
+  const list = document.getElementById('qualificationAttachExistingList');
+  const empty = document.getElementById('qualificationAttachExistingEmpty');
+  if (!list) return;
+  list.innerHTML = '';
+  const already = draftPieceIdSet();
+  const available = (projectPiecesCatalog || []).filter(function (piece) {
+    const id = String(piece.id || '');
+    return id && !already.has(id);
+  });
+  if (empty) empty.classList.toggle('hidden', available.length > 0);
+  available.forEach(function (piece) {
+    const id = String(piece.id);
+    const name = String(piece.vendor_code || piece.name || '').trim();
+    const ms = parseInt(piece.required_ms, 10) || 0;
+    const label = document.createElement('label');
+    label.className = 'inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border border-slate-200 dark:border-slate-600 bg-slate-50 dark:bg-slate-700 text-slate-700 dark:text-slate-300 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-600 transition-colors';
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'w-3.5 h-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500';
+    cb.value = id;
+    cb.addEventListener('change', function () {
+      if (!cb.checked) return;
+      attachExistingQualificationPiece(id, name, ms);
+      cb.checked = false;
+    });
+    const span = document.createElement('span');
+    span.textContent = name + ' (' + ms + ' M)';
+    label.appendChild(cb);
+    label.appendChild(span);
+    list.appendChild(label);
+  });
+}
+
+function loadProjectPiecesCatalog() {
+  projectPiecesCatalog = [];
+  renderQualificationAttachExistingList();
+  if (!activeManageProject || !activeManageProject.id) return;
+  fetch('/api/class/' + CLASS_ID + '/projects/' + activeManageProject.id + '/pieces', {
+    credentials: 'same-origin',
+    headers: { 'Accept': 'application/json' }
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (body) {
+      if (!body || !body.success) return;
+      projectPiecesCatalog = Array.isArray(body.pieces) ? body.pieces : [];
+      renderQualificationAttachExistingList();
+    })
+    .catch(function () {});
+}
+
+function attachExistingQualificationPiece(pieceId, name, requiredMs) {
+  clearQualificationFormError();
+  const id = String(pieceId || '');
+  if (!id) return;
+  if (draftPieceIdSet().has(id)) {
+    showQualificationFormError('That piece is already on this Qualification.');
+    return;
+  }
+  const ms = parseInt(requiredMs, 10);
+  const pieceName = String(name || '').trim();
+  if (!pieceName || !ms || ms < 1) {
+    showQualificationFormError('Could not attach that piece.');
+    return;
+  }
+  qualificationPiecesDraft.push({
+    id: id,
+    name: pieceName,
+    required_ms: ms,
+    attached: true
+  });
+  renderQualificationPiecesList();
+  renderQualificationAttachExistingList();
+}
+
 function renderQualificationPiecesList() {
   const list = document.getElementById('qualificationPiecesList');
   if (!list) return;
@@ -1173,7 +1263,7 @@ function renderQualificationPiecesList() {
     const empty = document.createElement('p');
     empty.id = 'qualificationPiecesEmpty';
     empty.className = 'text-xs text-slate-400 dark:text-slate-500';
-    empty.textContent = 'No pieces yet. Add at least one before saving.';
+    empty.textContent = 'No pieces yet. Add or attach at least one before saving.';
     list.appendChild(empty);
     return;
   }
@@ -1187,6 +1277,13 @@ function renderQualificationPiecesList() {
     const nameEl = document.createElement('span');
     nameEl.className = 'text-sm font-medium text-slate-800 dark:text-slate-200 truncate block';
     nameEl.textContent = piece.name;
+    if (piece.attached) {
+      const tag = document.createElement('span');
+      tag.className = 'ml-2 text-[10px] font-semibold uppercase tracking-wide text-slate-400';
+      tag.textContent = 'Attached';
+      nameEl.appendChild(document.createTextNode(' '));
+      nameEl.appendChild(tag);
+    }
     const msEl = document.createElement('span');
     msEl.className = 'text-xs text-slate-500 dark:text-slate-400';
     msEl.textContent = piece.required_ms + ' M required';
@@ -1230,6 +1327,7 @@ function addQualificationPiece() {
   if (nameInput) nameInput.value = '';
   if (msInput) msInput.value = '';
   renderQualificationPiecesList();
+  renderQualificationAttachExistingList();
   if (nameInput) nameInput.focus();
 }
 
@@ -1237,6 +1335,7 @@ function removeQualificationPiece(index) {
   if (index < 0 || index >= qualificationPiecesDraft.length) return;
   qualificationPiecesDraft.splice(index, 1);
   renderQualificationPiecesList();
+  renderQualificationAttachExistingList();
 }
 
 function closeQualificationModal() {
@@ -1245,7 +1344,9 @@ function closeQualificationModal() {
   document.getElementById('qualificationId').value = '';
   document.getElementById('qualificationForm').reset();
   qualificationPiecesDraft = [];
+  projectPiecesCatalog = [];
   renderQualificationPiecesList();
+  renderQualificationAttachExistingList();
   document.getElementById('qualificationModalTitle').textContent = 'Add Qualification';
   document.getElementById('qualificationSubmitBtn').textContent = 'Save Qualification';
   clearQualificationFormError();
@@ -1294,6 +1395,7 @@ function openQualificationModal(qualification) {
     document.getElementById('qualificationRevisionDueInput').value = addDays(today, 7);
   }
 
+  loadProjectPiecesCatalog();
   document.getElementById('qualificationModal').classList.remove('hidden');
 }
 

@@ -59,13 +59,44 @@
               oninput="filterAssignmentDropdown()">
           </div>
           <div class="max-h-60 overflow-y-auto p-2 space-y-1" id="assignmentDropdownList">
-            <button type="button" onclick="selectAssignment('', 'All Assignments')"
-              class="assignment-dd-item w-full text-left px-3 py-2 text-sm rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 text-slate-700 dark:text-slate-300 bg-blue-50 dark:bg-blue-900/20 font-medium"
-              data-assignment-id="" data-assignment-name="all assignments">All Assignments</button>
-            {% for assignment in assignments %}
-            <button type="button" onclick="selectAssignment('{{ assignment.id }}', '{{ assignment.name }}')"
+            <button type="button" onclick="selectAssignment('__all_mastery_opp__', 'All Mastery Opportunities')"
+              class="assignment-dd-item w-full text-left px-3 py-2 text-sm rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 text-slate-700 dark:text-slate-300 font-medium"
+              data-assignment-id="__all_mastery_opp__"
+              data-assignment-name="all mastery opportunities">All Mastery Opportunities</button>
+            <button type="button" onclick="selectAssignment('__all_exam__', 'All Exams')"
+              class="assignment-dd-item w-full text-left px-3 py-2 text-sm rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 text-slate-700 dark:text-slate-300 font-medium"
+              data-assignment-id="__all_exam__"
+              data-assignment-name="all exams">All Exams</button>
+            <button type="button" onclick="selectAssignment('__all_project__', 'All Projects')"
+              class="assignment-dd-item w-full text-left px-3 py-2 text-sm rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 text-slate-700 dark:text-slate-300 font-medium"
+              data-assignment-id="__all_project__"
+              data-assignment-name="all projects">All Projects</button>
+
+            <div class="assignment-dd-header px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Mastery Opportunities</div>
+            {% for assignment in assignments if (assignment.assignment_type or 'mastery_opp') == 'mastery_opp' %}
+            <button type="button" onclick="selectAssignment('{{ assignment.id }}', '{{ assignment.name|e }}')"
               class="assignment-dd-item w-full text-left px-3 py-2 text-sm rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 text-slate-700 dark:text-slate-300"
-              data-assignment-id="{{ assignment.id }}" data-assignment-name="{{ assignment.name|lower }}">{{ assignment.name }}</button>
+              data-assignment-id="{{ assignment.id }}"
+              data-assignment-name="{{ assignment.name|lower }}"
+              data-assignment-type="mastery_opp">{{ assignment.name }}</button>
+            {% endfor %}
+
+            <div class="assignment-dd-header px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Exams</div>
+            {% for assignment in assignments if assignment.assignment_type == 'exam' %}
+            <button type="button" onclick="selectAssignment('{{ assignment.id }}', '{{ assignment.name|e }}')"
+              class="assignment-dd-item w-full text-left px-3 py-2 text-sm rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 text-slate-700 dark:text-slate-300"
+              data-assignment-id="{{ assignment.id }}"
+              data-assignment-name="{{ assignment.name|lower }}"
+              data-assignment-type="exam">{{ assignment.name }}</button>
+            {% endfor %}
+
+            <div class="assignment-dd-header px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wide text-slate-400 dark:text-slate-500">Projects</div>
+            {% for assignment in assignments if assignment.assignment_type == 'project' %}
+            <button type="button" onclick="selectAssignment('{{ assignment.id }}', '{{ assignment.name|e }}')"
+              class="assignment-dd-item w-full text-left px-3 py-2 text-sm rounded hover:bg-blue-50 dark:hover:bg-blue-900/20 text-slate-700 dark:text-slate-300"
+              data-assignment-id="{{ assignment.id }}"
+              data-assignment-name="{{ assignment.name|lower }}"
+              data-assignment-type="project">{{ assignment.name }}</button>
             {% endfor %}
           </div>
         </div>
@@ -557,7 +588,37 @@ function _applyCountsForMasteryInScope(scopeAssignmentId, countsMap, gradesMap) 
   }
 }
 
-function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
+function _applyAssignmentGradesInScope(scopeAssignmentId, gradesMap, countsMap) {
+  const tables = document.querySelectorAll(
+    '#view-all-assignments table[data-assignment-id="' + String(scopeAssignmentId) + '"]'
+  );
+  tables.forEach(function (table) {
+    table.querySelectorAll('tbody tr.student-row').forEach(function (row) {
+      const studentId = String(row.getAttribute('data-student-id') || '');
+      row.querySelectorAll('td[data-lo-id]').forEach(function (cell) {
+        const loId = String(cell.getAttribute('data-lo-id') || '');
+        const key = studentId + '|' + loId;
+        const grade = String((gradesMap || {})[key] || '').toUpperCase();
+        const counts = !Object.prototype.hasOwnProperty.call(countsMap || {}, key)
+          || !!countsMap[key];
+        if (!grade) {
+          cell.innerHTML = '<span class="text-slate-300 dark:text-slate-600">—</span>';
+          return;
+        }
+        const nonCounting = (grade === 'M' || grade === 'MR') && !counts;
+        cell.innerHTML = '<span class="mastery-badge mastery-'
+          + escapeHtml(grade.toLowerCase())
+          + ' border cursor-pointer hover:opacity-80'
+          + (nonCounting ? ' non-counting-grade' : '')
+          + '" data-raw-grade="' + escapeHtml(grade) + '"'
+          + (nonCounting ? ' data-non-counting="1"' : '')
+          + '>' + escapeHtml(grade) + '</span>';
+      });
+    });
+  });
+}
+
+function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId, renderAssignmentGrades) {
   const scope = (scopeAssignmentId === undefined || scopeAssignmentId === null)
     ? '.hw-score-display'
     : '.hw-score-display[data-assignment-id="' + String(scopeAssignmentId) + '"]';
@@ -574,6 +635,9 @@ function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
   if (__assignmentGradesCache.has(cacheKey)) {
     const cached = __assignmentGradesCache.get(cacheKey);
     _applyHwScoresInScope(scope, cached.hwScores);
+    if (renderAssignmentGrades) {
+      _applyAssignmentGradesInScope(scopeAssignmentId, cached.gradesMap, cached.countsMap);
+    }
     _applyCountsForMasteryInScope(scopeAssignmentId, cached.countsMap, cached.gradesMap);
     return;
   }
@@ -589,6 +653,9 @@ function fetchHwScoresForAssignment(assignmentId, scopeAssignmentId) {
       };
       __assignmentGradesCache.set(cacheKey, payload);
       _applyHwScoresInScope(scope, payload.hwScores);
+      if (renderAssignmentGrades) {
+        _applyAssignmentGradesInScope(scopeAssignmentId, payload.gradesMap, payload.countsMap);
+      }
       _applyCountsForMasteryInScope(scopeAssignmentId, payload.countsMap, payload.gradesMap);
     })
     .catch(e => console.error('Error loading HW scores:', e));
@@ -633,6 +700,25 @@ document.addEventListener('click', function(e) {
 });
 
 // --- Filter by Assignment ---
+const ALL_VIEW_IDS = {
+  __all_mastery_opp__: 'mastery_opp',
+  __all_exam__: 'exam',
+  __all_project__: 'project'
+};
+
+function normalizeAssignmentType(raw) {
+  const t = String(raw || 'mastery_opp');
+  return (t === 'exam' || t === 'project' || t === 'mastery_opp') ? t : 'mastery_opp';
+}
+
+function isAllTypeView(id) {
+  return Object.prototype.hasOwnProperty.call(ALL_VIEW_IDS, String(id || ''));
+}
+
+function assignmentTypeOf(a) {
+  return normalizeAssignmentType(a && a.assignment_type);
+}
+
 let selectedAssignmentId = '';
 
 const _debounce = (window.ClarityUI && typeof window.ClarityUI.debounce === 'function')
@@ -675,7 +761,7 @@ function selectAssignment(assignmentId, assignmentName) {
   assignmentDropdownBtnEl.innerHTML = escapeHtml(assignmentName) + ' ' + chevronSvg;
   assignmentDropdownBtnEl.className = 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors bg-blue-600 text-white hover:bg-blue-700';
 
-  document.querySelectorAll('.assignment-dd-item').forEach(item => {
+  document.querySelectorAll('.assignment-dd-item').forEach(function (item) {
     const isActive = item.getAttribute('data-assignment-id') === String(assignmentId);
     item.classList.toggle('bg-blue-50', isActive);
     item.classList.toggle('dark:bg-blue-900/20', isActive);
@@ -683,27 +769,47 @@ function selectAssignment(assignmentId, assignmentName) {
   });
 
   applyAssignmentFilter();
-  fetchHwScoresForAssignment(selectedAssignmentId, '');
+  if (!isAllTypeView(selectedAssignmentId)) {
+    const asg = assignmentsData.find(function (a) { return String(a.id) === selectedAssignmentId; });
+    if (asg && assignmentTypeOf(asg) === 'project') return;
+    fetchHwScoresForAssignment(selectedAssignmentId, '');
+  }
 }
 
 function applyAssignmentFilter() {
-  if (!selectedAssignmentId) {
+  if (isAllTypeView(selectedAssignmentId)) {
     viewAllEl.classList.add('hidden');
-    renderAllAssignmentsView();
+    renderAllAssignmentsView(ALL_VIEW_IDS[selectedAssignmentId]);
     viewAllAssignmentsEl.classList.remove('hidden');
-    document.querySelectorAll('#view-all [data-lo-id]').forEach(el => el.classList.remove('hidden'));
     updateEmailSelectedButton();
     return;
   }
-  viewAllAssignmentsEl.classList.add('hidden');
-  viewAllEl.classList.remove('hidden');
-  const assignment = assignmentsData.find(a => String(a.id) === String(selectedAssignmentId));
-  if (!assignment || !assignment.assignment_objectives) {
-    document.querySelectorAll('#view-all [data-lo-id]').forEach(el => el.classList.remove('hidden'));
+
+  const assignment = assignmentsData.find(function (a) {
+    return String(a.id) === String(selectedAssignmentId);
+  });
+
+  if (assignment && assignmentTypeOf(assignment) === 'project') {
+    viewAllEl.classList.add('hidden');
+    renderProjectReportsCards([assignment]);
+    viewAllAssignmentsEl.classList.remove('hidden');
+    updateEmailSelectedButton();
     return;
   }
-  const loIds = new Set(assignment.assignment_objectives.map(ao => String(ao.learning_objective_id)));
-  document.querySelectorAll('#view-all [data-lo-id]').forEach(el => {
+
+  viewAllAssignmentsEl.classList.add('hidden');
+  viewAllEl.classList.remove('hidden');
+  if (!assignment || !assignment.assignment_objectives) {
+    document.querySelectorAll('#view-all [data-lo-id]').forEach(function (el) {
+      el.classList.remove('hidden');
+    });
+    updateEmailSelectedButton();
+    return;
+  }
+  const loIds = new Set(assignment.assignment_objectives.map(function (ao) {
+    return String(ao.learning_objective_id);
+  }));
+  document.querySelectorAll('#view-all [data-lo-id]').forEach(function (el) {
     el.classList.toggle('hidden', !loIds.has(String(el.getAttribute('data-lo-id'))));
   });
   updateEmailSelectedButton();
@@ -768,7 +874,7 @@ function clearStudentSelection() {
 
 // --- Clear all filters ---
 function clearAllFilters() {
-  selectAssignment('', 'All Assignments');
+  selectAssignment('__all_mastery_opp__', 'All Mastery Opportunities');
   clearStudentSelection();
   updateEmailSelectedButton();
 }
@@ -776,7 +882,7 @@ function clearAllFilters() {
 function updateEmailSelectedButton() {
   if (!emailSelectedBtnEl) return;
   const selectedCount = document.querySelectorAll('.student-checkbox:checked').length;
-  const show = !selectedAssignmentId && selectedCount > 0;
+  const show = isAllTypeView(selectedAssignmentId) && selectedCount > 0;
   emailSelectedBtnEl.classList.toggle('hidden', !show);
   if (show) {
     emailSelectedBtnEl.textContent = 'Email Selected (' + selectedCount + ')';
@@ -802,17 +908,27 @@ function loCodeForId(loId, fallbackObj) {
   return learningObjectiveCodeById[String(loId)] || 'LO';
 }
 
-function renderAllAssignmentsView() {
+function renderAllAssignmentsView(typeFilter) {
   const container = viewAllAssignmentsEl;
   if (!container) return;
-  if (!assignmentsData.length) {
+
+  const list = (assignmentsData || []).filter(function (a) {
+    return normalizeAssignmentType(a && a.assignment_type) === typeFilter;
+  });
+
+  if (typeFilter === 'project') {
+    renderProjectReportsCards(list);
+    return;
+  }
+
+  if (!list.length) {
     container.innerHTML =
       '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-8 text-center text-slate-500 dark:text-slate-400 text-sm">No assignments available.</div>';
     return;
   }
 
   let html = '';
-  assignmentsData.forEach(function (assignment) {
+  list.forEach(function (assignment) {
     const assignmentId = String(assignment.id || '');
     const assignmentName = assignment.name || 'Assignment';
     const aos = Array.isArray(assignment.assignment_objectives) ? assignment.assignment_objectives : [];
@@ -890,7 +1006,7 @@ function renderAllAssignmentsView() {
   });
 
   container.innerHTML = html;
-  assignmentsData.forEach(function (assignment) {
+  list.forEach(function (assignment) {
     if (assignment && assignment.id) {
       fetchHwScoresForAssignment(String(assignment.id), String(assignment.id));
     }
@@ -898,9 +1014,319 @@ function renderAllAssignmentsView() {
   applyStudentFilter();
 }
 
+function reportsPieceDisplayName(lo) {
+  const info = lo || {};
+  return String(info.vendor_code || info.name || '').trim();
+}
+
+function reportsPieceRequiredMs(lo) {
+  const n = parseInt((lo && lo.required_ms), 10);
+  return (n && n >= 1) ? n : 0;
+}
+
+function mergeQualificationGradePacks(packs) {
+  const gradesMap = {};
+  const countsMap = {};
+  (packs || []).forEach(function (pack) {
+    const g = (pack && pack.gradesMap) || {};
+    const c = (pack && pack.countsMap) || {};
+    Object.keys(g).forEach(function (key) {
+      const letter = String(g[key] || '').toUpperCase();
+      if (!letter) return;
+      if (!gradesMap[key]) {
+        gradesMap[key] = letter;
+        if (Object.prototype.hasOwnProperty.call(c, key)) {
+          countsMap[key] = !!c[key];
+        }
+      }
+    });
+  });
+  return { gradesMap: gradesMap, countsMap: countsMap };
+}
+
+function fetchQualificationGradesPack(qualificationId) {
+  const qid = String(qualificationId || '');
+  if (!qid) {
+    return Promise.resolve({ qualificationId: '', gradesMap: {}, countsMap: {} });
+  }
+  const cacheKey = qid;
+  if (__assignmentGradesCache.has(cacheKey)) {
+    const cached = __assignmentGradesCache.get(cacheKey);
+    return Promise.resolve({
+      qualificationId: qid,
+      gradesMap: cached.gradesMap || {},
+      countsMap: cached.countsMap || {}
+    });
+  }
+  return fetch('/api/class/' + classId + '/assignment/' + encodeURIComponent(qid) + '/grades', {
+    credentials: 'same-origin',
+    headers: { 'Accept': 'application/json' }
+  })
+    .then(function (r) { return r.json(); })
+    .then(function (data) {
+      if (!data || !data.success) {
+        return { qualificationId: qid, gradesMap: {}, countsMap: {} };
+      }
+      const payload = {
+        hwScores: data.hw_scores || {},
+        countsMap: data.counts_for_mastery_map || {},
+        gradesMap: data.grades || {}
+      };
+      __assignmentGradesCache.set(cacheKey, payload);
+      return {
+        qualificationId: qid,
+        gradesMap: payload.gradesMap,
+        countsMap: payload.countsMap
+      };
+    })
+    .catch(function (err) {
+      console.error('Error loading qualification grades for reports:', err);
+      return { qualificationId: qid, gradesMap: {}, countsMap: {} };
+    });
+}
+
+function collectProjectReportRowsFromDom(projectId, studentId) {
+  const rows = [];
+  const root = document.querySelector(
+    '#view-all-assignments [data-project-reports="' + String(projectId) + '"]'
+  );
+  if (!root) return rows;
+  const sid = String(studentId || '');
+  root.querySelectorAll('[data-qualification-card]').forEach(function (card) {
+    const qualName = card.getAttribute('data-qualification-name') || 'Qualification';
+    const table = card.querySelector('table[data-assignment-id]');
+    if (!table) return;
+    const studentRow = table.querySelector('tbody tr.student-row[data-student-id="' + sid + '"]');
+    if (!studentRow) return;
+    table.querySelectorAll('thead th[data-lo-id]').forEach(function (th) {
+      const loId = String(th.getAttribute('data-lo-id') || '');
+      if (!loId) return;
+      const labelEl = th.querySelector('[data-piece-label]');
+      const pieceLabel = labelEl
+        ? String(labelEl.textContent || '').trim()
+        : loId;
+      const cell = studentRow.querySelector('td[data-lo-id="' + loId + '"]');
+      const badge = cell ? cell.querySelector('.mastery-badge[data-raw-grade]') : null;
+      const grade = badge
+        ? String(badge.getAttribute('data-raw-grade') || badge.textContent || '').trim()
+        : '';
+      rows.push({
+        title: qualName + ' — ' + pieceLabel,
+        grade: grade || 'Not graded'
+      });
+    });
+  });
+  return rows;
+}
+
+function buildQualificationReportsCardHtml(project, qual) {
+  const projectId = String(project.id || '');
+  const projectName = project.name || 'Project';
+  const qualId = String(qual.id || '');
+  const qualName = String(qual.name || 'Qualification');
+  const aos = Array.isArray(qual.assignment_objectives) ? qual.assignment_objectives : [];
+  const pieces = [];
+  aos.forEach(function (ao) {
+    const lo = ao.learning_objectives || {};
+    const pieceId = String(lo.id || ao.learning_objective_id || '');
+    const label = reportsPieceDisplayName(lo);
+    const need = reportsPieceRequiredMs(lo);
+    if (!pieceId || !label || need < 1) return;
+    pieces.push({ id: pieceId, label: label, required_ms: need });
+  });
+
+  let html = '';
+  html += '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden print:shadow-none print:border-0" data-qualification-card data-qualification-id="'
+    + escapeHtml(qualId) + '" data-qualification-name="' + escapeHtml(qualName) + '" data-project-id="'
+    + escapeHtml(projectId) + '">';
+  html += '<button type="button" class="w-full px-5 py-3 border-b border-slate-100 dark:border-slate-700 flex items-center gap-2 text-left hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors print:cursor-default" data-qualification-toggle aria-expanded="true">';
+  html += '<svg class="w-4 h-4 text-slate-400 shrink-0 transition-transform print:hidden" data-qualification-chevron fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
+  html += '<div class="min-w-0"><h3 class="font-semibold text-slate-900 dark:text-white">' + escapeHtml(qualName) + '</h3>';
+  html += '<p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">' + escapeHtml(projectName) + ' · {{ class_name }}</p>';
+  if (!pieces.length) {
+    html += '<p class="text-xs text-slate-500 dark:text-slate-400 mt-1">No pieces on this Qualification.</p>';
+  }
+  html += '</div></button>';
+
+  if (!pieces.length) {
+    html += '</div>';
+    return html;
+  }
+
+  html += '<div data-qualification-body class="overflow-x-auto">';
+  html += '<table class="w-full text-sm" data-assignment-id="' + escapeHtml(qualId) + '" data-project-id="'
+    + escapeHtml(projectId) + '">';
+  html += '<thead><tr class="border-b border-slate-200 dark:border-slate-700">';
+  html += '<th class="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400 w-48 sticky left-0 bg-white dark:bg-slate-800 z-20">Student</th>';
+  html += '<th class="text-center px-2 py-2 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap print:hidden">Email</th>';
+  pieces.forEach(function (piece) {
+    html += '<th class="text-center px-1 py-3 font-medium text-slate-500 dark:text-slate-400 min-w-[70px]" data-lo-id="'
+      + escapeHtml(piece.id) + '">';
+    html += '<div class="text-xs font-bold text-slate-800 dark:text-white" data-piece-label>'
+      + escapeHtml(piece.label) + '</div>';
+    html += '<div class="lo-header-sub text-xs font-normal text-slate-400 dark:text-slate-500 mt-0.5 leading-tight">Need '
+      + escapeHtml(String(piece.required_ms)) + '</div>';
+    html += '</th>';
+  });
+  html += '</tr></thead>';
+  html += '<tbody class="divide-y divide-slate-50 dark:divide-slate-700">';
+
+  studentsData.forEach(function (student) {
+    const studentId = String(student.id || '');
+    const studentName = String(student.name || '');
+    const lowered = studentName.toLowerCase();
+    html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors student-row group" data-student-name="'
+      + escapeHtml(lowered) + '" data-student-id="' + escapeHtml(studentId) + '">';
+    html += '<td class="px-3 py-2 font-medium text-slate-900 dark:text-white sticky left-0 bg-white dark:bg-slate-800 z-10"><div class="flex items-center gap-1 flex-nowrap min-w-0"><span class="truncate min-w-0">'
+      + escapeHtml(studentName) + '</span>';
+    html += '<button type="button" onclick="printStudentReport(\'' + escapeHtml(studentId) + '\', \''
+      + escapeHtml(projectId) + '\')" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors flex-shrink-0 print:hidden">Print</button>';
+    html += '</div></td>';
+    html += '<td class="px-2 py-2 text-center print:hidden">';
+    if (student.email) {
+      html += '<button type="button" onclick="emailStudentReport(\'' + escapeHtml(studentId)
+        + '\', this, \'' + escapeHtml(projectId)
+        + '\')" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">Email</button>';
+    } else {
+      html += '<span class="text-slate-300 dark:text-slate-600">—</span>';
+    }
+    html += '</td>';
+    pieces.forEach(function (piece) {
+      html += '<td class="px-3 py-3 text-center" data-lo-id="' + escapeHtml(piece.id)
+        + '"><span class="text-slate-300 dark:text-slate-600">—</span></td>';
+    });
+    html += '</tr>';
+  });
+
+  html += '</tbody></table></div></div>';
+  return html;
+}
+
+function renderProjectReportsCards(projects) {
+  const container = viewAllAssignmentsEl;
+  if (!container) return;
+  if (!projects.length) {
+    container.innerHTML =
+      '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-8 text-center text-slate-500 dark:text-slate-400 text-sm">No projects available.</div>';
+    return;
+  }
+
+  container.innerHTML =
+    '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-8 text-center text-slate-500 dark:text-slate-400 text-sm">Loading project qualifications…</div>';
+
+  const projectList = (projects || []).slice();
+  Promise.all(projectList.map(function (project) {
+    const projectId = String(project.id || '');
+    if (!projectId) {
+      return Promise.resolve({ project: project, quals: [], error: 'Missing project id' });
+    }
+    return fetch('/api/class/' + classId + '/projects/' + encodeURIComponent(projectId) + '/qualifications', {
+      credentials: 'same-origin',
+      headers: { 'Accept': 'application/json' }
+    })
+      .then(function (r) {
+        return r.json().then(function (body) {
+          return { ok: r.ok, body: body };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok || !result.body || !result.body.success) {
+          return {
+            project: project,
+            quals: [],
+            error: (result.body && result.body.error) || 'Could not load qualifications.'
+          };
+        }
+        return {
+          project: project,
+          quals: Array.isArray(result.body.qualifications) ? result.body.qualifications : [],
+          error: ''
+        };
+      })
+      .catch(function (err) {
+        console.error(err);
+        return { project: project, quals: [], error: 'Could not load qualifications.' };
+      });
+  })).then(function (loaded) {
+    if (!studentsData.length) {
+      container.innerHTML =
+        '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-8 text-center text-slate-500 dark:text-slate-400 text-sm">No students enrolled.</div>';
+      return;
+    }
+
+    let html = '';
+    loaded.forEach(function (entry) {
+      const project = entry.project || {};
+      const projectId = String(project.id || '');
+      const projectName = project.name || 'Project';
+      html += '<div class="space-y-4" data-project-reports="' + escapeHtml(projectId) + '">';
+      html += '<div class="px-1">';
+      html += '<h2 class="text-lg font-semibold text-slate-900 dark:text-white">' + escapeHtml(projectName) + '</h2>';
+      html += '<p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{{ class_name }}</p>';
+      html += '</div>';
+
+      if (entry.error) {
+        html += '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 text-sm text-red-500">'
+          + escapeHtml(entry.error) + '</div>';
+        html += '</div>';
+        return;
+      }
+      if (!entry.quals.length) {
+        html += '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 text-sm text-slate-500 dark:text-slate-400">No Qualifications on this Project yet. Add them under Assignments → Projects.</div>';
+        html += '</div>';
+        return;
+      }
+
+      entry.quals.forEach(function (qual) {
+        html += buildQualificationReportsCardHtml(project, qual);
+      });
+      html += '</div>';
+    });
+
+    container.innerHTML = html;
+    applyStudentFilter();
+
+    loaded.forEach(function (entry) {
+      const project = entry.project || {};
+      const projectId = String(project.id || '');
+      if (!projectId || entry.error) return;
+
+      const qualIds = (entry.quals || []).map(function (q) {
+        return String(q.id || '');
+      }).filter(Boolean);
+
+      Promise.all(qualIds.map(fetchQualificationGradesPack)).then(function (packs) {
+        const merged = mergeQualificationGradePacks(packs);
+        qualIds.forEach(function (qid) {
+          _applyAssignmentGradesInScope(qid, merged.gradesMap, merged.countsMap);
+        });
+      });
+    });
+  });
+}
+
+document.addEventListener('click', function (e) {
+  const btn = e.target.closest('[data-qualification-toggle]');
+  if (!btn || !viewAllAssignmentsEl || !viewAllAssignmentsEl.contains(btn)) return;
+  const card = btn.closest('[data-qualification-card]');
+  if (!card) return;
+  const body = card.querySelector('[data-qualification-body]');
+  const chevron = btn.querySelector('[data-qualification-chevron]');
+  if (!body) return;
+  const open = btn.getAttribute('aria-expanded') !== 'false';
+  const next = !open;
+  btn.setAttribute('aria-expanded', next ? 'true' : 'false');
+  body.classList.toggle('hidden', !next);
+  if (chevron) chevron.classList.toggle('-rotate-90', !next);
+});
+
+
 // --- Individual student report (same data for print + email-to-student) ---
 function getIndividualReportParts(student, assignmentIdOverride) {
-  const activeAssignmentId = assignmentIdOverride ? String(assignmentIdOverride) : (selectedAssignmentId ? String(selectedAssignmentId) : '');
+  const rawId = assignmentIdOverride
+    ? String(assignmentIdOverride)
+    : (selectedAssignmentId ? String(selectedAssignmentId) : '');
+  const activeAssignmentId = (rawId && !isAllTypeView(rawId)) ? rawId : '';
   const visibleLoThs = [...document.querySelectorAll('#view-all th[data-lo-id]:not(.hidden)')];
   const visibleLoIds = visibleLoThs.map(th => th.getAttribute('data-lo-id'));
   const visibleLoNames = visibleLoThs.map(th => th.textContent.trim());
@@ -908,25 +1334,31 @@ function getIndividualReportParts(student, assignmentIdOverride) {
   const assignmentLabel = activeAssignmentId
     ? (assignmentsData.find(a => String(a.id) === String(activeAssignmentId))?.name || 'Assignment Report')
     : 'Assignment Report';
-
   const los = student.learning_objectives || [];
   const className = document.querySelector('#view-all p.text-sm')?.textContent.trim() || '';
   const rows = [];
+  let isProject = false;
   if (activeAssignmentId) {
     const assignment = assignmentsData.find(a => String(a.id) === String(activeAssignmentId));
-    const assignmentObjectives = assignment && Array.isArray(assignment.assignment_objectives)
-      ? assignment.assignment_objectives
-      : [];
-    assignmentObjectives.forEach((ao) => {
-      const loId = String(ao.learning_objective_id || '');
-      if (!loId) return;
-      const slo = los.find(lo => String(lo.learning_objective_id) === loId);
-      const grade = slo ? (slo.top_score || 'Not graded') : 'Not graded';
-      const loTitle = (ao.learning_objectives && ao.learning_objectives.vendor_code)
-        ? String(ao.learning_objectives.vendor_code)
-        : (learningObjectivesData.find(lo => String(lo.id) === loId)?.vendor_code || '');
-      rows.push({ title: loTitle, grade: grade });
-    });
+    if (assignment && assignmentTypeOf(assignment) === 'project') {
+      isProject = true;
+      const projectRows = collectProjectReportRowsFromDom(activeAssignmentId, student.id);
+      projectRows.forEach(function (r) { rows.push(r); });
+    } else {
+      const assignmentObjectives = assignment && Array.isArray(assignment.assignment_objectives)
+        ? assignment.assignment_objectives
+        : [];
+      assignmentObjectives.forEach((ao) => {
+        const loId = String(ao.learning_objective_id || '');
+        if (!loId) return;
+        const slo = los.find(lo => String(lo.learning_objective_id) === loId);
+        const grade = slo ? (slo.top_score || 'Not graded') : 'Not graded';
+        const loTitle = (ao.learning_objectives && ao.learning_objectives.vendor_code)
+          ? String(ao.learning_objectives.vendor_code)
+          : (learningObjectivesData.find(lo => String(lo.id) === loId)?.vendor_code || '');
+        rows.push({ title: loTitle, grade: grade });
+      });
+    }
   } else if (visibleLoIds.length > 0) {
     visibleLoIds.forEach((loId, i) => {
       const slo = los.find(lo => String(lo.learning_objective_id) === String(loId));
@@ -938,12 +1370,7 @@ function getIndividualReportParts(student, assignmentIdOverride) {
       rows.push({ title: lo.vendor_code || '', grade: lo.top_score || 'Not graded' });
     });
   }
-  const hwSelector = activeAssignmentId
-    ? '.hw-score-display[data-student-id="' + String(student.id) + '"][data-assignment-id="' + activeAssignmentId + '"]'
-    : '.hw-score-display[data-student-id="' + String(student.id) + '"]';
-  const hwEl = document.querySelector(hwSelector);
-  const homeworkPct = hwEl ? hwEl.textContent.trim() : '';
-  return { student, assignmentLabel, className, rows, homeworkPct };
+  return { student, assignmentLabel, className, rows, homeworkPct: '', isProject: isProject };
 }
 
 function buildEmailPayloadForStudent(student, assignmentIdOverride) {
@@ -957,11 +1384,9 @@ function buildEmailPayloadForStudent(student, assignmentIdOverride) {
     'Student: ' + (parts.student.name || ''),
     '',
   ];
-  if (parts.homeworkPct && parts.homeworkPct !== '—') {
-    lines.push('Homework % (this assignment view): ' + parts.homeworkPct);
-    lines.push('');
-  }
-  lines.push('Learning objectives and scores shown in this report:');
+  lines.push(parts.isProject
+    ? 'Qualifications, pieces, and scores shown in this report:'
+    : 'Learning objectives and scores shown in this report:');
   lines.push('');
   parts.rows.forEach(function (r) {
     const t = String(r.title || '').replace(/\s+/g, ' ').trim();
@@ -991,28 +1416,42 @@ function buildAllAssignmentsEmailPayloadForStudent(student) {
     ''
   ];
 
-  assignmentsData.forEach(function (assignment) {
+  const typeFilter = isAllTypeView(selectedAssignmentId)
+    ? ALL_VIEW_IDS[selectedAssignmentId]
+    : null;
+  const scopedAssignments = typeFilter
+    ? assignmentsData.filter(function (a) { return assignmentTypeOf(a) === typeFilter; })
+    : assignmentsData;
+
+  scopedAssignments.forEach(function (assignment) {
     const assignmentId = String(assignment.id || '');
     const assignmentName = String(assignment.name || 'Assignment');
     lines.push('Assignment: ' + assignmentName);
 
-    const hwEl = document.querySelector('.hw-score-display[data-student-id="' + String(student.id) + '"][data-assignment-id="' + assignmentId + '"]');
-    const hw = hwEl ? String(hwEl.textContent || '').trim() : '';
-    if (hw && hw !== '—') {
-      lines.push('Homework % (this assignment view): ' + hw);
+    if (assignmentTypeOf(assignment) === 'project') {
+      lines.push('Qualifications, pieces, and scores shown in this report:');
+      lines.push('');
+      const projectRows = collectProjectReportRowsFromDom(assignmentId, student.id);
+      if (projectRows.length) {
+        projectRows.forEach(function (r) {
+          lines.push(String(r.title || '') + '  |  ' + String(r.grade || 'Not graded'));
+        });
+      } else {
+        lines.push('(No qualification grade rows available for this project view.)');
+      }
+    } else {
+      lines.push('Learning objectives and scores shown in this report:');
+      lines.push('');
+      const assignmentObjectives = Array.isArray(assignment.assignment_objectives) ? assignment.assignment_objectives : [];
+      assignmentObjectives.forEach(function (ao) {
+        const loId = String(ao.learning_objective_id || '');
+        if (!loId) return;
+        const loCode = loCodeForId(loId, ao);
+        const slo = los.find(function (x) { return String(x.learning_objective_id) === loId; });
+        const grade = slo ? (slo.top_score || 'Not graded') : 'Not graded';
+        lines.push(String(loCode || 'LO') + '  |  ' + String(grade || 'Not graded'));
+      });
     }
-
-    lines.push('Learning objectives and scores shown in this report:');
-    lines.push('');
-    const assignmentObjectives = Array.isArray(assignment.assignment_objectives) ? assignment.assignment_objectives : [];
-    assignmentObjectives.forEach(function (ao) {
-      const loId = String(ao.learning_objective_id || '');
-      if (!loId) return;
-      const loCode = loCodeForId(loId, ao);
-      const slo = los.find(function (x) { return String(x.learning_objective_id) === loId; });
-      const grade = slo ? (slo.top_score || 'Not graded') : 'Not graded';
-      lines.push(String(loCode || 'LO') + '  |  ' + String(grade || 'Not graded'));
-    });
     lines.push('');
   });
 
@@ -1021,7 +1460,10 @@ function buildAllAssignmentsEmailPayloadForStudent(student) {
   if (body.length > 2000) {
     body = body.slice(0, 1970) + '\n\n[Message trimmed. Ask your instructor for the full printed report if needed.]';
   }
-  const subject = 'Your progress report — ' + (className || 'Class') + ' (All Assignments)';
+  const typeLabel = typeFilter === 'exam' ? 'All Exams'
+    : typeFilter === 'project' ? 'All Projects'
+    : 'All Mastery Opportunities';
+  const subject = 'Your progress report — ' + (className || 'Class') + ' (' + typeLabel + ')';
   return { subject, body };
 }
 
@@ -1144,7 +1586,7 @@ function emailAllVisibleReports(btnEl) {
 }
 
 function emailSelectedAllAssignments(btnEl) {
-  if (selectedAssignmentId) return;
+  if (!isAllTypeView(selectedAssignmentId)) return;
   const selectedIds = [...document.querySelectorAll('.student-checkbox:checked')].map(cb => String(cb.value || ''));
   if (!selectedIds.length) {
     alert('Select at least one student first.');
@@ -1219,6 +1661,7 @@ function printStudentReport(studentId, assignmentIdOverride) {
 
   const parts = getIndividualReportParts(student, assignmentIdOverride);
   const { assignmentLabel, className, rows } = parts;
+  const scoreColLabel = parts.isProject ? 'Qualification — Piece' : 'Learning Objective';
 
   let tbodyRows = '';
   rows.forEach(function (r) {
@@ -1244,7 +1687,6 @@ function printStudentReport(studentId, assignmentIdOverride) {
       <div>
         <h1 style="font-size:22px;font-weight:700;margin-bottom:4px;">${student.name}</h1>
         <p style="font-size:14px;color:#64748b;">${className}</p>
-        ${parts.homeworkPct && parts.homeworkPct !== '—' ? `<p style="font-size:13px;color:#475569;margin-top:6px;">Homework: <strong>${parts.homeworkPct}</strong></p>` : ''}
       </div>
       <div style="text-align:right;">
         <p style="font-size:14px;font-weight:600;color:#1d4ed8;margin-bottom:2px;">${assignmentLabel}</p>
@@ -1254,7 +1696,7 @@ function printStudentReport(studentId, assignmentIdOverride) {
     <table style="width:100%;border-collapse:collapse;">
       <thead>
         <tr>
-          <th style="text-align:left;padding:8px 12px;font-size:12px;color:#64748b;font-weight:600;">Learning Objective</th>
+          <th style="text-align:left;padding:8px 12px;font-size:12px;color:#64748b;font-weight:600;">${scoreColLabel}</th>
           <th style="text-align:center;padding:8px 12px;font-size:12px;color:#64748b;font-weight:600;">Score</th>
         </tr>
       </thead>
@@ -1280,11 +1722,17 @@ function printStudentReport(studentId, assignmentIdOverride) {
   iframe.srcdoc = html;
 }
 
-// Auto-select first assignment on page load
+// Auto-select first real assignment on page load (skip __all_* sentinels)
 (function() {
-  const firstAssignmentItem = document.querySelector('.assignment-dd-item[data-assignment-id]:not([data-assignment-id=""])');
+  const items = Array.from(document.querySelectorAll('.assignment-dd-item[data-assignment-id]'));
+  const firstAssignmentItem = items.find(function (el) {
+    const id = el.getAttribute('data-assignment-id') || '';
+    return id && !isAllTypeView(id);
+  });
   if (firstAssignmentItem) {
     selectAssignment(firstAssignmentItem.getAttribute('data-assignment-id'), firstAssignmentItem.textContent.trim());
+  } else {
+    selectAssignment('__all_mastery_opp__', 'All Mastery Opportunities');
   }
 })();
 
@@ -1322,9 +1770,22 @@ function applySinglePagePrintScale() {
 }
 
 function ensureSingleAssignmentViewForExportLikePrint() {
+  // Project and All-type views live in #view-all-assignments with #view-all
+  // hidden. Never force the first Mastery Opportunity — that made Print/Export
+  // ignore Qualification piece tables.
+  if (isAllTypeView(selectedAssignmentId)) return;
+  const selected = assignmentsData.find(function (a) {
+    return String(a.id) === String(selectedAssignmentId);
+  });
+  if (selected && assignmentTypeOf(selected) === 'project') return;
+
   const viewAll = document.getElementById('view-all');
   if (viewAll && viewAll.classList.contains('hidden')) {
-    const firstAssignmentItem = document.querySelector('.assignment-dd-item[data-assignment-id]:not([data-assignment-id=""])');
+    const items = Array.from(document.querySelectorAll('.assignment-dd-item[data-assignment-id]'));
+    const firstAssignmentItem = items.find(function (el) {
+      const id = el.getAttribute('data-assignment-id') || '';
+      return id && !isAllTypeView(id);
+    });
     if (firstAssignmentItem && typeof selectAssignment === 'function') {
       selectAssignment(firstAssignmentItem.getAttribute('data-assignment-id'), firstAssignmentItem.textContent.trim());
     }
@@ -1338,6 +1799,194 @@ function printableCellText(cell) {
   return txt;
 }
 
+/** Name cell includes an inline Print button; prefer the name span. */
+function studentNameFromReportCell(cell) {
+  if (!cell) return '';
+  const nameEl = cell.querySelector('span.truncate');
+  if (nameEl) return printableCellText(nameEl);
+  return String(cell.textContent || '')
+    .replace(/\s+/g, ' ')
+    .replace(/Print\s*$/i, '')
+    .trim();
+}
+
+async function exportProjectQualificationTablesPdf(projectOrNull) {
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({
+    orientation: 'landscape',
+    unit: 'pt',
+    format: 'letter',
+    compress: true
+  });
+
+  const classLabelEl = document.querySelector('#view-all p.text-sm');
+  const classLabel = classLabelEl ? printableCellText(classLabelEl) : 'Class';
+  const roots = projectOrNull
+    ? Array.from(document.querySelectorAll(
+        '#view-all-assignments [data-project-reports="' + String(projectOrNull.id) + '"]'
+      ))
+    : Array.from(document.querySelectorAll('#view-all-assignments [data-project-reports]'));
+
+  if (!roots.length) {
+    alert('No project qualification tables available to export.');
+    return;
+  }
+
+  const PDF_GRADE_TEXT_COLOR = {
+    'M': [21, 128, 61],
+    'MR': [4, 120, 87],
+    'R': [161, 98, 7],
+    'RQ': [194, 65, 12],
+    'P': [29, 78, 216],
+    'X': [185, 28, 28],
+    'A': [71, 85, 105],
+    'I': [146, 64, 14]
+  };
+
+  let cursorY = 28;
+  const fileLabel = projectOrNull ? (projectOrNull.name || 'project') : 'all_projects';
+  let wroteAnyTable = false;
+
+  for (let r = 0; r < roots.length; r++) {
+    const root = roots[r];
+    const projectId = root.getAttribute('data-project-reports') || '';
+    const projectMeta = assignmentsData.find(function (a) {
+      return String(a.id) === String(projectId);
+    });
+    const projectName = (projectMeta && projectMeta.name) || 'Project';
+    const cards = Array.from(root.querySelectorAll('[data-qualification-card]'));
+
+    for (let c = 0; c < cards.length; c++) {
+      const card = cards[c];
+      const qualName = card.getAttribute('data-qualification-name') || 'Qualification';
+      const table = card.querySelector('table[data-assignment-id]');
+      if (!table) continue;
+      const qualId = String(table.getAttribute('data-assignment-id') || '');
+
+      let gradesMap = {};
+      let countsMap = {};
+      if (qualId) {
+        try {
+          const pack = await fetchQualificationGradesPack(qualId);
+          gradesMap = pack.gradesMap || {};
+          countsMap = pack.countsMap || {};
+        } catch (e) {
+          gradesMap = {};
+          countsMap = {};
+        }
+      }
+
+      const ths = Array.from(table.querySelectorAll('thead th'));
+      const pieceThs = ths.filter(function (th) {
+        return th.hasAttribute('data-lo-id');
+      });
+      const headers = ['Student'].concat(pieceThs.map(function (th) {
+        const labelEl = th.querySelector('[data-piece-label]');
+        return labelEl ? printableCellText(labelEl) : printableCellText(th);
+      }));
+
+      const body = [];
+      Array.from(table.querySelectorAll('tbody tr.student-row')).forEach(function (tr) {
+        if (tr.classList.contains('hidden')) return;
+        const sid = String(tr.getAttribute('data-student-id') || '').trim();
+        const nameCell = tr.querySelector('td');
+        let studentName = studentNameFromReportCell(nameCell);
+        const rowVals = [studentName];
+        pieceThs.forEach(function (th) {
+          const loId = String(th.getAttribute('data-lo-id') || '');
+          const key = sid + '|' + loId;
+          let out = gradesMap[key] ? String(gradesMap[key]) : '';
+          if ((out === 'M' || out === 'MR') &&
+              Object.prototype.hasOwnProperty.call(countsMap, key) &&
+              countsMap[key] === false) {
+            out = 'I';
+          }
+          if (!out) {
+            const cell = tr.querySelector('td[data-lo-id="' + loId + '"]');
+            const badge = cell ? cell.querySelector('.mastery-badge[data-raw-grade]') : null;
+            out = badge
+              ? String(badge.getAttribute('data-raw-grade') || '').trim()
+              : '';
+          }
+          rowVals.push(out);
+        });
+        body.push(rowVals);
+      });
+
+      if (!headers.length || !body.length) continue;
+
+      if (wroteAnyTable) {
+        doc.addPage();
+        cursorY = 28;
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(14);
+      doc.text('Grade Sheet', 28, cursorY);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+      doc.text(classLabel + ' - ' + projectName + ' / ' + qualName, 28, cursorY + 16);
+      doc.text(new Date().toLocaleDateString(), 730, cursorY + 16, { align: 'right' });
+
+      doc.autoTable({
+        head: [headers],
+        body: body,
+        startY: cursorY + 26,
+        margin: { left: 20, right: 20, top: 54, bottom: 20 },
+        theme: 'grid',
+        styles: {
+          font: 'helvetica',
+          fontSize: 8,
+          cellPadding: 3,
+          lineColor: [17, 24, 39],
+          lineWidth: 0.6,
+          textColor: [15, 23, 42],
+          fillColor: [255, 255, 255],
+          overflow: 'linebreak'
+        },
+        headStyles: {
+          fillColor: [255, 255, 255],
+          textColor: [15, 23, 42],
+          fontStyle: 'bold'
+        },
+        didParseCell: function (hookData) {
+          if (hookData.section !== 'body') return;
+          if (hookData.column.index === 0) return;
+          hookData.cell.styles.halign = 'center';
+          const raw = String(hookData.cell.raw == null ? '' : hookData.cell.raw)
+            .trim()
+            .toUpperCase();
+          const tc = PDF_GRADE_TEXT_COLOR[raw];
+          if (!tc) return;
+          hookData.cell.styles.textColor = tc;
+          if (raw === 'I') {
+            hookData.cell.styles.font = 'times';
+            hookData.cell.styles.fontStyle = 'bold';
+          } else {
+            hookData.cell.styles.fontStyle = 'bold';
+          }
+        }
+      });
+      wroteAnyTable = true;
+      cursorY = (doc.lastAutoTable && doc.lastAutoTable.finalY)
+        ? doc.lastAutoTable.finalY + 28
+        : 500;
+    }
+  }
+
+  if (!wroteAnyTable) {
+    alert('No visible grade data to export.');
+    return;
+  }
+
+  const safeAssignment = String(fileLabel || 'project')
+    .trim()
+    .toLowerCase()
+    .replace(/[^\w\-]+/g, '_')
+    .replace(/^_+|_+$/g, '') || 'project';
+  doc.save(safeAssignment + '_gradesheet.pdf');
+}
+
 async function exportGradeSheetPdf(btn) {
   try {
     if (!window.jspdf || !window.jspdf.jsPDF) {
@@ -1349,19 +1998,38 @@ async function exportGradeSheetPdf(btn) {
       return;
     }
 
-    const originalText = btn ? btn.innerHTML : '';
     if (btn) {
       btn.disabled = true;
       btn.classList.add('opacity-70', 'cursor-not-allowed');
       btn.innerHTML = 'Exporting...';
     }
 
-    ensureSingleAssignmentViewForExportLikePrint();
     applyStudentFilter();
 
-    const exportAssignmentId = selectedAssignmentId
-      ? String(selectedAssignmentId)
-      : (assignmentsData[0] && assignmentsData[0].id ? String(assignmentsData[0].id) : '');
+    if (isAllTypeView(selectedAssignmentId) && ALL_VIEW_IDS[selectedAssignmentId] === 'project') {
+      await exportProjectQualificationTablesPdf(null);
+      return;
+    }
+    const selectedAsg = assignmentsData.find(function (a) {
+      return String(a.id) === String(selectedAssignmentId);
+    });
+    if (selectedAsg && assignmentTypeOf(selectedAsg) === 'project') {
+      await exportProjectQualificationTablesPdf(selectedAsg);
+      return;
+    }
+
+    ensureSingleAssignmentViewForExportLikePrint();
+
+    let exportAssignmentId = '';
+    if (isAllTypeView(selectedAssignmentId)) {
+      const t = ALL_VIEW_IDS[selectedAssignmentId];
+      const firstOfType = assignmentsData.find(function (a) { return assignmentTypeOf(a) === t; });
+      exportAssignmentId = firstOfType && firstOfType.id ? String(firstOfType.id) : '';
+    } else if (selectedAssignmentId) {
+      exportAssignmentId = String(selectedAssignmentId);
+    } else if (assignmentsData[0] && assignmentsData[0].id) {
+      exportAssignmentId = String(assignmentsData[0].id);
+    }
 
     if (!exportAssignmentId) {
       alert('No assignment selected for export.');
@@ -1369,7 +2037,6 @@ async function exportGradeSheetPdf(btn) {
     }
 
     let assignmentGrades = {};
-    let assignmentHwScores = {};
     let assignmentCountsForMastery = {};
     try {
       const res = await fetch(`/api/class/${classId}/assignment/${exportAssignmentId}/grades`, {
@@ -1380,7 +2047,6 @@ async function exportGradeSheetPdf(btn) {
         throw new Error(data.error || 'Could not load assignment grades');
       }
       assignmentGrades = data.grades || {};
-      assignmentHwScores = data.hw_scores || {};
       assignmentCountsForMastery = data.counts_for_mastery_map || {};
     } catch (e) {
       alert('Could not load saved assignment grades for export.');
@@ -1415,9 +2081,6 @@ async function exportGradeSheetPdf(btn) {
     const headerLoIds = headerCells.map(function (th) {
       return String(th.getAttribute('data-lo-id') || '').trim();
     });
-    const hwColIdx = headerCells.findIndex(function (th) {
-      return th.hasAttribute('data-hw-col-header');
-    });
 
     const body = [];
     const rowEls = Array.from(table.querySelectorAll('tbody tr.student-row')).filter(function (tr) {
@@ -1434,21 +2097,8 @@ async function exportGradeSheetPdf(btn) {
       const rowVals = cells.map(printableCellText);
 
       // Student column contains an inline "Print" button in the UI.
-      // Remove that label from export output.
-      if (rowVals.length > 0) {
-        rowVals[0] = String(rowVals[0] || '').replace(/\bPrint\b/g, '').replace(/\s+/g, ' ').trim();
-      }
-
-      // Override HW % with saved value (assignment-scoped) so the export matches
-      // what is rendered for this assignment, not whatever placeholder span text
-      // happens to be in the static DOM.
-      if (sid && hwColIdx >= 0 && hwColIdx < rowVals.length) {
-        if (sid in assignmentHwScores) {
-          const hw = assignmentHwScores[sid];
-          rowVals[hwColIdx] = (hw === -1) ? 'HW Pass' : (String(hw) + '%');
-        } else {
-          rowVals[hwColIdx] = '';
-        }
+      if (cells.length > 0) {
+        rowVals[0] = studentNameFromReportCell(cells[0]);
       }
 
       // Override LO cells with the assignment-scoped letter, applying the

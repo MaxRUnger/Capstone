@@ -46,6 +46,16 @@ def _owner_qualification_column_missing(err: Exception) -> bool:
     )
 
 
+def _owner_project_column_missing(err: Exception) -> bool:
+    """True when the DB/schema has not yet added owner_project_id."""
+    msg = str(err or "")
+    return (
+        "owner_project_id" in msg
+        or "PGRST204" in msg
+        or "schema cache" in msg.lower()
+    )
+
+
 class Course:
     @staticmethod
     def get_all_for_instructor(instructor_id):
@@ -55,11 +65,12 @@ class Course:
 
     @staticmethod
     def get_lo_ids_for_class(class_id):
-        """Return class-pool learning-objective IDs (excludes Qualification pieces).
+        """Return class-pool learning-objective IDs (excludes pieces).
 
         Pieces are private ``learning_objectives`` rows with
-        ``owner_qualification_id`` set; they must never appear in the class LO
-        pool used by LO management, normal assignment pickers, or dashboards.
+        ``owner_qualification_id`` and/or ``owner_project_id`` set; they must
+        never appear in the class LO pool used by LO management, normal
+        assignment pickers, or dashboards.
         """
         try:
             try:
@@ -68,22 +79,40 @@ class Course:
                     .select("id")
                     .eq("class_id", class_id)
                     .is_("owner_qualification_id", "null")
+                    .is_("owner_project_id", "null")
                     .execute()
                 )
             except Exception as schema_err:
-                if not _owner_qualification_column_missing(schema_err):
+                if (
+                    _owner_project_column_missing(schema_err)
+                    and not _owner_qualification_column_missing(schema_err)
+                ):
+                    logger.debug(
+                        "get_lo_ids_for_class: owner_project_id missing; "
+                        "falling back: %s",
+                        schema_err,
+                    )
+                    resp = (
+                        supabase_admin.table("learning_objectives")
+                        .select("id")
+                        .eq("class_id", class_id)
+                        .is_("owner_qualification_id", "null")
+                        .execute()
+                    )
+                elif _owner_qualification_column_missing(schema_err):
+                    logger.debug(
+                        "get_lo_ids_for_class: owner columns missing; "
+                        "falling back: %s",
+                        schema_err,
+                    )
+                    resp = (
+                        supabase_admin.table("learning_objectives")
+                        .select("id")
+                        .eq("class_id", class_id)
+                        .execute()
+                    )
+                else:
                     raise
-                logger.debug(
-                    "get_lo_ids_for_class: owner_qualification_id missing; "
-                    "falling back: %s",
-                    schema_err,
-                )
-                resp = (
-                    supabase_admin.table("learning_objectives")
-                    .select("id")
-                    .eq("class_id", class_id)
-                    .execute()
-                )
             return [lo["id"] for lo in (resp.data or []) if lo.get("id")]
         except Exception as e:
             logger.error("get_lo_ids_for_class failed for class %s: %s", class_id, e)
@@ -112,9 +141,14 @@ class Course:
 
     @staticmethod
     def get_piece_lo_ids_for_qualification(qualification_id):
-        """Return LO ids privately owned by this Qualification (its pieces)."""
+        """Return piece LO ids gradable on this Qualification.
+
+        Includes legacy pieces owned by this Qualification and Project-pooled
+        pieces linked via assignment_objectives.
+        """
         if not qualification_id:
             return []
+        ids = set()
         try:
             resp = (
                 supabase_admin.table("learning_objectives")
@@ -122,22 +156,61 @@ class Course:
                 .eq("owner_qualification_id", qualification_id)
                 .execute()
             )
-            return [str(r["id"]) for r in (resp.data or []) if r.get("id")]
+            for r in (resp.data or []):
+                if r.get("id"):
+                    ids.add(str(r["id"]))
         except Exception as e:
-            if _owner_qualification_column_missing(e):
-                logger.debug(
-                    "get_piece_lo_ids_for_qualification: column missing: %s", e
+            if not _owner_qualification_column_missing(e):
+                logger.error(
+                    "get_piece_lo_ids_for_qualification failed for %s: %s",
+                    qualification_id, e,
                 )
-                return []
+
+        try:
+            try:
+                ao_resp = (
+                    supabase_admin.table("assignment_objectives")
+                    .select(
+                        "learning_objective_id, "
+                        "learning_objectives(id, owner_qualification_id, "
+                        "owner_project_id)"
+                    )
+                    .eq("assignment_id", qualification_id)
+                    .execute()
+                )
+            except Exception as schema_err:
+                if not _owner_project_column_missing(schema_err):
+                    raise
+                ao_resp = (
+                    supabase_admin.table("assignment_objectives")
+                    .select(
+                        "learning_objective_id, "
+                        "learning_objectives(id, owner_qualification_id)"
+                    )
+                    .eq("assignment_id", qualification_id)
+                    .execute()
+                )
+            for r in ao_resp.data or []:
+                lo = r.get("learning_objectives") or {}
+                if isinstance(lo, list):
+                    lo = lo[0] if lo else {}
+                if not (
+                    lo.get("owner_qualification_id") or lo.get("owner_project_id")
+                ):
+                    continue
+                lid = str(lo.get("id") or r.get("learning_objective_id") or "")
+                if lid:
+                    ids.add(lid)
+        except Exception as e:
             logger.error(
-                "get_piece_lo_ids_for_qualification failed for %s: %s",
+                "get_piece_lo_ids_for_qualification AO lookup failed for %s: %s",
                 qualification_id, e,
             )
-            return []
+        return sorted(ids)
 
     @staticmethod
     def get_learning_objectives(class_id):
-        """Return class-pool learning objectives (excludes Qualification pieces)."""
+        """Return class-pool learning objectives (excludes pieces)."""
         try:
             try:
                 resp = (
@@ -145,22 +218,40 @@ class Course:
                     .select("id, name, vendor_code, description, required_ms")
                     .eq("class_id", class_id)
                     .is_("owner_qualification_id", "null")
+                    .is_("owner_project_id", "null")
                     .execute()
                 )
             except Exception as schema_err:
-                if not _owner_qualification_column_missing(schema_err):
+                if (
+                    _owner_project_column_missing(schema_err)
+                    and not _owner_qualification_column_missing(schema_err)
+                ):
+                    logger.debug(
+                        "get_learning_objectives: owner_project_id missing; "
+                        "falling back: %s",
+                        schema_err,
+                    )
+                    resp = (
+                        supabase_admin.table("learning_objectives")
+                        .select("id, name, vendor_code, description, required_ms")
+                        .eq("class_id", class_id)
+                        .is_("owner_qualification_id", "null")
+                        .execute()
+                    )
+                elif _owner_qualification_column_missing(schema_err):
+                    logger.debug(
+                        "get_learning_objectives: owner columns missing; "
+                        "falling back: %s",
+                        schema_err,
+                    )
+                    resp = (
+                        supabase_admin.table("learning_objectives")
+                        .select("id, name, vendor_code, description, required_ms")
+                        .eq("class_id", class_id)
+                        .execute()
+                    )
+                else:
                     raise
-                logger.debug(
-                    "get_learning_objectives: owner_qualification_id missing; "
-                    "falling back: %s",
-                    schema_err,
-                )
-                resp = (
-                    supabase_admin.table("learning_objectives")
-                    .select("id, name, vendor_code, description, required_ms")
-                    .eq("class_id", class_id)
-                    .execute()
-                )
             return resp.data or []
         except Exception as e:
             logger.error(
@@ -176,59 +267,49 @@ class Course:
         same initial ``classes`` select so the request makes a single class-row query.
         If newer optional columns are missing in the DB schema, the call falls back to
         a narrower projection and applies defaults.
-        """
-        BASE_COLS = (
-            "id, name, semester, "
-            "auto_convert_m, min_masteries, num_learning_objectives, "
-            "hw_passes_enabled, hw_passes_allowed, is_online, "
-            "learning_objectives(id, name, vendor_code, required_ms, "
-            "owner_qualification_id)"
-        )
-        BASE_COLS_NO_OWNER = (
-            "id, name, semester, "
-            "auto_convert_m, min_masteries, num_learning_objectives, "
-            "hw_passes_enabled, hw_passes_allowed, is_online, "
-            "learning_objectives(id, name, vendor_code, required_ms)"
-        )
-        try:
-            try:
-                response = supabase_admin.table("classes").select(
-                    BASE_COLS
-                ).eq("id", class_id).execute()
-            except Exception as schema_err:
-                logger.debug(
-                    "Wide classes select failed (likely missing optional column); falling back: %s",
-                    schema_err,
-                )
-                try:
-                    response = supabase_admin.table("classes").select(
-                        BASE_COLS_NO_OWNER
-                    ).eq("id", class_id).execute()
-                except Exception as schema_err2:
-                    logger.debug(
-                        "Settings classes select failed; falling back narrower: %s",
-                        schema_err2,
-                    )
-                    response = supabase_admin.table("classes").select(
-                        "id, name, semester, "
-                        "learning_objectives(id, name, vendor_code, required_ms)"
-                    ).eq("id", class_id).execute()
 
-            if not response.data or len(response.data) == 0:
+        The class LO pool always comes from ``get_learning_objectives`` (owner-tagged
+        pieces excluded with that helper's own schema fallbacks). Nested
+        ``classes → learning_objectives`` embeds are not used for the pool: when the
+        wide settings select fails (e.g. missing ``hw_passes_enabled``), older
+        fallbacks omitted owner columns and silently leaked Project pieces into
+        Student Progress / Reports.
+        """
+        CLASS_COLS_FULL = (
+            "id, name, semester, "
+            "auto_convert_m, min_masteries, num_learning_objectives, "
+            "hw_passes_enabled, hw_passes_allowed, is_online"
+        )
+        CLASS_COLS_NO_HW_PASSES = (
+            "id, name, semester, "
+            "auto_convert_m, min_masteries, num_learning_objectives, "
+            "is_online"
+        )
+        CLASS_COLS_MIN = "id, name, semester"
+        try:
+            response = None
+            for cols in (CLASS_COLS_FULL, CLASS_COLS_NO_HW_PASSES, CLASS_COLS_MIN):
+                try:
+                    response = (
+                        supabase_admin.table("classes")
+                        .select(cols)
+                        .eq("id", class_id)
+                        .execute()
+                    )
+                    break
+                except Exception as schema_err:
+                    logger.debug(
+                        "classes select failed (%s); trying narrower projection: %s",
+                        cols,
+                        schema_err,
+                    )
+                    response = None
+
+            if response is None or not response.data or len(response.data) == 0:
                 return None
 
             class_data = response.data[0]
-            # Drop Qualification pieces from the class LO pool. Rows without the
-            # owner_qualification_id column (pre-migration) keep every LO.
-            pool_los = []
-            for lo in (class_data.get("learning_objectives") or []):
-                if lo.get("owner_qualification_id"):
-                    continue
-                cleaned = {
-                    k: v for k, v in lo.items()
-                    if k != "owner_qualification_id"
-                }
-                pool_los.append(cleaned)
+            pool_los = Course.get_learning_objectives(class_id) or []
             class_data["learning_objectives"] = pool_los
             class_lo_ids = {
                 str(lo.get("id"))
@@ -355,8 +436,8 @@ class Course:
         so the counted-mastery rule and payload shape stay identical everywhere.
 
         Required M-count resolution:
-          - Piece LOs (``owner_qualification_id`` set): use
-            ``learning_objectives.required_ms``.
+          - Piece LOs (``owner_qualification_id`` or ``owner_project_id`` set):
+            use ``learning_objectives.required_ms``.
           - Legacy linked class LOs: use
             ``assignment_objectives.required_ms_for_project``.
         Nested AND logic (LO met → Qualification complete → Project complete)
@@ -374,7 +455,7 @@ class Course:
                 (lo_info.get("vendor_code") or lo_info.get("name") or "")
             ).strip()
 
-            if lo_info.get("owner_qualification_id"):
+            if lo_info.get("owner_qualification_id") or lo_info.get("owner_project_id"):
                 required_raw = lo_info.get("required_ms")
             else:
                 required_raw = r.get("required_ms_for_project")
@@ -532,30 +613,52 @@ class Course:
                             "assignment_id, learning_objective_id, "
                             "required_ms_for_project, "
                             "learning_objectives(id, vendor_code, name, "
-                            "required_ms, owner_qualification_id)"
+                            "required_ms, owner_qualification_id, "
+                            "owner_project_id)"
                         )
                         .in_("assignment_id", qualification_ids)
                         .execute()
                     )
                 except Exception as schema_err:
-                    if not _owner_qualification_column_missing(schema_err):
-                        raise
-                    logger.debug(
-                        "get_project_completion_batch: AO select without "
-                        "owner_qualification_id: %s",
-                        schema_err,
-                    )
-                    ao_resp = (
-                        supabase_admin.table("assignment_objectives")
-                        .select(
-                            "assignment_id, learning_objective_id, "
-                            "required_ms_for_project, "
-                            "learning_objectives(id, vendor_code, name, "
-                            "required_ms)"
+                    if (
+                        _owner_project_column_missing(schema_err)
+                        and not _owner_qualification_column_missing(schema_err)
+                    ):
+                        logger.debug(
+                            "get_project_completion_batch: AO select without "
+                            "owner_project_id: %s",
+                            schema_err,
                         )
-                        .in_("assignment_id", qualification_ids)
-                        .execute()
-                    )
+                        ao_resp = (
+                            supabase_admin.table("assignment_objectives")
+                            .select(
+                                "assignment_id, learning_objective_id, "
+                                "required_ms_for_project, "
+                                "learning_objectives(id, vendor_code, name, "
+                                "required_ms, owner_qualification_id)"
+                            )
+                            .in_("assignment_id", qualification_ids)
+                            .execute()
+                        )
+                    elif _owner_qualification_column_missing(schema_err):
+                        logger.debug(
+                            "get_project_completion_batch: AO select without "
+                            "owner columns: %s",
+                            schema_err,
+                        )
+                        ao_resp = (
+                            supabase_admin.table("assignment_objectives")
+                            .select(
+                                "assignment_id, learning_objective_id, "
+                                "required_ms_for_project, "
+                                "learning_objectives(id, vendor_code, name, "
+                                "required_ms)"
+                            )
+                            .in_("assignment_id", qualification_ids)
+                            .execute()
+                        )
+                    else:
+                        raise
                 for r in ao_resp.data or []:
                     qid = str(r.get("assignment_id") or "")
                     if qid in ao_rows_by_qualification:

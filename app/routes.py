@@ -55,6 +55,8 @@ from app.models import (
     Homework,
     ASSIGNMENT_TYPES,
     ASSIGNMENT_TYPE_PROJECT,
+    _owner_project_column_missing,
+    _owner_qualification_column_missing,
 )
 from app.dao.gemini_analyzer import get_gemini_analyzer
 from uuid import uuid4
@@ -489,38 +491,46 @@ def build_lo_csv_mobile_upload_context(
 
 
 def _select_class_pool_learning_objectives(select_cols: str, class_id: str):
-    """Select class-pool LOs only (excludes Qualification pieces).
-
-    Tries ``owner_qualification_id IS NULL`` first; falls back when the column
-    has not been migrated yet.
-    """
+    """Select class-pool LOs only (excludes Qualification/Project pieces)."""
     try:
         return (
             supabase_admin.table("learning_objectives")
             .select(select_cols)
             .eq("class_id", class_id)
             .is_("owner_qualification_id", "null")
+            .is_("owner_project_id", "null")
             .execute()
         )
     except Exception as schema_err:
-        msg = str(schema_err)
         if (
-            "owner_qualification_id" not in msg
-            and "PGRST204" not in msg
-            and "schema cache" not in msg.lower()
+            _owner_project_column_missing(schema_err)
+            and not _owner_qualification_column_missing(schema_err)
         ):
-            raise
-        logger.debug(
-            "_select_class_pool_learning_objectives: column missing; "
-            "falling back: %s",
-            schema_err,
-        )
-        return (
-            supabase_admin.table("learning_objectives")
-            .select(select_cols)
-            .eq("class_id", class_id)
-            .execute()
-        )
+            logger.debug(
+                "_select_class_pool_learning_objectives: owner_project_id "
+                "missing; falling back: %s",
+                schema_err,
+            )
+            return (
+                supabase_admin.table("learning_objectives")
+                .select(select_cols)
+                .eq("class_id", class_id)
+                .is_("owner_qualification_id", "null")
+                .execute()
+            )
+        if _owner_qualification_column_missing(schema_err):
+            logger.debug(
+                "_select_class_pool_learning_objectives: owner columns "
+                "missing; falling back: %s",
+                schema_err,
+            )
+            return (
+                supabase_admin.table("learning_objectives")
+                .select(select_cols)
+                .eq("class_id", class_id)
+                .execute()
+            )
+        raise
 
 
 def _allowed_lo_ids_for_grading(class_id, assignment_id=None) -> set:
@@ -1121,14 +1131,14 @@ def _process_enrollments(class_data):
 # loads assignments.
 _ASSIGNMENT_COLS = (
     "id, class_id, name, homework_group, date_returned, revision_due, created_at, "
-    "assignment_type, required_total_masteries, parent_project_id, "
+    "assignment_type, parent_project_id, "
     "assignment_objectives!assignment_objectives_assignment_id_fkey("
     "learning_objective_id, required_ms_for_project, "
     "learning_objectives(id, vendor_code, description))"
 )
 _ASSIGNMENT_COLS_NO_PARENT = (
     "id, class_id, name, homework_group, date_returned, revision_due, created_at, "
-    "assignment_type, required_total_masteries, "
+    "assignment_type, "
     "assignment_objectives!assignment_objectives_assignment_id_fkey("
     "learning_objective_id, required_ms_for_project, "
     "learning_objectives(id, vendor_code, description))"
@@ -1591,6 +1601,50 @@ def class_students(class_id):
     if not students:
         students = _load_students_from_grades(class_id)
 
+    student_ids = [str(s.get("id") or "") for s in students if s.get("id")]
+    projects_by_student = {sid: [] for sid in student_ids}
+    try:
+        assignments = load_assignments_for_class(class_id)
+        project_rows = [
+            a for a in assignments
+            if (a.get("assignment_type") or "") == ASSIGNMENT_TYPE_PROJECT
+        ]
+        for proj in project_rows:
+            pid = str(proj.get("id") or "")
+            if not pid:
+                continue
+            batch = Course.get_project_completion_batch(pid, student_ids) or {}
+            for sid in student_ids:
+                prog = batch.get(sid) or {
+                    "is_complete": False,
+                    "qualifications": [],
+                    "qualifications_met": 0,
+                    "qualifications_total": 0,
+                    "progress_label": "0 of 0 qualifications",
+                }
+                projects_by_student[sid].append({
+                    "id": pid,
+                    "name": proj.get("name") or "Project",
+                    "is_complete": bool(prog.get("is_complete")),
+                    "qualifications": list(prog.get("qualifications") or []),
+                    "qualifications_met": int(prog.get("qualifications_met") or 0),
+                    "qualifications_total": int(prog.get("qualifications_total") or 0),
+                    "progress_label": prog.get("progress_label")
+                    or (
+                        f"{int(prog.get('qualifications_met') or 0)} of "
+                        f"{int(prog.get('qualifications_total') or 0)} qualifications"
+                    ),
+                })
+    except Exception as e:
+        logger.error(
+            "class_students: project completion failed for class %s: %s",
+            class_id, e,
+        )
+        projects_by_student = {sid: [] for sid in student_ids}
+
+    for s in students:
+        s["projects"] = projects_by_student.get(str(s.get("id") or ""), [])
+
     return render_template("class_students.html", 
                             class_id=class_id, 
                             class_name=class_data['name'], 
@@ -1789,7 +1843,54 @@ def class_student_detail(class_id, student_id):
     if not student:
         return redirect(url_for('main.class_students', class_id=class_id))
 
-    return render_template("class_student_detail.html", class_id=class_id, class_name=class_data.get('name'), student=student)
+    projects_progress = []
+    try:
+        assignments = load_assignments_for_class(class_id)
+        project_rows = [
+            a for a in assignments
+            if (a.get("assignment_type") or "") == ASSIGNMENT_TYPE_PROJECT
+        ]
+        sid = str(student_id)
+        for proj in project_rows:
+            pid = str(proj.get("id") or "")
+            if not pid:
+                continue
+            batch = Course.get_project_completion_batch(pid, [sid])
+            prog = (batch or {}).get(sid) or {
+                "is_complete": False,
+                "qualifications": [],
+                "qualifications_met": 0,
+                "qualifications_total": 0,
+                "progress_label": "0 of 0 qualifications",
+            }
+            projects_progress.append({
+                "id": pid,
+                "name": proj.get("name") or "Project",
+                "is_complete": bool(prog.get("is_complete")),
+                "qualifications": list(prog.get("qualifications") or []),
+                "qualifications_met": int(prog.get("qualifications_met") or 0),
+                "qualifications_total": int(prog.get("qualifications_total") or 0),
+                "progress_label": prog.get("progress_label")
+                or (
+                    f"{int(prog.get('qualifications_met') or 0)} of "
+                    f"{int(prog.get('qualifications_total') or 0)} qualifications"
+                ),
+            })
+    except Exception as e:
+        logger.error(
+            "class_student_detail: project completion failed for student %s "
+            "in class %s: %s",
+            student_id, class_id, e,
+        )
+        projects_progress = []
+
+    return render_template(
+        "class_student_detail.html",
+        class_id=class_id,
+        class_name=class_data.get("name"),
+        student=student,
+        projects=projects_progress,
+    )
 
 @main_bp.route("/class/<class_id>/assignments")
 @login_required
@@ -1954,8 +2055,6 @@ def create_assignment(class_id):
             "date_returned": data.get('date_returned'),
             "revision_due": data.get('revision_due'),
             "assignment_type": assignment_type,
-            # Legacy pooled-total column — left unused (always null).
-            "required_total_masteries": None,
         }).execute()
         
         # Link selected LOs to this assignment (batch insert)
@@ -2010,7 +2109,6 @@ def update_assignment(class_id, assignment_id):
         "date_returned": data.get('date_returned'),
         "revision_due": data.get('revision_due'),
         "assignment_type": assignment_type,
-        "required_total_masteries": None,
     }
 
     try:
@@ -2210,28 +2308,28 @@ def _qualification_fields_from_payload(
 
 
 def _create_piece_learning_objective(
-    class_id: str, qualification_id: str, name: str, required_ms: int
+    class_id: str, project_id: str, name: str, required_ms: int
 ) -> str:
-    """Insert a private piece LO owned by this Qualification; return its id."""
+    """Insert a Project-pooled piece LO; return its id."""
     res = _insert_learning_objectives_compat({
         "class_id": class_id,
         "name": name,
         "vendor_code": name,
         "required_ms": int(required_ms),
-        "owner_qualification_id": qualification_id,
+        "owner_project_id": project_id,
     })
     if not res.data:
         raise RuntimeError("Failed to create piece learning objective")
     return str(res.data[0]["id"])
 
 
-def _delete_piece_learning_objective(
+def _delete_legacy_qualification_piece(
     class_id: str,
     lo_id: str,
     qualification_id: str,
     changed_by: Optional[str] = None,
 ) -> None:
-    """Delete a piece LO and its grades / AO links (does not touch class-pool LOs)."""
+    """Delete a legacy piece LO owned by one Qualification."""
     supabase_admin.table("assignment_objectives").delete().eq(
         "learning_objective_id", lo_id
     ).execute()
@@ -2254,75 +2352,179 @@ def _delete_piece_learning_objective(
     ).eq("owner_qualification_id", qualification_id).execute()
 
 
+def _delete_project_piece_if_orphaned(
+    class_id: str,
+    project_id: str,
+    lo_id: str,
+    changed_by: Optional[str] = None,
+) -> None:
+    """Delete a Project-pooled piece when no Qualification still links it."""
+    try:
+        remaining = (
+            supabase_admin.table("assignment_objectives")
+            .select("assignment_id")
+            .eq("learning_objective_id", lo_id)
+            .limit(1)
+            .execute()
+        )
+        if remaining.data:
+            return
+    except Exception as e:
+        logger.error(
+            "orphan check failed for project piece %s: %s", lo_id, e
+        )
+        return
+
+    try:
+        existing = supabase_admin.table("grades").select(
+            "student_id, learning_objective_id, assignment_id, top_score, "
+            "second_score, counts_for_mastery"
+        ).eq("learning_objective_id", lo_id).execute()
+        if changed_by:
+            _log_grade_deletions(existing.data or [], class_id, changed_by)
+    except Exception as e:
+        logger.warning(
+            "Could not audit-log grade deletions for project piece %s: %s",
+            lo_id, e,
+        )
+    supabase_admin.table("grades").delete().eq(
+        "learning_objective_id", lo_id
+    ).execute()
+    supabase_admin.table("learning_objectives").delete().eq("id", lo_id).eq(
+        "class_id", class_id
+    ).eq("owner_project_id", project_id).execute()
+
+
 def _sync_qualification_pieces(
     class_id: str,
+    project_id: str,
     qualification_id: str,
     pieces: List[Dict[str, Any]],
     changed_by: Optional[str] = None,
 ) -> List[str]:
-    """Reconcile private piece LOs for a Qualification; rebuild AO links.
+    """Reconcile pieces for a Qualification; rebuild AO links.
 
-    Why keep ``assignment_objectives`` even with ``owner_qualification_id``:
-    SpeedGrader, ``get_assignment_lo_ids``, and ``get_project_completion_batch``
-    all walk AO rows to discover which LOs belong to an assignment. Ownership
-    (``owner_qualification_id``) keeps pieces out of the class LO pool and
-    cascades deletes; AO remains the assignment↔LO link the grading UI uses.
-
-    Update rules:
-      - Payload piece with an ``id`` owned by this Qualification → UPDATE that
-        LO row in place when name/required_ms changed (preserves grade history).
-      - Payload piece without a matching owned id → INSERT a fresh piece LO.
-      - Existing owned pieces absent from the payload → DELETE (with grades).
-      - Unchanged owned pieces are left untouched (no write).
+    - No id → INSERT with owner_project_id = project_id.
+    - id owned by this Qualification (legacy owner_qualification_id) →
+      UPDATE in place when name/required_ms changed.
+    - id with owner_project_id = project_id already linked here →
+      UPDATE shared LO when name/required_ms changed.
+    - id with owner_project_id = project_id not yet linked here →
+      attach only (AO); do not modify the LO row.
+    - Legacy owned pieces absent from payload → DELETE LO + grades.
+    - Project pieces removed from this Qualification → unlink; DELETE LO
+      only when no AO links remain.
     """
-    existing_resp = (
+    legacy_resp = (
         supabase_admin.table("learning_objectives")
         .select("id, name, vendor_code, required_ms, owner_qualification_id")
         .eq("class_id", class_id)
         .eq("owner_qualification_id", qualification_id)
         .execute()
     )
-    existing_by_id = {
-        str(r["id"]): r for r in (existing_resp.data or []) if r.get("id")
+    legacy_by_id = {
+        str(r["id"]): r for r in (legacy_resp.data or []) if r.get("id")
+    }
+
+    project_by_id: Dict[str, Any] = {}
+    try:
+        project_resp = (
+            supabase_admin.table("learning_objectives")
+            .select("id, name, vendor_code, required_ms, owner_project_id")
+            .eq("class_id", class_id)
+            .eq("owner_project_id", project_id)
+            .execute()
+        )
+        project_by_id = {
+            str(r["id"]): r for r in (project_resp.data or []) if r.get("id")
+        }
+    except Exception as schema_err:
+        if not _owner_project_column_missing(schema_err):
+            raise
+
+    ao_existing = (
+        supabase_admin.table("assignment_objectives")
+        .select("learning_objective_id")
+        .eq("assignment_id", qualification_id)
+        .execute()
+    )
+    currently_linked = {
+        str(r["learning_objective_id"])
+        for r in (ao_existing.data or [])
+        if r.get("learning_objective_id")
     }
 
     final_ids: List[str] = []
-    retained_ids: set = set()
+    retained_legacy: set = set()
+
+    def _maybe_update_lo(
+        pid: str,
+        old: Dict[str, Any],
+        name: str,
+        required_ms: int,
+        owner_field: str,
+        owner_value: str,
+    ) -> None:
+        old_name = (old.get("name") or "").strip()
+        old_vc = (old.get("vendor_code") or "").strip()
+        try:
+            old_req = int(old.get("required_ms") or 0)
+        except (TypeError, ValueError):
+            old_req = 0
+        if old_name != name or old_vc != name or old_req != required_ms:
+            supabase_admin.table("learning_objectives").update({
+                "name": name,
+                "vendor_code": name,
+                "required_ms": required_ms,
+            }).eq("id", pid).eq("class_id", class_id).eq(
+                owner_field, owner_value
+            ).execute()
 
     for piece in pieces:
         pid = str(piece["id"]) if piece.get("id") else None
         name = piece["name"]
         required_ms = int(piece["required_ms"])
 
-        if pid and pid in existing_by_id:
-            old = existing_by_id[pid]
-            old_name = (old.get("name") or "").strip()
-            old_vc = (old.get("vendor_code") or "").strip()
-            try:
-                old_req = int(old.get("required_ms") or 0)
-            except (TypeError, ValueError):
-                old_req = 0
-            if old_name != name or old_vc != name or old_req != required_ms:
-                supabase_admin.table("learning_objectives").update({
-                    "name": name,
-                    "vendor_code": name,
-                    "required_ms": required_ms,
-                }).eq("id", pid).eq("class_id", class_id).eq(
-                    "owner_qualification_id", qualification_id
-                ).execute()
+        if pid and pid in legacy_by_id:
+            _maybe_update_lo(
+                pid,
+                legacy_by_id[pid],
+                name,
+                required_ms,
+                "owner_qualification_id",
+                qualification_id,
+            )
             final_ids.append(pid)
-            retained_ids.add(pid)
+            retained_legacy.add(pid)
+        elif pid and pid in project_by_id:
+            if pid in currently_linked:
+                _maybe_update_lo(
+                    pid,
+                    project_by_id[pid],
+                    name,
+                    required_ms,
+                    "owner_project_id",
+                    project_id,
+                )
+            final_ids.append(pid)
+        elif pid:
+            raise ValueError("Piece is not available on this Project.")
         else:
             new_id = _create_piece_learning_objective(
-                class_id, qualification_id, name, required_ms
+                class_id, project_id, name, required_ms
             )
             final_ids.append(new_id)
 
-    for eid in existing_by_id:
-        if eid not in retained_ids:
-            _delete_piece_learning_objective(
+    for eid in legacy_by_id:
+        if eid not in retained_legacy:
+            _delete_legacy_qualification_piece(
                 class_id, eid, qualification_id, changed_by=changed_by
             )
+
+    unlinked_project_ids = {
+        lid for lid in currently_linked
+        if lid in project_by_id and lid not in final_ids
+    }
 
     supabase_admin.table("assignment_objectives").delete().eq(
         "assignment_id", qualification_id
@@ -2336,6 +2538,12 @@ def _sync_qualification_pieces(
         for lo_id in final_ids
     ]
     _insert_assignment_objectives(ao_rows)
+
+    for lid in unlinked_project_ids:
+        _delete_project_piece_if_orphaned(
+            class_id, project_id, lid, changed_by=changed_by
+        )
+
     return final_ids
 
 
@@ -2359,7 +2567,7 @@ def list_project_qualifications(class_id, project_id):
                 "assignment_objectives!assignment_objectives_assignment_id_fkey("
                 "learning_objective_id, required_ms_for_project, "
                 "learning_objectives(id, name, vendor_code, description, "
-                "required_ms, owner_qualification_id))"
+                "required_ms, owner_qualification_id, owner_project_id))"
             )
             .eq("class_id", class_id)
             .eq("parent_project_id", project_id)
@@ -2369,6 +2577,33 @@ def list_project_qualifications(class_id, project_id):
         return jsonify({"success": True, "qualifications": result.data or []}), 200
     except Exception as e:
         return _safe_api_error("Could not load qualifications", 500, log_detail=e)
+
+
+@main_bp.route(
+    "/api/class/<class_id>/projects/<project_id>/pieces",
+    methods=["GET"],
+)
+@api_instructor_required
+def list_project_pieces(class_id, project_id):
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+    if not _project_row_for_class(class_id, project_id):
+        return jsonify({"success": False, "error": "Project not found"}), 404
+
+    try:
+        result = (
+            supabase_admin.table("learning_objectives")
+            .select("id, name, vendor_code, required_ms, owner_project_id")
+            .eq("class_id", class_id)
+            .eq("owner_project_id", project_id)
+            .order("name", desc=False)
+            .execute()
+        )
+        return jsonify({"success": True, "pieces": result.data or []}), 200
+    except Exception as e:
+        if _owner_project_column_missing(e):
+            return jsonify({"success": True, "pieces": []}), 200
+        return _safe_api_error("Could not load project pieces", 500, log_detail=e)
 
 
 @main_bp.route(
@@ -2412,19 +2647,22 @@ def create_project_qualification(class_id, project_id):
             "date_returned": data.get("date_returned"),
             "revision_due": data.get("revision_due"),
             "assignment_type": assignment_type,
-            "required_total_masteries": None,
             "parent_project_id": project_id,
         }).execute()
         if not result.data:
             return jsonify({"success": False, "error": "Could not create qualification"}), 500
 
         qualification_id = result.data[0]["id"]
-        piece_ids = _sync_qualification_pieces(
-            class_id,
-            qualification_id,
-            pieces or [],
-            changed_by=session.get("user_id"),
-        )
+        try:
+            piece_ids = _sync_qualification_pieces(
+                class_id,
+                project_id,
+                qualification_id,
+                pieces or [],
+                changed_by=session.get("user_id"),
+            )
+        except ValueError as ve:
+            return jsonify({"success": False, "error": str(ve)}), 400
 
         return jsonify({
             "success": True,
@@ -2536,17 +2774,20 @@ def update_project_qualification(class_id, project_id, qualification_id):
             "date_returned": data.get("date_returned"),
             "revision_due": data.get("revision_due"),
             "assignment_type": assignment_type,
-            "required_total_masteries": None,
         }).eq("id", qualification_id).eq("class_id", class_id).eq(
             "parent_project_id", project_id
         ).execute()
 
-        piece_ids = _sync_qualification_pieces(
-            class_id,
-            qualification_id,
-            pieces or [],
-            changed_by=session.get("user_id"),
-        )
+        try:
+            piece_ids = _sync_qualification_pieces(
+                class_id,
+                project_id,
+                qualification_id,
+                pieces or [],
+                changed_by=session.get("user_id"),
+            )
+        except ValueError as ve:
+            return jsonify({"success": False, "error": str(ve)}), 400
 
         return jsonify({
             "success": True,
@@ -2664,7 +2905,6 @@ def create_class_project(class_id):
             "date_returned": data.get("date_returned"),
             "revision_due": data.get("revision_due"),
             "assignment_type": ASSIGNMENT_TYPE_PROJECT,
-            "required_total_masteries": None,
             "parent_project_id": None,
         }).execute()
         if not result.data:
@@ -2702,7 +2942,6 @@ def update_class_project(class_id, project_id):
             "date_returned": data.get("date_returned"),
             "revision_due": data.get("revision_due"),
             "assignment_type": ASSIGNMENT_TYPE_PROJECT,
-            "required_total_masteries": None,
         }).eq("id", project_id).eq("class_id", class_id).execute()
         return jsonify({"success": True, "project_id": project_id})
     except Exception as e:
@@ -2831,7 +3070,7 @@ def _student_enrolled_in_class(class_id: str, student_id: str) -> bool:
 
 
 def _learning_objective_belongs_to_class(class_id: str, lo_id: str) -> bool:
-    """True if lo_id is a class-pool LO (not a Qualification piece)."""
+    """True if lo_id is a class-pool LO (not a Qualification/Project piece)."""
     try:
         try:
             r = (
@@ -2840,25 +3079,35 @@ def _learning_objective_belongs_to_class(class_id: str, lo_id: str) -> bool:
                 .eq("id", lo_id)
                 .eq("class_id", class_id)
                 .is_("owner_qualification_id", "null")
+                .is_("owner_project_id", "null")
                 .limit(1)
                 .execute()
             )
         except Exception as schema_err:
-            msg = str(schema_err)
             if (
-                "owner_qualification_id" not in msg
-                and "PGRST204" not in msg
-                and "schema cache" not in msg.lower()
+                _owner_project_column_missing(schema_err)
+                and not _owner_qualification_column_missing(schema_err)
             ):
+                r = (
+                    supabase_admin.table("learning_objectives")
+                    .select("id")
+                    .eq("id", lo_id)
+                    .eq("class_id", class_id)
+                    .is_("owner_qualification_id", "null")
+                    .limit(1)
+                    .execute()
+                )
+            elif _owner_qualification_column_missing(schema_err):
+                r = (
+                    supabase_admin.table("learning_objectives")
+                    .select("id")
+                    .eq("id", lo_id)
+                    .eq("class_id", class_id)
+                    .limit(1)
+                    .execute()
+                )
+            else:
                 raise
-            r = (
-                supabase_admin.table("learning_objectives")
-                .select("id")
-                .eq("id", lo_id)
-                .eq("class_id", class_id)
-                .limit(1)
-                .execute()
-            )
         return bool(r.data)
     except Exception:
         return False
@@ -2893,34 +3142,42 @@ def delete_lo(class_id, lo_id):
         try:
             chk = (
                 supabase_admin.table("learning_objectives")
-                .select("id, owner_qualification_id")
+                .select("id, owner_qualification_id, owner_project_id")
                 .eq("id", lo_id)
                 .eq("class_id", class_id)
                 .limit(1)
                 .execute()
             )
         except Exception as schema_err:
-            msg = str(schema_err)
             if (
-                "owner_qualification_id" not in msg
-                and "PGRST204" not in msg
-                and "schema cache" not in msg.lower()
+                _owner_project_column_missing(schema_err)
+                and not _owner_qualification_column_missing(schema_err)
             ):
+                chk = (
+                    supabase_admin.table("learning_objectives")
+                    .select("id, owner_qualification_id")
+                    .eq("id", lo_id)
+                    .eq("class_id", class_id)
+                    .limit(1)
+                    .execute()
+                )
+            elif _owner_qualification_column_missing(schema_err):
+                chk = (
+                    supabase_admin.table("learning_objectives")
+                    .select("id")
+                    .eq("id", lo_id)
+                    .eq("class_id", class_id)
+                    .limit(1)
+                    .execute()
+                )
+            else:
                 raise
-            chk = (
-                supabase_admin.table("learning_objectives")
-                .select("id")
-                .eq("id", lo_id)
-                .eq("class_id", class_id)
-                .limit(1)
-                .execute()
-            )
         if not chk.data:
             return jsonify({"success": False, "error": "Learning objective not found"}), 404
-        if chk.data[0].get("owner_qualification_id"):
+        if chk.data[0].get("owner_qualification_id") or chk.data[0].get("owner_project_id"):
             return jsonify({
                 "success": False,
-                "error": "Qualification pieces cannot be deleted from the class LO pool.",
+                "error": "Qualification/Project pieces cannot be deleted from the class LO pool.",
             }), 400
         # First delete assignment_objectives links
         supabase_admin.table("assignment_objectives").delete().eq("learning_objective_id", lo_id).execute()
@@ -2955,7 +3212,8 @@ def api_update_learning_objective(class_id, lo_id):
             cur = (
                 supabase_admin.table("learning_objectives")
                 .select(
-                    "id, vendor_code, description, required_ms, owner_qualification_id"
+                    "id, vendor_code, description, required_ms, "
+                    "owner_qualification_id, owner_project_id"
                 )
                 .eq("id", lo_id)
                 .eq("class_id", class_id)
@@ -2963,28 +3221,39 @@ def api_update_learning_objective(class_id, lo_id):
                 .execute()
             )
         except Exception as schema_err:
-            msg = str(schema_err)
             if (
-                "owner_qualification_id" not in msg
-                and "PGRST204" not in msg
-                and "schema cache" not in msg.lower()
+                _owner_project_column_missing(schema_err)
+                and not _owner_qualification_column_missing(schema_err)
             ):
+                cur = (
+                    supabase_admin.table("learning_objectives")
+                    .select(
+                        "id, vendor_code, description, required_ms, "
+                        "owner_qualification_id"
+                    )
+                    .eq("id", lo_id)
+                    .eq("class_id", class_id)
+                    .limit(1)
+                    .execute()
+                )
+            elif _owner_qualification_column_missing(schema_err):
+                cur = (
+                    supabase_admin.table("learning_objectives")
+                    .select("id, vendor_code, description, required_ms")
+                    .eq("id", lo_id)
+                    .eq("class_id", class_id)
+                    .limit(1)
+                    .execute()
+                )
+            else:
                 raise
-            cur = (
-                supabase_admin.table("learning_objectives")
-                .select("id, vendor_code, description, required_ms")
-                .eq("id", lo_id)
-                .eq("class_id", class_id)
-                .limit(1)
-                .execute()
-            )
         if not cur.data:
             return jsonify({"success": False, "error": "Learning objective not found"}), 404
         row = cur.data[0]
-        if row.get("owner_qualification_id"):
+        if row.get("owner_qualification_id") or row.get("owner_project_id"):
             return jsonify({
                 "success": False,
-                "error": "Qualification pieces cannot be edited from the class LO pool.",
+                "error": "Qualification/Project pieces cannot be edited from the class LO pool.",
             }), 400
         vendor_raw = data.get("vendor_code")
         if vendor_raw is None:
@@ -3416,6 +3685,45 @@ def student_history(class_id, student_id):
         }
         lo_grade_data.append(lo_info)
 
+    project_tiles = []
+    try:
+        assignments = load_assignments_for_class(class_id)
+        project_rows = [
+            a for a in assignments
+            if (a.get("assignment_type") or "") == ASSIGNMENT_TYPE_PROJECT
+        ]
+        sid = str(profile_id or student_id)
+        for proj in project_rows:
+            pid = str(proj.get("id") or "")
+            if not pid:
+                continue
+            batch = Course.get_project_completion_batch(pid, [sid]) or {}
+            prog = batch.get(sid) or {}
+            pieces = []
+            seen_piece_ids = set()
+            for qual in (prog.get("qualifications") or []):
+                for obj in (qual.get("objectives") or []):
+                    piece_id = str(obj.get("learning_objective_id") or "")
+                    if not piece_id or piece_id in seen_piece_ids:
+                        continue
+                    seen_piece_ids.add(piece_id)
+                    pieces.append({
+                        "id": piece_id,
+                        "vendor_code": (obj.get("vendor_code") or "").strip() or "Piece",
+                        "grades": list(student_grades.get(piece_id, [])),
+                    })
+            project_tiles.append({
+                "id": pid,
+                "name": proj.get("name") or "Project",
+                "pieces": pieces,
+            })
+    except Exception as e:
+        logger.error(
+            "student_history: project tiles failed for student %s in class %s: %s",
+            student_id, class_id, e,
+        )
+        project_tiles = []
+
     return render_template(
         "student_history.html",
         class_id=class_id,
@@ -3424,6 +3732,7 @@ def student_history(class_id, student_id):
         student_name=student_name,
         student_email=student_email,
         learning_objectives=lo_grade_data,
+        projects=project_tiles,
     )
 
 @main_bp.route("/class/<class_id>/speed_grader", endpoint='class_speed_grader')

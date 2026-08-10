@@ -14,4 +14,9 @@ if __name__ == '__main__':
     # against a misconfigured environment can't accidentally enable Werkzeug's
     # interactive debugger (arbitrary code execution risk) by default.
     debug = os.environ.get("FLASK_DEBUG", "").strip().lower() in ("1", "true", "yes")
+    # With debug off, Jinja caches compiled templates. Local `python run.py`
+    # must still pick up HTML edits (LO <details>, Reports cards, etc.) without
+    # requiring a full process restart every save.
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
+    app.jinja_env.auto_reload = True
     app.run(debug=debug, host="127.0.0.1", port=5000, use_reloader=use_reloader)

@@ -965,6 +965,60 @@ class TestProjectCompletion(unittest.TestCase):
         self.assertIsNotNone(batch)
         self.assertEqual(batch["stu-1"], single)
 
+    def test_shared_project_piece_pools_mastery_across_qualifications(self):
+        project = {"id": "proj-1", "assignment_type": "project"}
+        qualifications = [
+            {"id": "qual-1", "name": "Qual A", "assignment_type": "mastery_opp"},
+            {"id": "qual-2", "name": "Qual B", "assignment_type": "mastery_opp"},
+        ]
+        ao_rows = [
+            {
+                "assignment_id": "qual-1",
+                "learning_objective_id": "lo-shared",
+                "required_ms_for_project": None,
+                "learning_objectives": {
+                    "id": "lo-shared",
+                    "vendor_code": "Shared",
+                    "name": "Shared",
+                    "required_ms": 1,
+                    "owner_qualification_id": None,
+                    "owner_project_id": "proj-1",
+                },
+            },
+            {
+                "assignment_id": "qual-2",
+                "learning_objective_id": "lo-shared",
+                "required_ms_for_project": None,
+                "learning_objectives": {
+                    "id": "lo-shared",
+                    "vendor_code": "Shared",
+                    "name": "Shared",
+                    "required_ms": 1,
+                    "owner_qualification_id": None,
+                    "owner_project_id": "proj-1",
+                },
+            },
+        ]
+        grade_rows = [
+            {
+                "student_id": "stu-1",
+                "learning_objective_id": "lo-shared",
+                "top_score": "M",
+                "counts_for_mastery": True,
+            },
+        ]
+        with self._patch_completion(project, qualifications, ao_rows, grade_rows):
+            result = Course.get_project_completion("stu-1", "proj-1")
+        self.assertIsNotNone(result)
+        by_id = {q["qualification_id"]: q for q in result["qualifications"]}
+        self.assertEqual(by_id["qual-1"]["objectives"][0]["mastery_count"], 1)
+        self.assertEqual(by_id["qual-2"]["objectives"][0]["mastery_count"], 1)
+        self.assertTrue(by_id["qual-1"]["objectives"][0]["is_met"])
+        self.assertTrue(by_id["qual-2"]["objectives"][0]["is_met"])
+        self.assertTrue(by_id["qual-1"]["is_complete"])
+        self.assertTrue(by_id["qual-2"]["is_complete"])
+        self.assertTrue(result["is_complete"])
+
 
 class TestQualificationListExclusion(unittest.TestCase):
     """Normal assignment list queries must omit child Qualifications."""
@@ -1007,15 +1061,34 @@ class TestQualificationCrudRoutes(unittest.TestCase):
             sess["csrf_token"] = "test-csrf"
         return {"X-CSRF-Token": "test-csrf"}
 
-    def _piece_tables(self, existing_pieces=None, new_piece_id="piece-1"):
+    def _piece_tables(
+        self,
+        existing_pieces=None,
+        project_pieces=None,
+        currently_linked=None,
+        new_piece_id="piece-1",
+    ):
         """Mock assignments + learning_objectives + assignment_objectives for piece sync."""
         asg_table = MagicMock()
         ao_table = MagicMock()
         lo_table = MagicMock()
 
-        lo_table.select.return_value.eq.return_value.eq.return_value.execute.return_value = (
-            MagicMock(data=list(existing_pieces or []))
-        )
+        lo_select_n = {"n": 0}
+
+        def lo_select(*_a, **_k):
+            chain = MagicMock()
+            lo_select_n["n"] += 1
+            # Sync order: legacy owner_qualification_id, then owner_project_id.
+            if lo_select_n["n"] == 1:
+                data = list(existing_pieces or [])
+            else:
+                data = list(project_pieces or [])
+            chain.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+                data=data
+            )
+            return chain
+
+        lo_table.select.side_effect = lo_select
         lo_table.insert.return_value.execute.return_value = MagicMock(
             data=[{"id": new_piece_id}]
         )
@@ -1025,6 +1098,25 @@ class TestQualificationCrudRoutes(unittest.TestCase):
         lo_table.delete.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = (
             MagicMock(data=[])
         )
+
+        ao_select_n = {"n": 0}
+
+        def ao_select(*_a, **_k):
+            chain = MagicMock()
+            ao_select_n["n"] += 1
+            if ao_select_n["n"] == 1:
+                linked = [
+                    {"learning_objective_id": lid}
+                    for lid in (currently_linked or [])
+                ]
+                chain.eq.return_value.execute.return_value = MagicMock(data=linked)
+            else:
+                chain.eq.return_value.limit.return_value.execute.return_value = (
+                    MagicMock(data=[])
+                )
+            return chain
+
+        ao_table.select.side_effect = ao_select
         ao_table.delete.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
         ao_table.insert.return_value.execute.return_value = MagicMock(data=[])
 
@@ -1092,7 +1184,8 @@ class TestQualificationCrudRoutes(unittest.TestCase):
         self.assertEqual(insert_payload.get("parent_project_id"), "proj-1")
         self.assertEqual(insert_payload.get("assignment_type"), "mastery_opp")
         lo_insert = lo_table.insert.call_args[0][0]
-        self.assertEqual(lo_insert.get("owner_qualification_id"), "qual-1")
+        self.assertEqual(lo_insert.get("owner_project_id"), "proj-1")
+        self.assertIsNone(lo_insert.get("owner_qualification_id"))
         self.assertEqual(lo_insert.get("name"), "Piece A")
         self.assertEqual(lo_insert.get("vendor_code"), "Piece A")
         self.assertEqual(lo_insert.get("required_ms"), 2)
@@ -1355,14 +1448,119 @@ class TestQualificationCrudRoutes(unittest.TestCase):
         self.assertEqual(lo_update.get("name"), "Renamed Piece")
         self.assertEqual(lo_update.get("required_ms"), 3)
 
+    def test_attach_existing_project_piece_links_without_lo_write(self):
+        from app import routes as r
+
+        headers = self._auth_headers()
+        project_row = {
+            "id": "proj-1",
+            "class_id": "class-1",
+            "assignment_type": "project",
+            "parent_project_id": None,
+            "homework_group": "Group 1",
+        }
+        project_pieces = [{
+            "id": "piece-shared",
+            "name": "Shared Piece",
+            "vendor_code": "Shared Piece",
+            "required_ms": 2,
+            "owner_project_id": "proj-1",
+        }]
+        asg_table, ao_table, lo_table, table_side_effect = self._piece_tables(
+            project_pieces=project_pieces,
+            currently_linked=[],
+        )
+        asg_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = (
+            MagicMock(data=[{"id": "qual-2", "parent_project_id": "proj-1"}])
+        )
+        asg_table.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = (
+            MagicMock(data=[])
+        )
+        sa = MagicMock()
+        sa.table.side_effect = table_side_effect
+
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_project_row_for_class", return_value=project_row), \
+                unittest.mock.patch.object(
+                    r.Homework,
+                    "canonicalize_homework_group_for_class",
+                    return_value="Group 1",
+                ):
+            rv = self.client.put(
+                "/api/class/class-1/projects/proj-1/qualifications/qual-2",
+                json={
+                    "name": "Qual B",
+                    "pieces": [{
+                        "id": "piece-shared",
+                        "name": "Shared Piece",
+                        "required_ms": 2,
+                    }],
+                },
+                headers=headers,
+            )
+
+        self.assertEqual(rv.status_code, 200, rv.get_json())
+        body = rv.get_json()
+        self.assertTrue(body.get("success"))
+        self.assertEqual(body.get("piece_ids"), ["piece-shared"])
+        lo_table.insert.assert_not_called()
+        lo_table.update.assert_not_called()
+        ao_insert = ao_table.insert.call_args[0][0]
+        self.assertEqual(ao_insert[0]["learning_objective_id"], "piece-shared")
+        self.assertEqual(ao_insert[0]["assignment_id"], "qual-2")
+
+    def test_list_project_pieces_scoped_to_project(self):
+        from app import routes as r
+
+        headers = self._auth_headers()
+        lo_table = MagicMock()
+        lo_table.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = (
+            MagicMock(data=[{
+                "id": "piece-a",
+                "name": "Piece A",
+                "vendor_code": "Piece A",
+                "required_ms": 1,
+                "owner_project_id": "proj-1",
+            }])
+        )
+        sa = MagicMock()
+        sa.table.return_value = lo_table
+
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(
+                    r,
+                    "_project_row_for_class",
+                    return_value={
+                        "id": "proj-1",
+                        "class_id": "class-1",
+                        "assignment_type": "project",
+                    },
+                ):
+            rv = self.client.get(
+                "/api/class/class-1/projects/proj-1/pieces",
+                headers=headers,
+            )
+
+        self.assertEqual(rv.status_code, 200, rv.get_json())
+        body = rv.get_json()
+        self.assertTrue(body.get("success"))
+        self.assertEqual(len(body.get("pieces") or []), 1)
+        self.assertEqual(body["pieces"][0]["id"], "piece-a")
+        lo_table.select.return_value.eq.assert_any_call("class_id", "class-1")
+        lo_table.select.return_value.eq.return_value.eq.assert_called_with(
+            "owner_project_id", "proj-1"
+        )
+
 
 class TestQualificationPiecesIsolation(unittest.TestCase):
     """Pieces are private LOs: excluded from class pool, gradable on owner."""
 
     def test_get_learning_objectives_filters_owner_qualification_id(self):
         chain = MagicMock()
-        chain.eq.return_value.is_.return_value.execute.return_value = MagicMock(
-            data=[{"id": "lo-pool", "name": "Pool", "vendor_code": "P1"}]
+        chain.eq.return_value.is_.return_value.is_.return_value.execute.return_value = (
+            MagicMock(data=[{"id": "lo-pool", "name": "Pool", "vendor_code": "P1"}])
         )
         sa = MagicMock()
         sa.table.return_value.select.return_value = chain
@@ -1372,13 +1570,16 @@ class TestQualificationPiecesIsolation(unittest.TestCase):
 
         chain.eq.assert_called_with("class_id", "class-1")
         chain.eq.return_value.is_.assert_called_with("owner_qualification_id", "null")
+        chain.eq.return_value.is_.return_value.is_.assert_called_with(
+            "owner_project_id", "null"
+        )
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["id"], "lo-pool")
 
     def test_get_lo_ids_for_class_filters_pieces(self):
         chain = MagicMock()
-        chain.eq.return_value.is_.return_value.execute.return_value = MagicMock(
-            data=[{"id": "lo-pool"}]
+        chain.eq.return_value.is_.return_value.is_.return_value.execute.return_value = (
+            MagicMock(data=[{"id": "lo-pool"}])
         )
         sa = MagicMock()
         sa.table.return_value.select.return_value = chain
@@ -1387,6 +1588,9 @@ class TestQualificationPiecesIsolation(unittest.TestCase):
             ids = Course.get_lo_ids_for_class("class-1")
 
         chain.eq.return_value.is_.assert_called_with("owner_qualification_id", "null")
+        chain.eq.return_value.is_.return_value.is_.assert_called_with(
+            "owner_project_id", "null"
+        )
         self.assertEqual(ids, ["lo-pool"])
 
     def test_save_grades_accepts_piece_owned_by_assignment(self):
