@@ -32,8 +32,6 @@
 
   {% set los = student.learning_objectives %}
   {% set passed = los|selectattr('is_passed')|list|length %}
-  {% set project_list = projects if projects is defined else [] %}
-  {% set projects_passed = project_list|selectattr('is_complete')|list|length %}
   <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm p-6">
     <div class="space-y-6">
       <div>
@@ -49,21 +47,6 @@
           </div>
         </div>
       </div>
-      {% if projects is defined %}
-      <div class="border-t border-slate-100 dark:border-slate-700 pt-6">
-        <p class="text-sm font-medium text-slate-700 dark:text-slate-300 mb-3">Projects</p>
-        <div class="grid grid-cols-2 gap-6">
-          <div>
-            <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Passed</p>
-            <p class="text-2xl font-semibold text-slate-900 dark:text-white">{{ projects_passed }} / {{ project_list|length }}</p>
-          </div>
-          <div>
-            <p class="text-sm text-slate-500 dark:text-slate-400 mb-2">Progress</p>
-            {{ progress_bar(projects_passed, project_list|length, show_label=true) }}
-          </div>
-        </div>
-      </div>
-      {% endif %}
     </div>
   </div>
 
@@ -102,86 +85,21 @@
       {% endfor %}
     </div>
   </div>
-
-  {% if projects is defined %}
-  <div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm">
-    <div class="p-6 border-b border-slate-100 dark:border-slate-700">
-      <h2 class="font-semibold text-slate-900 dark:text-white">Projects</h2>
-    </div>
-    <div class="divide-y divide-slate-50 dark:divide-slate-700">
-      {% for project in projects %}
-      <details class="group/project">
-        <summary class="p-6 cursor-pointer list-none flex items-center justify-between gap-4 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
-          <div class="flex items-center gap-3 min-w-0">
-            <svg class="w-4 h-4 text-slate-400 shrink-0 transition-transform group-open/project:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-            <h3 class="font-medium text-slate-900 dark:text-white truncate">{{ project.name }}</h3>
-          </div>
-          {% if project.is_complete %}
-          <span class="shrink-0 px-2 py-1 bg-green-500 text-white rounded-md text-xs font-medium">Complete</span>
-          {% else %}
-          <span class="shrink-0 px-2 py-1 bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 rounded-md text-xs font-medium">{{ project.progress_label }}</span>
-          {% endif %}
-        </summary>
-        <div class="px-6 pb-6 space-y-3">
-          {% for qual in project.qualifications %}
-          <details class="group/qual rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
-            <summary class="px-4 py-3 cursor-pointer list-none flex items-center justify-between gap-3 hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors">
-              <div class="flex items-center gap-2 min-w-0">
-                <svg class="w-3.5 h-3.5 text-slate-400 shrink-0 transition-transform group-open/qual:rotate-90" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                <span class="text-sm font-medium text-slate-900 dark:text-white truncate">{{ qual.name or 'Qualification' }}</span>
-              </div>
-              {% if qual.is_complete %}
-              <span class="shrink-0 px-2 py-0.5 bg-green-500 text-white rounded-md text-xs font-medium">Complete</span>
-              {% else %}
-              <span class="shrink-0 px-2 py-0.5 bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200 rounded-md text-xs font-medium">{{ qual.progress_label or ((qual.objectives_met or 0) ~ ' of ' ~ (qual.objectives_total or 0) ~ ' objectives') }}</span>
-              {% endif %}
-            </summary>
-            <div class="border-t border-slate-100 dark:border-slate-700 divide-y divide-slate-50 dark:divide-slate-700">
-              {% for obj in qual.objectives %}
-              <div class="px-4 py-3 flex items-center justify-between gap-4">
-                <div class="min-w-0">
-                  <p class="text-sm font-medium text-slate-800 dark:text-slate-100 truncate">{{ obj.vendor_code or 'Piece' }}</p>
-                  <p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{{ obj.mastery_count or 0 }} of {{ obj.required_ms_for_project or 0 }} required</p>
-                </div>
-                {% if obj.is_met %}
-                <span class="shrink-0 px-2 py-0.5 bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-200 rounded-md text-xs font-medium">Met</span>
-                {% else %}
-                <span class="shrink-0 px-2 py-0.5 bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-300 rounded-md text-xs font-medium">Not met</span>
-                {% endif %}
-              </div>
-              {% endfor %}
-            </div>
-          </details>
-          {% endfor %}
-        </div>
-      </details>
-      {% endfor %}
-    </div>
-  </div>
-  {% endif %}
 </div>
 
 <style>
-.group\/lo > summary::-webkit-details-marker,
-.group\/project > summary::-webkit-details-marker,
-.group\/qual > summary::-webkit-details-marker {
+.group\/lo > summary::-webkit-details-marker {
   display: none;
 }
-.group\/lo > summary,
-.group\/project > summary,
-.group\/qual > summary {
+.group\/lo > summary {
   list-style: none;
 }
 /* Chevron rotation without relying on Tailwind named-group variants
    (CDN builds often omit group-open/<name>:rotate-*). */
-.group\/lo > summary svg,
-.group\/project > summary svg,
-.group\/qual > summary svg {
+.group\/lo > summary svg {
   transition: transform 0.15s ease;
 }
-.group\/lo[open] > summary svg,
-.group\/project[open] > summary svg,
-.group\/qual[open] > summary svg {
+.group\/lo[open] > summary svg {
   transform: rotate(90deg);
 }
 

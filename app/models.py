@@ -30,30 +30,9 @@ logger = logging.getLogger(__name__)
 MASTERY_GRADES = ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A', 'I')
 
 # Assignment type labels stored on assignments.assignment_type.
-# 'mastery_opp' and 'exam' use the existing per-LO required_ms path;
-# only 'project' uses per-LO required_ms_for_project + get_project_completion.
+# All three types share the same LO selection and grading path.
 ASSIGNMENT_TYPES = ('mastery_opp', 'exam', 'project')
 ASSIGNMENT_TYPE_PROJECT = 'project'
-
-
-def _owner_qualification_column_missing(err: Exception) -> bool:
-    """True when the DB/schema has not yet added owner_qualification_id."""
-    msg = str(err or "")
-    return (
-        "owner_qualification_id" in msg
-        or "PGRST204" in msg
-        or "schema cache" in msg.lower()
-    )
-
-
-def _owner_project_column_missing(err: Exception) -> bool:
-    """True when the DB/schema has not yet added owner_project_id."""
-    msg = str(err or "")
-    return (
-        "owner_project_id" in msg
-        or "PGRST204" in msg
-        or "schema cache" in msg.lower()
-    )
 
 
 class Course:
@@ -65,54 +44,14 @@ class Course:
 
     @staticmethod
     def get_lo_ids_for_class(class_id):
-        """Return class-pool learning-objective IDs (excludes pieces).
-
-        Pieces are private ``learning_objectives`` rows with
-        ``owner_qualification_id`` and/or ``owner_project_id`` set; they must
-        never appear in the class LO pool used by LO management, normal
-        assignment pickers, or dashboards.
-        """
+        """Return learning-objective IDs for a class."""
         try:
-            try:
-                resp = (
-                    supabase_admin.table("learning_objectives")
-                    .select("id")
-                    .eq("class_id", class_id)
-                    .is_("owner_qualification_id", "null")
-                    .is_("owner_project_id", "null")
-                    .execute()
-                )
-            except Exception as schema_err:
-                if (
-                    _owner_project_column_missing(schema_err)
-                    and not _owner_qualification_column_missing(schema_err)
-                ):
-                    logger.debug(
-                        "get_lo_ids_for_class: owner_project_id missing; "
-                        "falling back: %s",
-                        schema_err,
-                    )
-                    resp = (
-                        supabase_admin.table("learning_objectives")
-                        .select("id")
-                        .eq("class_id", class_id)
-                        .is_("owner_qualification_id", "null")
-                        .execute()
-                    )
-                elif _owner_qualification_column_missing(schema_err):
-                    logger.debug(
-                        "get_lo_ids_for_class: owner columns missing; "
-                        "falling back: %s",
-                        schema_err,
-                    )
-                    resp = (
-                        supabase_admin.table("learning_objectives")
-                        .select("id")
-                        .eq("class_id", class_id)
-                        .execute()
-                    )
-                else:
-                    raise
+            resp = (
+                supabase_admin.table("learning_objectives")
+                .select("id")
+                .eq("class_id", class_id)
+                .execute()
+            )
             return [lo["id"] for lo in (resp.data or []) if lo.get("id")]
         except Exception as e:
             logger.error("get_lo_ids_for_class failed for class %s: %s", class_id, e)
@@ -120,10 +59,9 @@ class Course:
 
     @staticmethod
     def get_all_lo_ids_for_class(class_id):
-        """Return every LO id for the class, including Qualification pieces.
+        """Return every LO id for the class.
 
-        Use for cleanup paths (delete student/class, HW-pass promotion) where
-        piece grades must still be found. Do not use for LO pickers/lists.
+        Use for cleanup paths (delete student/class, HW-pass promotion).
         """
         try:
             resp = (
@@ -140,118 +78,15 @@ class Course:
             return []
 
     @staticmethod
-    def get_piece_lo_ids_for_qualification(qualification_id):
-        """Return piece LO ids gradable on this Qualification.
-
-        Includes legacy pieces owned by this Qualification and Project-pooled
-        pieces linked via assignment_objectives.
-        """
-        if not qualification_id:
-            return []
-        ids = set()
+    def get_learning_objectives(class_id):
+        """Return learning objectives for a class."""
         try:
             resp = (
                 supabase_admin.table("learning_objectives")
-                .select("id")
-                .eq("owner_qualification_id", qualification_id)
+                .select("id, name, vendor_code, description, required_ms")
+                .eq("class_id", class_id)
                 .execute()
             )
-            for r in (resp.data or []):
-                if r.get("id"):
-                    ids.add(str(r["id"]))
-        except Exception as e:
-            if not _owner_qualification_column_missing(e):
-                logger.error(
-                    "get_piece_lo_ids_for_qualification failed for %s: %s",
-                    qualification_id, e,
-                )
-
-        try:
-            try:
-                ao_resp = (
-                    supabase_admin.table("assignment_objectives")
-                    .select(
-                        "learning_objective_id, "
-                        "learning_objectives(id, owner_qualification_id, "
-                        "owner_project_id)"
-                    )
-                    .eq("assignment_id", qualification_id)
-                    .execute()
-                )
-            except Exception as schema_err:
-                if not _owner_project_column_missing(schema_err):
-                    raise
-                ao_resp = (
-                    supabase_admin.table("assignment_objectives")
-                    .select(
-                        "learning_objective_id, "
-                        "learning_objectives(id, owner_qualification_id)"
-                    )
-                    .eq("assignment_id", qualification_id)
-                    .execute()
-                )
-            for r in ao_resp.data or []:
-                lo = r.get("learning_objectives") or {}
-                if isinstance(lo, list):
-                    lo = lo[0] if lo else {}
-                if not (
-                    lo.get("owner_qualification_id") or lo.get("owner_project_id")
-                ):
-                    continue
-                lid = str(lo.get("id") or r.get("learning_objective_id") or "")
-                if lid:
-                    ids.add(lid)
-        except Exception as e:
-            logger.error(
-                "get_piece_lo_ids_for_qualification AO lookup failed for %s: %s",
-                qualification_id, e,
-            )
-        return sorted(ids)
-
-    @staticmethod
-    def get_learning_objectives(class_id):
-        """Return class-pool learning objectives (excludes pieces)."""
-        try:
-            try:
-                resp = (
-                    supabase_admin.table("learning_objectives")
-                    .select("id, name, vendor_code, description, required_ms")
-                    .eq("class_id", class_id)
-                    .is_("owner_qualification_id", "null")
-                    .is_("owner_project_id", "null")
-                    .execute()
-                )
-            except Exception as schema_err:
-                if (
-                    _owner_project_column_missing(schema_err)
-                    and not _owner_qualification_column_missing(schema_err)
-                ):
-                    logger.debug(
-                        "get_learning_objectives: owner_project_id missing; "
-                        "falling back: %s",
-                        schema_err,
-                    )
-                    resp = (
-                        supabase_admin.table("learning_objectives")
-                        .select("id, name, vendor_code, description, required_ms")
-                        .eq("class_id", class_id)
-                        .is_("owner_qualification_id", "null")
-                        .execute()
-                    )
-                elif _owner_qualification_column_missing(schema_err):
-                    logger.debug(
-                        "get_learning_objectives: owner columns missing; "
-                        "falling back: %s",
-                        schema_err,
-                    )
-                    resp = (
-                        supabase_admin.table("learning_objectives")
-                        .select("id, name, vendor_code, description, required_ms")
-                        .eq("class_id", class_id)
-                        .execute()
-                    )
-                else:
-                    raise
             return resp.data or []
         except Exception as e:
             logger.error(
@@ -268,12 +103,9 @@ class Course:
         If newer optional columns are missing in the DB schema, the call falls back to
         a narrower projection and applies defaults.
 
-        The class LO pool always comes from ``get_learning_objectives`` (owner-tagged
-        pieces excluded with that helper's own schema fallbacks). Nested
-        ``classes → learning_objectives`` embeds are not used for the pool: when the
-        wide settings select fails (e.g. missing ``hw_passes_enabled``), older
-        fallbacks omitted owner columns and silently leaked Project pieces into
-        Student Progress / Reports.
+        The class LO pool always comes from ``get_learning_objectives``. Nested
+        ``classes → learning_objectives`` embeds are not used for the pool so a
+        narrower settings-column fallback cannot change which LOs are loaded.
         """
         CLASS_COLS_FULL = (
             "id, name, semester, "
@@ -427,364 +259,6 @@ class Course:
                 assignment_id, e,
             )
             return []
-
-    @staticmethod
-    def _build_project_progress_payload(ao_rows, counts_by_lo):
-        """Build one student's per-LO progress dict from AO rows + per-LO counts.
-
-        Shared by ``get_project_completion_batch`` (once per child Qualification)
-        so the counted-mastery rule and payload shape stay identical everywhere.
-
-        Required M-count resolution:
-          - Piece LOs (``owner_qualification_id`` or ``owner_project_id`` set):
-            use ``learning_objectives.required_ms``.
-          - Legacy linked class LOs: use
-            ``assignment_objectives.required_ms_for_project``.
-        Nested AND logic (LO met → Qualification complete → Project complete)
-        is unchanged.
-        """
-        objectives = []
-        for r in ao_rows or []:
-            lo_id = str(r.get("learning_objective_id") or "")
-            if not lo_id:
-                continue
-            lo_info = r.get("learning_objectives") or {}
-            if isinstance(lo_info, list):
-                lo_info = lo_info[0] if lo_info else {}
-            vendor_code = (
-                (lo_info.get("vendor_code") or lo_info.get("name") or "")
-            ).strip()
-
-            if lo_info.get("owner_qualification_id") or lo_info.get("owner_project_id"):
-                required_raw = lo_info.get("required_ms")
-            else:
-                required_raw = r.get("required_ms_for_project")
-            try:
-                required_n = int(required_raw) if required_raw is not None else 0
-            except (TypeError, ValueError):
-                required_n = 0
-
-            mastery_count = int((counts_by_lo or {}).get(lo_id, 0) or 0)
-            # Missing/non-positive requirement never counts as met (corrupt/legacy rows).
-            is_met = required_n >= 1 and mastery_count >= required_n
-            objectives.append({
-                "learning_objective_id": lo_id,
-                "vendor_code": vendor_code,
-                "mastery_count": mastery_count,
-                "required_ms_for_project": required_n,
-                "is_met": is_met,
-                "progress_label": f"{mastery_count} of {required_n}",
-            })
-
-        objectives_total = len(objectives)
-        objectives_met = sum(1 for o in objectives if o["is_met"])
-        is_complete = objectives_total > 0 and objectives_met == objectives_total
-
-        return {
-            "is_complete": is_complete,
-            "objectives": objectives,
-            "objectives_met": objectives_met,
-            "objectives_total": objectives_total,
-            "progress_label": f"{objectives_met} of {objectives_total} objectives",
-        }
-
-    @staticmethod
-    def _build_qualification_progress_payload(qualification, ao_rows, counts_by_lo):
-        """Build one student's progress dict for a single child Qualification."""
-        base = Course._build_project_progress_payload(ao_rows, counts_by_lo)
-        return {
-            "qualification_id": str(qualification.get("id") or ""),
-            "name": qualification.get("name") or "",
-            "assignment_type": qualification.get("assignment_type") or "",
-            "objectives": base["objectives"],
-            "objectives_met": base["objectives_met"],
-            "objectives_total": base["objectives_total"],
-            "is_complete": base["is_complete"],
-            "progress_label": base["progress_label"],
-        }
-
-    @staticmethod
-    def get_project_completion(student_id, project_id):
-        """Return Qualification-based Project completion for one student.
-
-        See ``get_project_completion_batch`` for the full rule. Returns
-        None if the project is missing or not assignment_type == 'project'.
-        """
-        if not student_id or not project_id:
-            return None
-        batch = Course.get_project_completion_batch(project_id, [str(student_id)])
-        if batch is None:
-            return None
-        return batch.get(str(student_id))
-
-    @staticmethod
-    def get_project_completion_batch(project_id, student_ids):
-        """Return Qualification-based Project completion for many students.
-
-        A Qualification is a normal ``mastery_opp``/``exam`` assignment with
-        ``parent_project_id`` set to this Project's id. For each child
-        Qualification, each of its linked learning objectives (pieces) is
-        checked against that piece's ``learning_objectives.required_ms``
-        (legacy links still use ``required_ms_for_project``) using the same
-        counted-mastery rule as ``_count_counted_masteries_by_lo``
-        (``Grade.is_mastery_mark`` and ``counts_for_mastery is not False``).
-
-        A Qualification is complete only when it has at least one objective and
-        every one of its objectives is met. The Project itself is complete only
-        when it has at least one Qualification and every Qualification is
-        complete.
-
-        Performs exactly:
-          1) one assignments fetch (the Project)
-          2) one assignments fetch (its child Qualifications)
-          3) one assignment_objectives fetch (skipped if there are no children)
-          4) one grades fetch (skipped when there are no students or no linked LOs)
-
-        Returns:
-            None if the project is missing or not assignment_type == 'project'.
-            dict mapping student_id -> {
-                is_complete, qualifications (list of per-Qualification dicts,
-                each with qualification_id, name, assignment_type, objectives,
-                objectives_met, objectives_total, is_complete, progress_label),
-                qualifications_met, qualifications_total, progress_label
-            }. Every requested student_id is present as a key.
-        """
-        if not project_id:
-            return None
-
-        normalized_student_ids: List[str] = []
-        seen = set()
-        for sid in student_ids or []:
-            s = str(sid or "").strip()
-            if not s or s in seen:
-                continue
-            seen.add(s)
-            normalized_student_ids.append(s)
-
-        try:
-            proj_resp = (
-                supabase_admin.table("assignments")
-                .select("id, assignment_type")
-                .eq("id", project_id)
-                .limit(1)
-                .execute()
-            )
-            project = (proj_resp.data or [None])[0]
-        except Exception as e:
-            logger.error(
-                "get_project_completion_batch: failed to load project %s: %s",
-                project_id, e,
-            )
-            return None
-
-        if not project:
-            return None
-        if (project.get("assignment_type") or "mastery_opp") != ASSIGNMENT_TYPE_PROJECT:
-            return None
-
-        try:
-            qual_resp = (
-                supabase_admin.table("assignments")
-                .select("id, name, assignment_type")
-                .eq("parent_project_id", project_id)
-                .order("created_at", desc=False)
-                .execute()
-            )
-            qualifications = qual_resp.data or []
-        except Exception as e:
-            logger.error(
-                "get_project_completion_batch: failed to load qualifications "
-                "for project %s: %s",
-                project_id, e,
-            )
-            qualifications = []
-
-        qualification_ids = [str(q["id"]) for q in qualifications if q.get("id")]
-
-        ao_rows_by_qualification: Dict[str, List[Dict[str, Any]]] = {
-            qid: [] for qid in qualification_ids
-        }
-        if qualification_ids:
-            try:
-                try:
-                    ao_resp = (
-                        supabase_admin.table("assignment_objectives")
-                        .select(
-                            "assignment_id, learning_objective_id, "
-                            "required_ms_for_project, "
-                            "learning_objectives(id, vendor_code, name, "
-                            "required_ms, owner_qualification_id, "
-                            "owner_project_id)"
-                        )
-                        .in_("assignment_id", qualification_ids)
-                        .execute()
-                    )
-                except Exception as schema_err:
-                    if (
-                        _owner_project_column_missing(schema_err)
-                        and not _owner_qualification_column_missing(schema_err)
-                    ):
-                        logger.debug(
-                            "get_project_completion_batch: AO select without "
-                            "owner_project_id: %s",
-                            schema_err,
-                        )
-                        ao_resp = (
-                            supabase_admin.table("assignment_objectives")
-                            .select(
-                                "assignment_id, learning_objective_id, "
-                                "required_ms_for_project, "
-                                "learning_objectives(id, vendor_code, name, "
-                                "required_ms, owner_qualification_id)"
-                            )
-                            .in_("assignment_id", qualification_ids)
-                            .execute()
-                        )
-                    elif _owner_qualification_column_missing(schema_err):
-                        logger.debug(
-                            "get_project_completion_batch: AO select without "
-                            "owner columns: %s",
-                            schema_err,
-                        )
-                        ao_resp = (
-                            supabase_admin.table("assignment_objectives")
-                            .select(
-                                "assignment_id, learning_objective_id, "
-                                "required_ms_for_project, "
-                                "learning_objectives(id, vendor_code, name, "
-                                "required_ms)"
-                            )
-                            .in_("assignment_id", qualification_ids)
-                            .execute()
-                        )
-                    else:
-                        raise
-                for r in ao_resp.data or []:
-                    qid = str(r.get("assignment_id") or "")
-                    if qid in ao_rows_by_qualification:
-                        ao_rows_by_qualification[qid].append(r)
-            except Exception as e:
-                logger.error(
-                    "get_project_completion_batch: failed to load objectives "
-                    "for project %s: %s",
-                    project_id, e,
-                )
-
-        lo_ids = sorted({
-            str(r["learning_objective_id"])
-            for rows in ao_rows_by_qualification.values()
-            for r in rows
-            if r.get("learning_objective_id")
-        })
-
-        counts_by_student: Dict[str, Dict[str, int]] = {
-            sid: {lo_id: 0 for lo_id in lo_ids}
-            for sid in normalized_student_ids
-        }
-
-        if lo_ids and normalized_student_ids:
-            try:
-                try:
-                    grades_resp = (
-                        supabase_admin.table("grades")
-                        .select(
-                            "student_id, learning_objective_id, top_score, "
-                            "counts_for_mastery"
-                        )
-                        .in_("student_id", normalized_student_ids)
-                        .in_("learning_objective_id", lo_ids)
-                        .execute()
-                    )
-                except Exception as schema_err:
-                    logger.debug(
-                        "get_project_completion_batch: wide grades select "
-                        "failed; falling back: %s",
-                        schema_err,
-                    )
-                    grades_resp = (
-                        supabase_admin.table("grades")
-                        .select("student_id, learning_objective_id, top_score")
-                        .in_("student_id", normalized_student_ids)
-                        .in_("learning_objective_id", lo_ids)
-                        .execute()
-                    )
-
-                grades_by_student: Dict[str, List[Dict[str, Any]]] = {
-                    sid: [] for sid in normalized_student_ids
-                }
-                for g in grades_resp.data or []:
-                    sid = str(g.get("student_id") or "")
-                    if sid in grades_by_student:
-                        grades_by_student[sid].append(g)
-
-                for sid, rows in grades_by_student.items():
-                    counted = Course._count_counted_masteries_by_lo(rows)
-                    for lo_id in lo_ids:
-                        counted.setdefault(lo_id, 0)
-                    counts_by_student[sid] = counted
-            except Exception as e:
-                logger.error(
-                    "get_project_completion_batch: failed to load grades for "
-                    "project %s: %s",
-                    project_id, e,
-                )
-
-        result: Dict[str, Dict[str, Any]] = {}
-        for sid in normalized_student_ids:
-            counts_by_lo = counts_by_student.get(sid, {})
-            qual_payloads = [
-                Course._build_qualification_progress_payload(
-                    q,
-                    ao_rows_by_qualification.get(str(q.get("id") or ""), []),
-                    counts_by_lo,
-                )
-                for q in qualifications
-            ]
-            qualifications_total = len(qual_payloads)
-            qualifications_met = sum(1 for q in qual_payloads if q["is_complete"])
-            is_complete = (
-                qualifications_total > 0
-                and qualifications_met == qualifications_total
-            )
-            result[sid] = {
-                "is_complete": is_complete,
-                "qualifications": qual_payloads,
-                "qualifications_met": qualifications_met,
-                "qualifications_total": qualifications_total,
-                "progress_label": f"{qualifications_met} of {qualifications_total} qualifications",
-            }
-        return result
-
-    @staticmethod
-    def _count_counted_masteries(grades):
-        """Count M/MR rows that count toward mastery.
-
-        Same rule as _aggregate_lo_grades / routes free-pass promotion:
-        ``Grade.is_mastery_mark(top)`` and ``counts_for_mastery is not False``
-        (missing/None → counts, matching legacy rows).
-        """
-        count = 0
-        for g in grades or []:
-            if not Grade.is_mastery_mark(g.get("top_score")):
-                continue
-            if g.get("counts_for_mastery") is not False:
-                count += 1
-        return count
-
-    @staticmethod
-    def _count_counted_masteries_by_lo(grades):
-        """Per-LO version of _count_counted_masteries. Returns {lo_id: count}."""
-        counts: Dict[str, int] = {}
-        for g in grades or []:
-            if not Grade.is_mastery_mark(g.get("top_score")):
-                continue
-            if g.get("counts_for_mastery") is False:
-                continue
-            lo_id = str(g.get("learning_objective_id") or "")
-            if not lo_id:
-                continue
-            counts[lo_id] = counts.get(lo_id, 0) + 1
-        return counts
 
 
 class Grade:

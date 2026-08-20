@@ -238,8 +238,6 @@
     </div>
   </div>
 
-  <div id="projectCardsHost" class="hidden space-y-4"></div>
-
   <!-- Save bar -->
   <div class="fixed bottom-6 right-6 z-30">
     <div class="bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-600 p-4 flex flex-col gap-2 w-72">
@@ -475,8 +473,6 @@ const EXAM_HW_MIN = 65;
 const REVISION_M_MIN = 75;
 const examGradeEligible = {};
 const revisionEligible = {};
-/** Project cards: sidKey -> raw HW score | -1 (pass) | null (missing). Used by predictCountsForMastery. */
-const projectHwRawByStudent = {};
 let hasUnsavedChanges = false;
 
 function markUnsavedChanges() {
@@ -486,10 +482,6 @@ function markUnsavedChanges() {
 function isActiveHwControl(el) {
   if (!el) return false;
   if (!el.closest('td[data-hw-cell]')) return false;
-  const host = document.getElementById('projectCardsHost');
-  if (host && !host.classList.contains('hidden')) {
-    return !!el.closest('#projectCardsHost');
-  }
   const flat = document.getElementById('graderFlatCard');
   if (flat && flat.classList.contains('hidden')) return false;
   return true;
@@ -658,7 +650,6 @@ function resolveHwCell(studentId, gradeCellEl) {
   const attr = typeof CSS !== 'undefined' && typeof CSS.escape === 'function'
     ? CSS.escape(sid)
     : sid;
-  // Scope to the active layout so Project mode never reads the hidden flat-table HW inputs.
   const root = getActiveGraderRoot();
   try {
     return root.querySelector('.hw-cell[data-student-id="' + attr + '"]');
@@ -677,14 +668,6 @@ function predictCountsForMasteryFromCurrentHw(studentId, gradeCellEl) {
   const sid = String(studentId || '');
   const hwCell = resolveHwCell(sid, gradeCellEl);
   if (!hwCell) {
-    const key = normalizeStudentKeyForMap(sid);
-    if (Object.prototype.hasOwnProperty.call(projectHwRawByStudent, key)) {
-      const raw = projectHwRawByStudent[key];
-      if (raw === -1 || raw === '-1') return true;
-      if (raw === null || raw === undefined || raw === '') return true; // missing => allow
-      const hw = parseInt(String(raw), 10);
-      return Number.isFinite(hw) && hw >= EXAM_HW_MIN;
-    }
     return true;
   }
   const passEl = hwCell.querySelector('.hw-pass-check');
@@ -822,82 +805,6 @@ function hwInputBackground(scoreNum, isPass) {
   if (n >= REVISION_M_MIN) return '#22c55e';
   if (n >= EXAM_HW_MIN) return '#f59e0b';
   return '#ef4444';
-}
-
-function hwEligibilityDotClass(scoreNum, isPass) {
-  if (INSTRUCTOR_MODE !== 'mark') return 'bg-slate-400';
-  if (isPass) return 'bg-amber-500';
-  if (scoreNum === null || scoreNum === undefined || (typeof scoreNum === 'number' && isNaN(scoreNum))) {
-    return 'bg-red-500';
-  }
-  const n = typeof scoreNum === 'number' ? scoreNum : parseInt(String(scoreNum), 10);
-  if (isNaN(n)) return 'bg-red-500';
-  if (n >= REVISION_M_MIN) return 'bg-emerald-500';
-  if (n >= EXAM_HW_MIN) return 'bg-amber-500';
-  return 'bg-red-500';
-}
-
-function hwEligibilityTitle(scoreNum, isPass) {
-  if (isPass) return 'In-Class Grade Eligible';
-  if (scoreNum === null || scoreNum === undefined || (typeof scoreNum === 'number' && isNaN(scoreNum))) {
-    return 'Not Eligible';
-  }
-  const n = typeof scoreNum === 'number' ? scoreNum : parseInt(String(scoreNum), 10);
-  if (isNaN(n)) return 'Not Eligible';
-  if (n >= REVISION_M_MIN) return 'Can Revise';
-  if (n >= EXAM_HW_MIN) return 'In-Class Grade Eligible';
-  return 'Not Eligible';
-}
-
-function paintProjectHwEligibilityDot(studentId, scoreNum, isPass) {
-  const sid = String(studentId || '');
-  if (!sid) return;
-  const esc = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(sid) : sid;
-  let dots;
-  try {
-    dots = document.querySelectorAll('.project-hw-elig-dot[data-student-id="' + esc + '"]');
-  } catch (e) {
-    return;
-  }
-  const cls = hwEligibilityDotClass(scoreNum, isPass);
-  const title = hwEligibilityTitle(scoreNum, isPass);
-  dots.forEach(function (dot) {
-    dot.classList.remove('bg-slate-400', 'bg-emerald-500', 'bg-amber-500', 'bg-red-500');
-    dot.classList.add(cls);
-    dot.title = title;
-    dot.setAttribute('aria-label', title);
-  });
-}
-
-/** Project layout: no editable HW cells — drive eligibility maps + dots from hw_scores. */
-function applyProjectHwEligibilityFromScores(hwScores) {
-  Object.keys(projectHwRawByStudent).forEach(function (k) {
-    delete projectHwRawByStudent[k];
-  });
-  const map = coerceStudentKeyedMap(hwScores || {});
-  const students = getStudentsDataList();
-  students.forEach(function (student) {
-    const sidRaw = String(student.id || '').trim();
-    const sidKey = normalizeStudentKeyForMap(sidRaw);
-    let raw = null;
-    if (sidKey && Object.prototype.hasOwnProperty.call(map, sidKey)) {
-      raw = map[sidKey];
-    }
-    if (sidKey) {
-      projectHwRawByStudent[sidKey] = (raw === undefined ? null : raw);
-    }
-    if (raw === -1 || raw === '-1') {
-      setHwEligibilityFromState(sidRaw, null, true);
-      paintProjectHwEligibilityDot(sidRaw, null, true);
-    } else if (raw !== '' && raw !== null && raw !== undefined) {
-      const n = Math.max(0, Math.min(100, parseInt(String(raw), 10) || 0));
-      setHwEligibilityFromState(sidRaw, n, false);
-      paintProjectHwEligibilityDot(sidRaw, n, false);
-    } else {
-      setHwEligibilityFromState(sidRaw, null, false);
-      paintProjectHwEligibilityDot(sidRaw, null, false);
-    }
-  });
 }
 
 /** Persist every visible HW % field (used on Save so values commit even if input never blurred). */
@@ -1088,20 +995,12 @@ function isGradeCellVisible(cell) {
   return td && td.style.display !== 'none';
 }
 
-/** Project cards: navigate only inside the current Qualification; flat grader: whole table. */
-function getNavScopeRoot(fromCell) {
-  if (fromCell && typeof fromCell.closest === 'function') {
-    const card = fromCell.closest('[data-qualification-card]');
-    if (card) return card;
-  }
+function getNavScopeRoot() {
   return getActiveGraderRoot();
 }
 
 function isGradeCellNavigable(cell) {
-  if (!isGradeCellVisible(cell)) return false;
-  const body = cell.closest('[data-qualification-body]');
-  if (body && body.classList.contains('hidden')) return false;
-  return true;
+  return isGradeCellVisible(cell);
 }
 
 function getVisibleGradeCellsInRow(rowNum, scopeRoot) {
@@ -1218,13 +1117,11 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// Index of grade cells keyed by "studentId|loId|assignmentId". Rebuilt when switching
-// between flat and Project card layouts (and after student delete).
+// Index of grade cells keyed by "studentId|loId|assignmentId". Rebuilt after
+// student delete and assignment switches.
 let __gradeCellIndex = new Map();
 
 function getActiveGraderRoot() {
-  const host = document.getElementById('projectCardsHost');
-  if (host && !host.classList.contains('hidden')) return host;
   return document.getElementById('graderTable') || document;
 }
 
@@ -1324,174 +1221,10 @@ function restoreLoColumnSubtitles() {
   });
 }
 
-function getStudentsDataList() {
-  try {
-    return JSON.parse(document.getElementById('studentsData').textContent) || [];
-  } catch (e) {
-    return [];
-  }
-}
-
 function showFlatGraderLayout() {
   const flat = document.getElementById('graderFlatCard');
-  const host = document.getElementById('projectCardsHost');
   if (flat) flat.classList.remove('hidden');
-  if (host) {
-    host.classList.add('hidden');
-    host.innerHTML = '';
-  }
-  Object.keys(projectHwRawByStudent).forEach(function (k) {
-    delete projectHwRawByStudent[k];
-  });
   rebuildGradeCellIndex();
-}
-
-function showProjectGraderLayout(assignment) {
-  const flat = document.getElementById('graderFlatCard');
-  const host = document.getElementById('projectCardsHost');
-  if (flat) flat.classList.add('hidden');
-  if (host) host.classList.remove('hidden');
-  return renderProjectCards(assignment);
-}
-
-function pieceDisplayName(lo) {
-  const info = lo || {};
-  return String(info.vendor_code || info.name || '').trim();
-}
-
-function pieceRequiredMs(lo) {
-  const n = parseInt((lo && lo.required_ms), 10);
-  return (n && n >= 1) ? n : 0;
-}
-
-function renderProjectCards(assignment) {
-  const host = document.getElementById('projectCardsHost');
-  if (!host) return Promise.resolve([]);
-  const projectId = assignment && assignment.id;
-  if (!projectId) {
-    host.innerHTML = '<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-8 text-center text-sm text-slate-500">No Project selected.</div>';
-    rebuildGradeCellIndex();
-    return Promise.resolve([]);
-  }
-
-  host.innerHTML = '<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-8 text-center text-sm text-slate-500">Loading qualifications…</div>';
-
-  return fetch('/api/class/' + classId + '/projects/' + projectId + '/qualifications', {
-    credentials: 'same-origin',
-    headers: { 'Accept': 'application/json' }
-  })
-    .then(function (r) {
-      return r.json().then(function (body) {
-        return { ok: r.ok, body: body };
-      });
-    })
-    .then(function (result) {
-      if (!result.ok || !result.body || !result.body.success) {
-        host.innerHTML = '<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-8 text-center text-sm text-red-500">'
-          + escapeHtml((result.body && result.body.error) || 'Could not load qualifications.')
-          + '</div>';
-        rebuildGradeCellIndex();
-        return [];
-      }
-
-      const quals = Array.isArray(result.body.qualifications) ? result.body.qualifications : [];
-      const students = getStudentsDataList();
-      if (!students.length) {
-        host.innerHTML = '<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-8 text-center text-sm text-slate-500">No students enrolled.</div>';
-        rebuildGradeCellIndex();
-        return quals;
-      }
-      if (!quals.length) {
-        host.innerHTML = '<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-8 text-center text-sm text-slate-500">No Qualifications on this Project yet. Add them under Assignments → Projects.</div>';
-        rebuildGradeCellIndex();
-        return quals;
-      }
-
-      let html = '';
-
-      quals.forEach(function (qual) {
-        const qualId = String(qual.id || '');
-        const qualName = String(qual.name || 'Qualification');
-        const aos = Array.isArray(qual.assignment_objectives) ? qual.assignment_objectives : [];
-        const pieces = [];
-        aos.forEach(function (ao) {
-          const lo = ao.learning_objectives || {};
-          const pieceId = String(lo.id || ao.learning_objective_id || '');
-          const label = pieceDisplayName(lo);
-          const need = pieceRequiredMs(lo);
-          if (!pieceId || !label || need < 1) return;
-          pieces.push({ id: pieceId, label: label, required_ms: need });
-        });
-
-        html += '<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden" data-qualification-card data-qualification-id="'
-          + escapeHtml(qualId) + '">';
-        html += '<button type="button" class="w-full px-5 py-3 border-b border-slate-100 dark:border-slate-700 flex items-center gap-2 text-left hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors" data-qualification-toggle aria-expanded="true">';
-        html += '<svg class="w-4 h-4 text-slate-400 shrink-0 transition-transform" data-qualification-chevron fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
-        html += '<div class="min-w-0"><h3 class="font-semibold text-slate-900 dark:text-white">' + escapeHtml(qualName) + '</h3>';
-        if (!pieces.length) {
-          html += '<p class="text-xs text-slate-500 dark:text-slate-400 mt-1">No pieces on this Qualification.</p>';
-        }
-        html += '</div></button>';
-
-        if (!pieces.length) {
-          html += '</div>';
-          return;
-        }
-
-        html += '<div data-qualification-body class="overflow-x-auto"><table class="w-full border-collapse"><thead class="border-b border-slate-200 dark:border-slate-700"><tr>';
-        html += '<th class="px-4 py-3 text-left text-sm font-semibold text-slate-600 dark:text-slate-300 sticky left-0 bg-white dark:bg-slate-800 z-20 min-w-[160px]">Student</th>';
-        pieces.forEach(function (piece) {
-          html += '<th class="px-1 py-3 text-center text-sm font-semibold text-slate-600 dark:text-slate-300 min-w-[70px]" data-lo-id="'
-            + escapeHtml(piece.id) + '">';
-          html += '<div class="text-xs font-bold text-slate-800 dark:text-white">' + escapeHtml(piece.label) + '</div>';
-          html += '<div class="lo-header-sub text-xs font-normal text-slate-400 dark:text-slate-500 mt-0.5 leading-tight">Need '
-            + escapeHtml(String(piece.required_ms)) + '</div>';
-          html += '</th>';
-        });
-        html += '</tr></thead><tbody class="divide-y divide-slate-100 dark:divide-slate-700">';
-
-        students.forEach(function (student, rowIndex) {
-          const sid = String(student.id || '');
-          const sname = String(student.name || '');
-          html += '<tr class="group hover:bg-slate-50 dark:hover:bg-slate-700/30 transition-colors" data-student-row data-student-id="'
-            + escapeHtml(sid) + '">';
-          html += '<td class="px-4 py-3 text-sm font-semibold text-slate-900 dark:text-white sticky left-0 bg-white dark:bg-slate-800 z-10">';
-          html += '<div class="flex items-center gap-2"><span>' + escapeHtml(sname) + '</span>';
-          if (INSTRUCTOR_MODE === 'mark') {
-            html += '<span class="project-hw-elig-dot inline-block w-2.5 h-2.5 rounded-full bg-slate-400 shrink-0" data-student-id="'
-              + escapeHtml(sid) + '" title="HW eligibility" aria-label="HW eligibility"></span>';
-          }
-          html += '</div></td>';
-
-          pieces.forEach(function (piece, pieceIndex) {
-            html += '<td class="px-0 py-0.5" data-lo-id="' + escapeHtml(piece.id) + '">';
-            html += '<div class="grade-cell w-full min-h-[40px] flex items-center justify-center rounded-lg border-2 border-transparent hover:bg-slate-100 dark:hover:bg-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-300 transition-all cursor-pointer"';
-            html += ' data-student-id="' + escapeHtml(sid) + '"';
-            html += ' data-lo-id="' + escapeHtml(piece.id) + '"';
-            html += ' data-assignment-id="' + escapeHtml(qualId) + '"';
-            html += ' data-row="' + rowIndex + '"';
-            html += ' data-col="' + pieceIndex + '"';
-            html += ' data-actual-grade="" tabindex="0">';
-            html += '<span class="text-slate-200 dark:text-slate-600 text-[12px] select-none">—</span>';
-            html += '</div></td>';
-          });
-
-          html += '</tr>';
-        });
-
-        html += '</tbody></table></div></div>';
-      });
-
-      host.innerHTML = html;
-      rebuildGradeCellIndex();
-      return quals;
-    })
-    .catch(function (err) {
-      host.innerHTML = '<div class="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 p-8 text-center text-sm text-red-500">Could not load qualifications.</div>';
-      rebuildGradeCellIndex();
-      console.error(err);
-      return [];
-    });
 }
 
 function filterByAssignment() {
@@ -1509,70 +1242,6 @@ function filterByAssignment() {
   Object.keys(grades).forEach(k => delete grades[k]);
   gradeHistory.length = 0;
   updateUndoBtn();
-
-  if (normalizeAssignmentType(assignment.assignment_type) === 'project') {
-    showProjectGraderLayout(assignment).then(function (quals) {
-      __gradeCellIndex.forEach(cell => {
-        if (cell.dataset.actualGrade) {
-          cell.dataset.actualGrade = '';
-          delete cell.dataset.countsForMastery;
-          cell.classList.remove('non-counting-grade');
-          cell.innerHTML = __emptyGradeCellHtml;
-        }
-      });
-
-      const qualIds = (quals || []).map(function (q) { return String(q.id || ''); }).filter(Boolean);
-
-      const projectGradesP = fetch('/api/class/' + classId + '/assignment/' + assignmentId + '/grades')
-        .then(function (r) { return r.json(); });
-
-      const qualGradePs = qualIds.map(function (qid) {
-        return fetch('/api/class/' + classId + '/assignment/' + qid + '/grades')
-          .then(function (r) { return r.json(); })
-          .then(function (data) {
-            return { qualificationId: qid, data: data };
-          });
-      });
-
-      return Promise.all([projectGradesP].concat(qualGradePs)).then(function (results) {
-        const projectData = results[0] || {};
-        if (projectData.success) {
-          const hwScores = coerceStudentKeyedMap(projectData.hw_scores || {});
-          applyProjectHwEligibilityFromScores(hwScores);
-        }
-
-        for (let i = 1; i < results.length; i++) {
-          const pack = results[i];
-          const data = pack && pack.data;
-          if (!data || !data.success) continue;
-          const qualificationId = String(pack.qualificationId || '');
-          const fetchedGrades = data.grades || {};
-          const countsMap = data.counts_for_mastery_map || {};
-          for (const key in fetchedGrades) {
-            if (!Object.prototype.hasOwnProperty.call(fetchedGrades, key)) continue;
-            const grade = fetchedGrades[key];
-            const compositeKey = compositeGradeKeyFromApi(key, qualificationId);
-            grades[compositeKey] = grade;
-            const cell = __gradeCellIndex.get(compositeKey);
-            if (!cell) continue;
-            cell.dataset.actualGrade = grade;
-            const flag = Object.prototype.hasOwnProperty.call(countsMap, key)
-              ? !!countsMap[key]
-              : true;
-            if (grade === 'M' || grade === 'MR') {
-              cell.dataset.countsForMastery = flag ? '1' : '0';
-            } else {
-              delete cell.dataset.countsForMastery;
-            }
-            renderGradeInCell(cell, grade);
-          }
-        }
-      });
-    }).catch(function (e) {
-      console.error('Error loading project grader:', e);
-    });
-    return;
-  }
 
   showFlatGraderLayout();
   restoreLoColumnSubtitles();
@@ -1681,21 +1350,6 @@ function updateHwInputColor(input) {
   }
   input.style.background = hwInputBackground(valNow, false);
 }
-
-document.addEventListener('click', function (e) {
-  const btn = e.target.closest('[data-qualification-toggle]');
-  if (!btn) return;
-  const card = btn.closest('[data-qualification-card]');
-  if (!card) return;
-  const body = card.querySelector('[data-qualification-body]');
-  const chevron = btn.querySelector('[data-qualification-chevron]');
-  if (!body) return;
-  const open = btn.getAttribute('aria-expanded') !== 'false';
-  const next = !open;
-  btn.setAttribute('aria-expanded', next ? 'true' : 'false');
-  body.classList.toggle('hidden', !next);
-  if (chevron) chevron.classList.toggle('-rotate-90', !next);
-});
 
 document.addEventListener('input', function (e) {
     const input = e.target.closest('.hw-pct-input');
@@ -1840,66 +1494,25 @@ async function performSave(btn) {
   try {
     await persistAllHwPctInputs();
 
-    const assignment = getAssignmentDataList().find(function (a) {
-      return a.id === activeAssignmentId;
+    const apiGrades = {};
+    Object.keys(grades).forEach(function (key) {
+      const apiKey = apiGradeKeyFromComposite(key);
+      if (!apiKey) return;
+      apiGrades[apiKey] = grades[key];
     });
-    const isProject = assignment
-      && normalizeAssignmentType(assignment.assignment_type) === 'project';
-
-    if (isProject) {
-      const byAssignment = {};
-      Object.keys(grades).forEach(function (key) {
-        const cell = __gradeCellIndex.get(key);
-        const qid = cell && cell.dataset.assignmentId
-          ? String(cell.dataset.assignmentId)
-          : '';
-        if (!qid) return;
-        if (!byAssignment[qid]) byAssignment[qid] = {};
-        const apiKey = apiGradeKeyFromComposite(key);
-        if (!apiKey) return;
-        byAssignment[qid][apiKey] = grades[key];
-      });
-      const qids = Object.keys(byAssignment);
-      for (let i = 0; i < qids.length; i++) {
-        const qid = qids[i];
-        const res = await fetch('/api/class/' + classId + '/save-grades', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          credentials: 'same-origin',
-          body: JSON.stringify({
-            grades: byAssignment[qid],
-            assignment_id: qid
-          })
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(function () { return {}; });
-          throw new Error(err.error || res.statusText);
-        }
-      }
-      gradeHistory.length = 0;
-      updateUndoBtn();
-      recomputeUnsavedState();
-    } else {
-      const apiGrades = {};
-      Object.keys(grades).forEach(function (key) {
-        const apiKey = apiGradeKeyFromComposite(key);
-        if (!apiKey) return;
-        apiGrades[apiKey] = grades[key];
-      });
-      const res = await fetch('/api/class/' + classId + '/save-grades', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'same-origin',
-        body: JSON.stringify({ grades: apiGrades, assignment_id: activeAssignmentId })
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(function () { return {}; });
-        throw new Error(err.error || res.statusText);
-      }
-      gradeHistory.length = 0;
-      updateUndoBtn();
-      recomputeUnsavedState();
+    const res = await fetch('/api/class/' + classId + '/save-grades', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ grades: apiGrades, assignment_id: activeAssignmentId })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(function () { return {}; });
+      throw new Error(err.error || res.statusText);
     }
+    gradeHistory.length = 0;
+    updateUndoBtn();
+    recomputeUnsavedState();
 
     if (btn) {
       btn.classList.replace('bg-blue-600', 'bg-green-600');

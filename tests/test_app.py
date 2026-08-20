@@ -22,11 +22,9 @@ sys.modules.setdefault('app.authentication', MagicMock(
 ))
 
 from app.models import (
-    Course,
     Grade,
     Homework,
     MASTERY_GRADES,
-    ASSIGNMENT_TYPE_PROJECT,
 )
 from app.routes import (
     organize_by_learning_objectives,
@@ -653,9 +651,6 @@ class TestSaveGradesAutoConvertHwGuard(unittest.TestCase):
                 ), \
                 unittest.mock.patch.object(r.Course, "get_lo_ids_for_class", return_value=["lo-x"]), \
                 unittest.mock.patch.object(
-                    r.Course, "get_piece_lo_ids_for_qualification", return_value=[]
-                ), \
-                unittest.mock.patch.object(
                     r.Homework,
                     "get_hw_scores_map_for_assignment",
                     return_value=hw_map,
@@ -773,996 +768,405 @@ class TestHwPassPromotesNonCountingMasteries(unittest.TestCase):
 
 
 # ==========================================================================
-# Project completion via Qualifications (parent_project_id children)
+# Reports assignment-scoping + email send
 # ==========================================================================
 
-class TestProjectCompletion(unittest.TestCase):
-    """Course.get_project_completion — Qualification-based Project completion."""
+CLASS_REPORTS_ID = "class-reports-scope"
+ASG_NEW_ID = "asg-new-zero-grades"
+ASG_OLD_ID = "asg-old-with-grades"
+LO_D1_ID = "lo-d1"
+LO_D2_ID = "lo-d2"
+STU_ALEX_ID = "stu-alex"
+STU_ALEX_EMAIL = "alex@example.edu"
+STU_ALEX_NAME = "Alex Student"
 
-    def _qualifications(self):
-        return [
-            {"id": "qual-1", "name": "Qual A", "assignment_type": "mastery_opp"},
-            {"id": "qual-2", "name": "Qual B", "assignment_type": "mastery_opp"},
-        ]
 
-    def _ao_rows(self):
-        return [
+class _FilterQuery:
+    """Supabase-style chain that actually applies eq / is_ / in_ filters."""
+
+    def __init__(self, rows):
+        self._rows = [dict(r) for r in rows]
+
+    def select(self, *args, **kwargs):
+        return self
+
+    def eq(self, col, val):
+        self._rows = [r for r in self._rows if r.get(col) == val]
+        return self
+
+    def is_(self, col, val):
+        if val is None:
+            self._rows = [r for r in self._rows if r.get(col) is None]
+        else:
+            self._rows = [r for r in self._rows if r.get(col) is val]
+        return self
+
+    def in_(self, col, values):
+        allowed = set(values)
+        self._rows = [r for r in self._rows if r.get(col) in allowed]
+        return self
+
+    def limit(self, n):
+        self._rows = self._rows[:n]
+        return self
+
+    def execute(self):
+        result = MagicMock()
+        result.data = list(self._rows)
+        return result
+
+
+def _filter_client(store):
+    sa = MagicMock()
+
+    def table(name):
+        return _FilterQuery(store.get(name, []))
+
+    sa.table.side_effect = table
+    return sa
+
+
+def _reports_scope_store():
+    """Two assignments share D1/D2; only the older one has recorded grades."""
+    new_aos = [
+        {
+            "assignment_id": ASG_NEW_ID,
+            "learning_objective_id": LO_D1_ID,
+            "learning_objectives": {"vendor_code": "D1"},
+        },
+        {
+            "assignment_id": ASG_NEW_ID,
+            "learning_objective_id": LO_D2_ID,
+            "learning_objectives": {"vendor_code": "D2"},
+        },
+    ]
+    old_aos = [
+        {
+            "assignment_id": ASG_OLD_ID,
+            "learning_objective_id": LO_D1_ID,
+            "learning_objectives": {"vendor_code": "D1"},
+        },
+        {
+            "assignment_id": ASG_OLD_ID,
+            "learning_objective_id": LO_D2_ID,
+            "learning_objectives": {"vendor_code": "D2"},
+        },
+    ]
+    return {
+        "grades": [
             {
-                "assignment_id": "qual-1",
-                "learning_objective_id": "lo-a",
-                "required_ms_for_project": None,
-                "learning_objectives": {
-                    "id": "lo-a",
-                    "vendor_code": "A1",
-                    "name": "A1",
-                    "required_ms": 2,
-                    "owner_qualification_id": "qual-1",
-                },
-            },
-            {
-                "assignment_id": "qual-2",
-                "learning_objective_id": "lo-b",
-                "required_ms_for_project": None,
-                "learning_objectives": {
-                    "id": "lo-b",
-                    "vendor_code": "B1",
-                    "name": "B1",
-                    "required_ms": 1,
-                    "owner_qualification_id": "qual-2",
-                },
-            },
-        ]
-
-    def _patch_completion(self, project, qualifications, ao_rows, grade_rows):
-        """Mock the four queries used by get_project_completion_batch."""
-        assignment_calls = {"n": 0}
-
-        def table_side_effect(name):
-            m = MagicMock()
-            if name == "assignments":
-                def select(*_a, **_k):
-                    chain = MagicMock()
-                    assignment_calls["n"] += 1
-                    if assignment_calls["n"] == 1:
-                        # Project lookup: select().eq().limit().execute()
-                        chain.eq.return_value.limit.return_value.execute.return_value = (
-                            MagicMock(data=[project] if project else [])
-                        )
-                    else:
-                        # Child qualifications: select().eq().order().execute()
-                        chain.eq.return_value.order.return_value.execute.return_value = (
-                            MagicMock(data=qualifications)
-                        )
-                    return chain
-                m.select.side_effect = select
-            elif name == "assignment_objectives":
-                m.select.return_value.in_.return_value.execute.return_value = (
-                    MagicMock(data=ao_rows)
-                )
-            elif name == "grades":
-                m.select.return_value.in_.return_value.in_.return_value.execute.return_value = (
-                    MagicMock(data=grade_rows)
-                )
-            else:
-                m.select.return_value.execute.return_value = MagicMock(data=[])
-            return m
-
-        sa = MagicMock()
-        sa.table.side_effect = table_side_effect
-        return unittest.mock.patch("app.models.supabase_admin", sa)
-
-    def test_all_qualifications_met_is_complete(self):
-        project = {"id": "proj-1", "assignment_type": "project"}
-        grade_rows = [
-            {"student_id": "stu-1", "learning_objective_id": "lo-a", "top_score": "M",
-             "counts_for_mastery": True},
-            {"student_id": "stu-1", "learning_objective_id": "lo-a", "top_score": "MR",
-             "counts_for_mastery": True},
-            {"student_id": "stu-1", "learning_objective_id": "lo-b", "top_score": "M",
-             "counts_for_mastery": True},
-        ]
-        with self._patch_completion(
-            project, self._qualifications(), self._ao_rows(), grade_rows
-        ):
-            result = Course.get_project_completion("stu-1", "proj-1")
-        self.assertIsNotNone(result)
-        self.assertTrue(result["is_complete"])
-        self.assertEqual(result["qualifications_met"], 2)
-        self.assertEqual(result["qualifications_total"], 2)
-        self.assertEqual(result["progress_label"], "2 of 2 qualifications")
-        by_id = {q["qualification_id"]: q for q in result["qualifications"]}
-        self.assertTrue(by_id["qual-1"]["is_complete"])
-        self.assertTrue(by_id["qual-2"]["is_complete"])
-        self.assertEqual(by_id["qual-1"]["objectives"][0]["mastery_count"], 2)
-        self.assertEqual(by_id["qual-2"]["objectives"][0]["mastery_count"], 1)
-
-    def test_one_qualification_not_met_is_incomplete(self):
-        project = {"id": "proj-1", "assignment_type": "project"}
-        grade_rows = [
-            {"student_id": "stu-1", "learning_objective_id": "lo-a", "top_score": "M",
-             "counts_for_mastery": True},
-            {"student_id": "stu-1", "learning_objective_id": "lo-a", "top_score": "MR",
-             "counts_for_mastery": True},
-            # lo-b unmet (and non-counting M must not count)
-            {"student_id": "stu-1", "learning_objective_id": "lo-b", "top_score": "M",
-             "counts_for_mastery": False},
-        ]
-        with self._patch_completion(
-            project, self._qualifications(), self._ao_rows(), grade_rows
-        ):
-            result = Course.get_project_completion("stu-1", "proj-1")
-        self.assertFalse(result["is_complete"])
-        self.assertEqual(result["qualifications_met"], 1)
-        self.assertEqual(result["qualifications_total"], 2)
-        by_id = {q["qualification_id"]: q for q in result["qualifications"]}
-        self.assertTrue(by_id["qual-1"]["is_complete"])
-        self.assertFalse(by_id["qual-2"]["is_complete"])
-        self.assertEqual(by_id["qual-2"]["objectives"][0]["mastery_count"], 0)
-
-    def test_mastery_opp_and_exam_unaffected(self):
-        with self._patch_completion(
-            {"id": "asg-1", "assignment_type": "mastery_opp"}, [], [], []
-        ):
-            self.assertIsNone(Course.get_project_completion("stu-1", "asg-1"))
-        with self._patch_completion(
-            {"id": "exam-1", "assignment_type": "exam"}, [], [], []
-        ):
-            self.assertIsNone(Course.get_project_completion("stu-1", "exam-1"))
-
-    def test_count_counted_masteries_helper_matches_aggregate_rule(self):
-        grades = [
-            {"top_score": "M"},
-            {"top_score": "MR", "counts_for_mastery": None},
-            {"top_score": "M", "counts_for_mastery": False},
-            {"top_score": "R", "counts_for_mastery": True},
-            {"top_score": "I", "counts_for_mastery": True},
-        ]
-        self.assertEqual(Course._count_counted_masteries(grades), 2)
-
-    def test_count_counted_masteries_by_lo(self):
-        grades = [
-            {"learning_objective_id": "lo-a", "top_score": "M", "counts_for_mastery": True},
-            {"learning_objective_id": "lo-a", "top_score": "M", "counts_for_mastery": False},
-            {"learning_objective_id": "lo-b", "top_score": "MR"},
-            {"learning_objective_id": "lo-b", "top_score": "R", "counts_for_mastery": True},
-        ]
-        self.assertEqual(
-            Course._count_counted_masteries_by_lo(grades),
-            {"lo-a": 1, "lo-b": 1},
-        )
-
-    def test_aggregate_lo_grades_still_per_lo_for_existing_types(self):
-        lo_lookup = {
-            "1": {"id": "1", "name": "LO", "vendor_code": "L1", "required_ms": 2},
-        }
-        raw = [
-            {"learning_objective_id": "1", "top_score": "M", "counts_for_mastery": True},
-            {"learning_objective_id": "1", "top_score": "MR", "counts_for_mastery": True},
-        ]
-        out = _aggregate_lo_grades(raw, lo_lookup)
-        self.assertEqual(out[0]["m_count"], 2)
-        self.assertTrue(out[0]["is_passed"])
-
-    def test_batch_matches_single_student_result(self):
-        project = {"id": "proj-1", "assignment_type": "project"}
-        grade_rows = [
-            {"student_id": "stu-1", "learning_objective_id": "lo-a", "top_score": "M",
-             "counts_for_mastery": True},
-            {"student_id": "stu-1", "learning_objective_id": "lo-a", "top_score": "MR",
-             "counts_for_mastery": True},
-            {"student_id": "stu-1", "learning_objective_id": "lo-b", "top_score": "M",
-             "counts_for_mastery": True},
-        ]
-        with self._patch_completion(
-            project, self._qualifications(), self._ao_rows(), grade_rows
-        ):
-            single = Course.get_project_completion("stu-1", "proj-1")
-        with self._patch_completion(
-            project, self._qualifications(), self._ao_rows(), grade_rows
-        ):
-            batch = Course.get_project_completion_batch("proj-1", ["stu-1"])
-        self.assertIsNotNone(single)
-        self.assertIsNotNone(batch)
-        self.assertEqual(batch["stu-1"], single)
-
-    def test_shared_project_piece_pools_mastery_across_qualifications(self):
-        project = {"id": "proj-1", "assignment_type": "project"}
-        qualifications = [
-            {"id": "qual-1", "name": "Qual A", "assignment_type": "mastery_opp"},
-            {"id": "qual-2", "name": "Qual B", "assignment_type": "mastery_opp"},
-        ]
-        ao_rows = [
-            {
-                "assignment_id": "qual-1",
-                "learning_objective_id": "lo-shared",
-                "required_ms_for_project": None,
-                "learning_objectives": {
-                    "id": "lo-shared",
-                    "vendor_code": "Shared",
-                    "name": "Shared",
-                    "required_ms": 1,
-                    "owner_qualification_id": None,
-                    "owner_project_id": "proj-1",
-                },
-            },
-            {
-                "assignment_id": "qual-2",
-                "learning_objective_id": "lo-shared",
-                "required_ms_for_project": None,
-                "learning_objectives": {
-                    "id": "lo-shared",
-                    "vendor_code": "Shared",
-                    "name": "Shared",
-                    "required_ms": 1,
-                    "owner_qualification_id": None,
-                    "owner_project_id": "proj-1",
-                },
-            },
-        ]
-        grade_rows = [
-            {
-                "student_id": "stu-1",
-                "learning_objective_id": "lo-shared",
+                "student_id": STU_ALEX_ID,
+                "learning_objective_id": LO_D1_ID,
                 "top_score": "M",
                 "counts_for_mastery": True,
+                "assignment_id": ASG_OLD_ID,
             },
-        ]
-        with self._patch_completion(project, qualifications, ao_rows, grade_rows):
-            result = Course.get_project_completion("stu-1", "proj-1")
-        self.assertIsNotNone(result)
-        by_id = {q["qualification_id"]: q for q in result["qualifications"]}
-        self.assertEqual(by_id["qual-1"]["objectives"][0]["mastery_count"], 1)
-        self.assertEqual(by_id["qual-2"]["objectives"][0]["mastery_count"], 1)
-        self.assertTrue(by_id["qual-1"]["objectives"][0]["is_met"])
-        self.assertTrue(by_id["qual-2"]["objectives"][0]["is_met"])
-        self.assertTrue(by_id["qual-1"]["is_complete"])
-        self.assertTrue(by_id["qual-2"]["is_complete"])
-        self.assertTrue(result["is_complete"])
+            {
+                "student_id": STU_ALEX_ID,
+                "learning_objective_id": LO_D2_ID,
+                "top_score": "R",
+                "counts_for_mastery": True,
+                "assignment_id": ASG_OLD_ID,
+            },
+        ],
+        "assignment_objectives": new_aos + old_aos,
+        "assignments": [
+            {
+                "id": ASG_NEW_ID,
+                "class_id": CLASS_REPORTS_ID,
+                "assignment_type": "project",
+                "name": "Test Project",
+            },
+            {
+                "id": ASG_OLD_ID,
+                "class_id": CLASS_REPORTS_ID,
+                "assignment_type": "exam",
+                "name": "Exam 1",
+            },
+        ],
+        "enrollments": [
+            {
+                "student_id": STU_ALEX_ID,
+                "class_id": CLASS_REPORTS_ID,
+                "profiles": {
+                    "id": STU_ALEX_ID,
+                    "full_name": STU_ALEX_NAME,
+                    "email": STU_ALEX_EMAIL,
+                },
+            }
+        ],
+        "new_assignment_objectives": new_aos,
+        "old_assignment_objectives": old_aos,
+    }
 
 
-class TestQualificationListExclusion(unittest.TestCase):
-    """Normal assignment list queries must omit child Qualifications."""
-
-    def test_load_assignments_for_class_filters_parent_project_id(self):
-        from app import routes as r
-
-        chain = MagicMock()
-        chain.eq.return_value.is_.return_value.order.return_value.execute.return_value = (
-            MagicMock(data=[
-                {"id": "proj-1", "assignment_type": "project", "parent_project_id": None},
-                {"id": "asg-1", "assignment_type": "mastery_opp", "parent_project_id": None},
-            ])
-        )
-        sa = MagicMock()
-        sa.table.return_value.select.return_value = chain
-
-        with unittest.mock.patch.object(r, "supabase_admin", sa):
-            rows = r.load_assignments_for_class("class-1")
-
-        self.assertEqual(len(rows), 2)
-        chain.eq.assert_called_with("class_id", "class-1")
-        chain.eq.return_value.is_.assert_called_with("parent_project_id", "null")
-        ids = {row["id"] for row in rows}
-        self.assertNotIn("qual-1", ids)
+def _assignment_scoped_grade_letter(grades_map, student_id, lo_id):
+    """Same lookup as assignmentScopedGradeLetter in class_reports.html."""
+    key = f"{student_id}|{lo_id}"
+    return str((grades_map or {}).get(key) or "").upper()
 
 
-class TestQualificationCrudRoutes(unittest.TestCase):
-    """Qualification create / list / delete API under a Project."""
+def _report_rows_from_scoped_grades(assignment_objectives, grades_map, student_id):
+    """Same assignment-scoped branch as getIndividualReportParts in class_reports.html."""
+    rows = []
+    for ao in assignment_objectives:
+        lo_id = str(ao.get("learning_objective_id") or "")
+        if not lo_id:
+            continue
+        letter = _assignment_scoped_grade_letter(grades_map, student_id, lo_id)
+        nested = ao.get("learning_objectives") or {}
+        title = str(nested.get("vendor_code") or "")
+        rows.append({"title": title, "grade": letter or "Not graded"})
+    return rows
+
+
+def _email_body_from_report_rows(class_name, assignment_label, student_name, rows):
+    """Same body shape as buildEmailPayloadForStudent in class_reports.html."""
+    lines = [
+        "Hello,",
+        "",
+        f"Class: {class_name}",
+        f"Assignment: {assignment_label}",
+        "Date: 1/1/2026",
+        f"Student: {student_name}",
+        "",
+        "Learning objectives and scores shown in this report:",
+        "",
+    ]
+    for row in rows:
+        title = " ".join(str(row.get("title") or "").split())
+        lines.append(f"{title}  |  {row.get('grade') or 'Not graded'}")
+    lines.append("")
+    lines.append("— Instructor (via Project Clarity)")
+    return "\n".join(lines)
+
+
+class TestReportsAssignmentScopeAndEmail(unittest.TestCase):
+    """Assignment-scoped grades API plus the report-email request/response path."""
 
     def setUp(self):
         self.app = create_app()
         self.app.config["TESTING"] = True
         self.client = self.app.test_client()
+        self.store = _reports_scope_store()
+        self.csrf = "test-csrf"
 
-    def _auth_headers(self):
+    def _login(self, *, user_id="inst1", role="instructor"):
         with self.client.session_transaction() as sess:
-            sess["user_id"] = "inst1"
-            sess["role"] = "instructor"
-            sess["csrf_token"] = "test-csrf"
-        return {"X-CSRF-Token": "test-csrf"}
+            sess["user_id"] = user_id
+            sess["role"] = role
+            sess["csrf_token"] = self.csrf
 
-    def _piece_tables(
-        self,
-        existing_pieces=None,
-        project_pieces=None,
-        currently_linked=None,
-        new_piece_id="piece-1",
-    ):
-        """Mock assignments + learning_objectives + assignment_objectives for piece sync."""
-        asg_table = MagicMock()
-        ao_table = MagicMock()
-        lo_table = MagicMock()
+    def _headers(self):
+        return {"X-CSRF-Token": self.csrf}
 
-        lo_select_n = {"n": 0}
-
-        def lo_select(*_a, **_k):
-            chain = MagicMock()
-            lo_select_n["n"] += 1
-            # Sync order: legacy owner_qualification_id, then owner_project_id.
-            if lo_select_n["n"] == 1:
-                data = list(existing_pieces or [])
-            else:
-                data = list(project_pieces or [])
-            chain.eq.return_value.eq.return_value.execute.return_value = MagicMock(
-                data=data
-            )
-            return chain
-
-        lo_table.select.side_effect = lo_select
-        lo_table.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": new_piece_id}]
-        )
-        lo_table.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = (
-            MagicMock(data=[])
-        )
-        lo_table.delete.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = (
-            MagicMock(data=[])
-        )
-
-        ao_select_n = {"n": 0}
-
-        def ao_select(*_a, **_k):
-            chain = MagicMock()
-            ao_select_n["n"] += 1
-            if ao_select_n["n"] == 1:
-                linked = [
-                    {"learning_objective_id": lid}
-                    for lid in (currently_linked or [])
-                ]
-                chain.eq.return_value.execute.return_value = MagicMock(data=linked)
-            else:
-                chain.eq.return_value.limit.return_value.execute.return_value = (
-                    MagicMock(data=[])
-                )
-            return chain
-
-        ao_table.select.side_effect = ao_select
-        ao_table.delete.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
-        ao_table.insert.return_value.execute.return_value = MagicMock(data=[])
-
-        def table_side_effect(name):
-            if name == "assignments":
-                return asg_table
-            if name == "assignment_objectives":
-                return ao_table
-            if name == "learning_objectives":
-                return lo_table
-            if name == "grades":
-                g = MagicMock()
-                g.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
-                g.delete.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
-                return g
-            return MagicMock()
-
-        return asg_table, ao_table, lo_table, table_side_effect
-
-    def test_create_qualification(self):
+    def _grades_patches(self, *, owns_class=True, belongs=True):
         from app import routes as r
-
-        headers = self._auth_headers()
-        project_row = {
-            "id": "proj-1",
-            "class_id": "class-1",
-            "name": "Test Proj",
-            "assignment_type": "project",
-            "parent_project_id": None,
-            "homework_group": "Group 1",
-        }
-
-        asg_table, ao_table, lo_table, table_side_effect = self._piece_tables(
-            new_piece_id="piece-new"
+        sa = _filter_client(self.store)
+        return (
+            unittest.mock.patch.object(r, "supabase_admin", sa),
+            unittest.mock.patch.object(r, "_instructor_owns_class", return_value=owns_class),
+            unittest.mock.patch.object(r, "_assignment_belongs_to_class", return_value=belongs),
+            unittest.mock.patch.object(
+                r.Homework, "get_hw_scores_map_for_assignment", return_value={}
+            ),
         )
-        asg_table.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "qual-1"}]
-        )
-        sa = MagicMock()
-        sa.table.side_effect = table_side_effect
 
+    def _get_assignment_grades(self, assignment_id, *, owns_class=True, belongs=True):
+        patches = self._grades_patches(owns_class=owns_class, belongs=belongs)
+        with patches[0], patches[1], patches[2], patches[3]:
+            return self.client.get(
+                f"/api/class/{CLASS_REPORTS_ID}/assignment/{assignment_id}/grades"
+            )
+
+    def _post_single_email(self, payload, *, owns_class=True, send_result=(True, "")):
+        from app import routes as r
+        sa = _filter_client(self.store)
+        send_mock = unittest.mock.MagicMock(return_value=send_result)
         with unittest.mock.patch.object(r, "supabase_admin", sa), \
-                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(r, "_project_row_for_class", return_value=project_row), \
-                unittest.mock.patch.object(
-                    r.Homework,
-                    "canonicalize_homework_group_for_class",
-                    return_value="Group 1",
-                ):
-            create_rv = self.client.post(
-                "/api/class/class-1/projects/proj-1/qualifications",
-                json={
-                    "name": "Qual A",
-                    "pieces": [{"name": "Piece A", "required_ms": 2}],
-                },
-                headers=headers,
-            )
-
-        self.assertEqual(create_rv.status_code, 201, create_rv.get_json())
-        body = create_rv.get_json()
-        self.assertTrue(body.get("success"))
-        self.assertEqual(body.get("qualification_id"), "qual-1")
-        self.assertEqual(body.get("piece_ids"), ["piece-new"])
-        insert_payload = asg_table.insert.call_args[0][0]
-        self.assertEqual(insert_payload.get("parent_project_id"), "proj-1")
-        self.assertEqual(insert_payload.get("assignment_type"), "mastery_opp")
-        lo_insert = lo_table.insert.call_args[0][0]
-        self.assertEqual(lo_insert.get("owner_project_id"), "proj-1")
-        self.assertIsNone(lo_insert.get("owner_qualification_id"))
-        self.assertEqual(lo_insert.get("name"), "Piece A")
-        self.assertEqual(lo_insert.get("vendor_code"), "Piece A")
-        self.assertEqual(lo_insert.get("required_ms"), 2)
-        ao_insert = ao_table.insert.call_args[0][0]
-        self.assertEqual(ao_insert[0]["learning_objective_id"], "piece-new")
-        self.assertIsNone(ao_insert[0]["required_ms_for_project"])
-
-    def test_create_qualification_ignores_requested_exam_type(self):
-        from app import routes as r
-
-        headers = self._auth_headers()
-        project_row = {
-            "id": "proj-1",
-            "class_id": "class-1",
-            "name": "Test Proj",
-            "assignment_type": "project",
-            "parent_project_id": None,
-            "homework_group": "Group 1",
-        }
-        asg_table, ao_table, lo_table, table_side_effect = self._piece_tables()
-        asg_table.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "qual-1"}]
-        )
-        sa = MagicMock()
-        sa.table.side_effect = table_side_effect
-
-        with unittest.mock.patch.object(r, "supabase_admin", sa), \
-                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(r, "_project_row_for_class", return_value=project_row), \
-                unittest.mock.patch.object(
-                    r.Homework,
-                    "canonicalize_homework_group_for_class",
-                    return_value="Group 1",
-                ):
-            create_rv = self.client.post(
-                "/api/class/class-1/projects/proj-1/qualifications",
-                json={
-                    "name": "Qual A",
-                    "assignment_type": "exam",
-                    "pieces": [{"name": "Piece A", "required_ms": 2}],
-                },
-                headers=headers,
-            )
-
-        self.assertEqual(create_rv.status_code, 201, create_rv.get_json())
-        self.assertEqual(
-            asg_table.insert.call_args[0][0].get("assignment_type"),
-            "mastery_opp",
-        )
-
-    def test_list_qualifications(self):
-        from app import routes as r
-
-        headers = self._auth_headers()
-        project_row = {
-            "id": "proj-1",
-            "class_id": "class-1",
-            "name": "Test Proj",
-            "assignment_type": "project",
-            "parent_project_id": None,
-        }
-        asg_table = MagicMock()
-        asg_table.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = (
-            MagicMock(data=[{
-                "id": "qual-1",
-                "name": "Qual A",
-                "assignment_type": "mastery_opp",
-                "parent_project_id": "proj-1",
-                "assignment_objectives": [],
-            }])
-        )
-        sa = MagicMock()
-        sa.table.return_value = asg_table
-
-        with unittest.mock.patch.object(r, "supabase_admin", sa), \
-                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(r, "_project_row_for_class", return_value=project_row):
-            list_rv = self.client.get(
-                "/api/class/class-1/projects/proj-1/qualifications",
-                headers=headers,
-            )
-
-        self.assertEqual(list_rv.status_code, 200, list_rv.get_json())
-        self.assertEqual(len(list_rv.get_json().get("qualifications") or []), 1)
-
-    def test_delete_qualification(self):
-        from app import routes as r
-
-        headers = self._auth_headers()
-        project_row = {
-            "id": "proj-1",
-            "class_id": "class-1",
-            "name": "Test Proj",
-            "assignment_type": "project",
-            "parent_project_id": None,
-        }
-
-        asg_table = MagicMock()
-        asg_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = (
-            MagicMock(data=[{"id": "qual-1", "parent_project_id": "proj-1"}])
-        )
-        asg_table.delete.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = (
-            MagicMock(data=[])
-        )
-        ao_table = MagicMock()
-        ao_table.delete.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
-        grades_table = MagicMock()
-        grades_table.select.return_value.eq.return_value.execute.return_value = MagicMock(data=[])
-
-        def table_side_effect(name):
-            if name == "assignments":
-                return asg_table
-            if name == "assignment_objectives":
-                return ao_table
-            if name == "grades":
-                return grades_table
-            return MagicMock()
-
-        sa = MagicMock()
-        sa.table.side_effect = table_side_effect
-
-        with unittest.mock.patch.object(r, "supabase_admin", sa), \
-                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(r, "_project_row_for_class", return_value=project_row), \
-                unittest.mock.patch.object(r, "_log_grade_deletions"):
-            delete_rv = self.client.delete(
-                "/api/class/class-1/projects/proj-1/qualifications/qual-1",
-                headers=headers,
-            )
-
-        self.assertEqual(delete_rv.status_code, 200, delete_rv.get_json())
-        self.assertTrue(delete_rv.get_json().get("success"))
-
-    def test_create_rejects_non_project_parent(self):
-        from app import routes as r
-
-        headers = self._auth_headers()
-        with unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(r, "_project_row_for_class", return_value=None):
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=owns_class), \
+                unittest.mock.patch.object(r, "_send_via_resend", send_mock):
             rv = self.client.post(
-                "/api/class/class-1/projects/asg-1/qualifications",
-                json={
-                    "name": "Qual A",
-                    "pieces": [{"name": "Piece A", "required_ms": 1}],
-                },
-                headers=headers,
+                f"/api/class/{CLASS_REPORTS_ID}/student/{STU_ALEX_ID}/send-report-email",
+                json=payload,
+                headers=self._headers(),
             )
-        self.assertEqual(rv.status_code, 404)
+        return rv, send_mock
 
-    def test_create_and_update_parent_project(self):
+    def _post_bulk_email(self, payload, *, owns_class=True, send_result=(True, "")):
         from app import routes as r
-
-        headers = self._auth_headers()
-        asg_table = MagicMock()
-        asg_table.insert.return_value.execute.return_value = MagicMock(
-            data=[{"id": "proj-1"}]
-        )
-        asg_table.update.return_value.eq.return_value.eq.return_value.execute.return_value = (
-            MagicMock(data=[{"id": "proj-1"}])
-        )
-        sa = MagicMock()
-        sa.table.return_value = asg_table
-
+        sa = _filter_client(self.store)
+        send_mock = unittest.mock.MagicMock(return_value=send_result)
         with unittest.mock.patch.object(r, "supabase_admin", sa), \
-                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(
-                    r.Homework,
-                    "canonicalize_homework_group_for_class",
-                    return_value="Group 1",
-                ), \
-                unittest.mock.patch.object(
-                    r,
-                    "_project_row_for_class",
-                    return_value={
-                        "id": "proj-1",
-                        "class_id": "class-1",
-                        "assignment_type": "project",
-                        "parent_project_id": None,
-                    },
-                ):
-            create_rv = self.client.post(
-                "/api/class/class-1/projects",
-                json={"name": "Shell", "homework_group": "Group 1"},
-                headers=headers,
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=owns_class), \
+                unittest.mock.patch.object(r, "_send_via_resend", send_mock):
+            rv = self.client.post(
+                f"/api/class/{CLASS_REPORTS_ID}/send-report-emails",
+                json=payload,
+                headers=self._headers(),
             )
-            update_rv = self.client.put(
-                "/api/class/class-1/projects/proj-1",
-                json={"name": "Shell Renamed", "homework_group": "Group 1"},
-                headers=headers,
-            )
+        return rv, send_mock
 
-        self.assertEqual(create_rv.status_code, 201, create_rv.get_json())
-        self.assertEqual(create_rv.get_json().get("project_id"), "proj-1")
-        insert_payload = asg_table.insert.call_args[0][0]
-        self.assertEqual(insert_payload.get("assignment_type"), "project")
-        self.assertIsNone(insert_payload.get("parent_project_id"))
-        self.assertEqual(update_rv.status_code, 200, update_rv.get_json())
-        self.assertTrue(update_rv.get_json().get("success"))
-
-    def test_update_qualification_preserves_piece_ids(self):
-        from app import routes as r
-
-        headers = self._auth_headers()
-        project_row = {
-            "id": "proj-1",
-            "class_id": "class-1",
-            "assignment_type": "project",
-            "parent_project_id": None,
-            "homework_group": "Group 1",
-        }
-        existing_pieces = [{
-            "id": "piece-keep",
-            "name": "Old Name",
-            "vendor_code": "Old Name",
-            "required_ms": 2,
-            "owner_qualification_id": "qual-1",
-        }]
-        asg_table, ao_table, lo_table, table_side_effect = self._piece_tables(
-            existing_pieces=existing_pieces
+    def test_assignment_grades_unauthenticated_401(self):
+        rv = self.client.get(
+            f"/api/class/{CLASS_REPORTS_ID}/assignment/{ASG_NEW_ID}/grades"
         )
-        asg_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = (
-            MagicMock(data=[{"id": "qual-1", "parent_project_id": "proj-1"}])
-        )
-        asg_table.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = (
-            MagicMock(data=[])
-        )
-        sa = MagicMock()
-        sa.table.side_effect = table_side_effect
+        self.assertEqual(rv.status_code, 401)
 
-        with unittest.mock.patch.object(r, "supabase_admin", sa), \
-                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(r, "_project_row_for_class", return_value=project_row), \
-                unittest.mock.patch.object(
-                    r.Homework,
-                    "canonicalize_homework_group_for_class",
-                    return_value="Group 1",
-                ):
-            rv = self.client.put(
-                "/api/class/class-1/projects/proj-1/qualifications/qual-1",
-                json={
-                    "name": "Qual A Updated",
-                    "assignment_type": "exam",
-                    "pieces": [{
-                        "id": "piece-keep",
-                        "name": "Renamed Piece",
-                        "required_ms": 3,
-                    }],
-                },
-                headers=headers,
-            )
+    def test_assignment_grades_forbidden_if_not_class_owner(self):
+        self._login()
+        rv = self._get_assignment_grades(ASG_NEW_ID, owns_class=False)
+        self.assertEqual(rv.status_code, 403)
 
-        self.assertEqual(rv.status_code, 200, rv.get_json())
+    def test_new_assignment_grades_map_is_empty(self):
+        self._login()
+        rv = self._get_assignment_grades(ASG_NEW_ID)
+        self.assertEqual(rv.status_code, 200)
         body = rv.get_json()
         self.assertTrue(body.get("success"))
-        self.assertEqual(body.get("piece_ids"), ["piece-keep"])
-        update_payload = asg_table.update.call_args[0][0]
-        self.assertEqual(update_payload.get("assignment_type"), "mastery_opp")
-        lo_table.insert.assert_not_called()
-        lo_update = lo_table.update.call_args[0][0]
-        self.assertEqual(lo_update.get("name"), "Renamed Piece")
-        self.assertEqual(lo_update.get("required_ms"), 3)
+        self.assertEqual(body.get("grades"), {})
+        self.assertEqual(body.get("counts_for_mastery_map"), {})
 
-    def test_attach_existing_project_piece_links_without_lo_write(self):
-        from app import routes as r
-
-        headers = self._auth_headers()
-        project_row = {
-            "id": "proj-1",
-            "class_id": "class-1",
-            "assignment_type": "project",
-            "parent_project_id": None,
-            "homework_group": "Group 1",
-        }
-        project_pieces = [{
-            "id": "piece-shared",
-            "name": "Shared Piece",
-            "vendor_code": "Shared Piece",
-            "required_ms": 2,
-            "owner_project_id": "proj-1",
-        }]
-        asg_table, ao_table, lo_table, table_side_effect = self._piece_tables(
-            project_pieces=project_pieces,
-            currently_linked=[],
+    def test_new_assignment_print_email_rows_are_not_graded(self):
+        self._login()
+        rv = self._get_assignment_grades(ASG_NEW_ID)
+        grades_map = rv.get_json()["grades"]
+        aggregate_los = [
+            {"learning_objective_id": LO_D1_ID, "vendor_code": "D1", "top_score": "M"},
+            {"learning_objective_id": LO_D2_ID, "vendor_code": "D2", "top_score": "R"},
+        ]
+        rows = _report_rows_from_scoped_grades(
+            self.store["new_assignment_objectives"], grades_map, STU_ALEX_ID
         )
-        asg_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.limit.return_value.execute.return_value = (
-            MagicMock(data=[{"id": "qual-2", "parent_project_id": "proj-1"}])
-        )
-        asg_table.update.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = (
-            MagicMock(data=[])
-        )
-        sa = MagicMock()
-        sa.table.side_effect = table_side_effect
-
-        with unittest.mock.patch.object(r, "supabase_admin", sa), \
-                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(r, "_project_row_for_class", return_value=project_row), \
-                unittest.mock.patch.object(
-                    r.Homework,
-                    "canonicalize_homework_group_for_class",
-                    return_value="Group 1",
-                ):
-            rv = self.client.put(
-                "/api/class/class-1/projects/proj-1/qualifications/qual-2",
-                json={
-                    "name": "Qual B",
-                    "pieces": [{
-                        "id": "piece-shared",
-                        "name": "Shared Piece",
-                        "required_ms": 2,
-                    }],
-                },
-                headers=headers,
-            )
-
-        self.assertEqual(rv.status_code, 200, rv.get_json())
-        body = rv.get_json()
-        self.assertTrue(body.get("success"))
-        self.assertEqual(body.get("piece_ids"), ["piece-shared"])
-        lo_table.insert.assert_not_called()
-        lo_table.update.assert_not_called()
-        ao_insert = ao_table.insert.call_args[0][0]
-        self.assertEqual(ao_insert[0]["learning_objective_id"], "piece-shared")
-        self.assertEqual(ao_insert[0]["assignment_id"], "qual-2")
-
-    def test_list_project_pieces_scoped_to_project(self):
-        from app import routes as r
-
-        headers = self._auth_headers()
-        lo_table = MagicMock()
-        lo_table.select.return_value.eq.return_value.eq.return_value.order.return_value.execute.return_value = (
-            MagicMock(data=[{
-                "id": "piece-a",
-                "name": "Piece A",
-                "vendor_code": "Piece A",
-                "required_ms": 1,
-                "owner_project_id": "proj-1",
-            }])
-        )
-        sa = MagicMock()
-        sa.table.return_value = lo_table
-
-        with unittest.mock.patch.object(r, "supabase_admin", sa), \
-                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(
-                    r,
-                    "_project_row_for_class",
-                    return_value={
-                        "id": "proj-1",
-                        "class_id": "class-1",
-                        "assignment_type": "project",
-                    },
-                ):
-            rv = self.client.get(
-                "/api/class/class-1/projects/proj-1/pieces",
-                headers=headers,
-            )
-
-        self.assertEqual(rv.status_code, 200, rv.get_json())
-        body = rv.get_json()
-        self.assertTrue(body.get("success"))
-        self.assertEqual(len(body.get("pieces") or []), 1)
-        self.assertEqual(body["pieces"][0]["id"], "piece-a")
-        lo_table.select.return_value.eq.assert_any_call("class_id", "class-1")
-        lo_table.select.return_value.eq.return_value.eq.assert_called_with(
-            "owner_project_id", "proj-1"
+        self.assertEqual([row["grade"] for row in rows], ["Not graded", "Not graded"])
+        self.assertEqual([row["title"] for row in rows], ["D1", "D2"])
+        self.assertNotEqual(
+            [row["grade"] for row in rows],
+            [lo["top_score"] for lo in aggregate_los],
         )
 
+    def test_shared_lo_query_does_not_return_sibling_assignment_grades(self):
+        self._login()
+        rv = self._get_assignment_grades(ASG_NEW_ID)
+        grades_map = rv.get_json()["grades"]
+        self.assertNotIn(f"{STU_ALEX_ID}|{LO_D1_ID}", grades_map)
+        self.assertNotIn(f"{STU_ALEX_ID}|{LO_D2_ID}", grades_map)
+        self.assertNotIn("M", grades_map.values())
+        self.assertNotIn("R", grades_map.values())
 
-class TestQualificationPiecesIsolation(unittest.TestCase):
-    """Pieces are private LOs: excluded from class pool, gradable on owner."""
-
-    def test_get_learning_objectives_filters_owner_qualification_id(self):
-        chain = MagicMock()
-        chain.eq.return_value.is_.return_value.is_.return_value.execute.return_value = (
-            MagicMock(data=[{"id": "lo-pool", "name": "Pool", "vendor_code": "P1"}])
+    def test_shared_lo_sibling_assignment_returns_only_its_own_grades(self):
+        self._login()
+        rv = self._get_assignment_grades(ASG_OLD_ID)
+        self.assertEqual(rv.status_code, 200)
+        grades_map = rv.get_json()["grades"]
+        self.assertEqual(
+            grades_map,
+            {
+                f"{STU_ALEX_ID}|{LO_D1_ID}": "M",
+                f"{STU_ALEX_ID}|{LO_D2_ID}": "R",
+            },
         )
-        sa = MagicMock()
-        sa.table.return_value.select.return_value = chain
+        new_rv = self._get_assignment_grades(ASG_NEW_ID)
+        self.assertEqual(new_rv.get_json()["grades"], {})
 
-        with unittest.mock.patch("app.models.supabase_admin", sa):
-            rows = Course.get_learning_objectives("class-1")
-
-        chain.eq.assert_called_with("class_id", "class-1")
-        chain.eq.return_value.is_.assert_called_with("owner_qualification_id", "null")
-        chain.eq.return_value.is_.return_value.is_.assert_called_with(
-            "owner_project_id", "null"
+    def test_send_report_email_unauthenticated_401(self):
+        rv = self.client.post(
+            f"/api/class/{CLASS_REPORTS_ID}/student/{STU_ALEX_ID}/send-report-email",
+            json={"subject": "s", "body": "b"},
         )
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["id"], "lo-pool")
+        self.assertEqual(rv.status_code, 401)
 
-    def test_get_lo_ids_for_class_filters_pieces(self):
-        chain = MagicMock()
-        chain.eq.return_value.is_.return_value.is_.return_value.execute.return_value = (
-            MagicMock(data=[{"id": "lo-pool"}])
+    def test_send_report_email_non_instructor_401(self):
+        self._login(role="student")
+        rv, send_mock = self._post_single_email({"subject": "s", "body": "b"})
+        self.assertEqual(rv.status_code, 401)
+        send_mock.assert_not_called()
+
+    def test_send_report_email_not_owner_403(self):
+        self._login()
+        rv, send_mock = self._post_single_email(
+            {"subject": "s", "body": "b"}, owns_class=False
         )
-        sa = MagicMock()
-        sa.table.return_value.select.return_value = chain
+        self.assertEqual(rv.status_code, 403)
+        send_mock.assert_not_called()
 
-        with unittest.mock.patch("app.models.supabase_admin", sa):
-            ids = Course.get_lo_ids_for_class("class-1")
+    def test_send_report_email_rejects_missing_subject_or_body(self):
+        self._login()
+        rv, send_mock = self._post_single_email({"subject": "Progress", "body": ""})
+        self.assertEqual(rv.status_code, 400)
+        send_mock.assert_not_called()
 
-        chain.eq.return_value.is_.assert_called_with("owner_qualification_id", "null")
-        chain.eq.return_value.is_.return_value.is_.assert_called_with(
-            "owner_project_id", "null"
+    def test_send_report_email_uses_scoped_not_graded_content(self):
+        self._login()
+        grades_rv = self._get_assignment_grades(ASG_NEW_ID)
+        grades_map = grades_rv.get_json()["grades"]
+        rows = _report_rows_from_scoped_grades(
+            self.store["new_assignment_objectives"], grades_map, STU_ALEX_ID
         )
-        self.assertEqual(ids, ["lo-pool"])
-
-    def test_save_grades_accepts_piece_owned_by_assignment(self):
-        from app import routes as r
-
-        app = create_app()
-        app.config["TESTING"] = True
-        client = app.test_client()
-        with client.session_transaction() as sess:
-            sess["user_id"] = "inst1"
-            sess["role"] = "instructor"
-            sess["csrf_token"] = "test-csrf"
-        headers = {"X-CSRF-Token": "test-csrf"}
-
-        grades_table = MagicMock()
-        grades_table.select.return_value.in_.return_value.in_.return_value.eq.return_value.execute.return_value = (
-            MagicMock(data=[])
+        body = _email_body_from_report_rows(
+            "Algebra 1", "Test Project", STU_ALEX_NAME, rows
         )
-        grades_table.upsert.return_value.execute.return_value = MagicMock(data=[])
-        sa = MagicMock()
-        sa.table.return_value = grades_table
+        subject = "Your progress report — Algebra 1"
+        self.assertIn("D1  |  Not graded", body)
+        self.assertIn("D2  |  Not graded", body)
+        self.assertNotIn("D1  |  M", body)
+        self.assertNotIn("D2  |  R", body)
 
-        with unittest.mock.patch.object(r, "supabase_admin", sa), \
-                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(r, "_assignment_belongs_to_class", return_value=True), \
-                unittest.mock.patch.object(
-                    r.Course, "get_lo_ids_for_class", return_value=["lo-pool"]
-                ), \
-                unittest.mock.patch.object(
-                    r.Course,
-                    "get_piece_lo_ids_for_qualification",
-                    return_value=["piece-1"],
-                ), \
-                unittest.mock.patch.object(
-                    r, "_enrolled_student_ids_for_class", return_value={"stu-1"}
-                ), \
-                unittest.mock.patch.object(
-                    r, "_class_auto_convert_m_enabled", return_value=False
-                ), \
-                unittest.mock.patch.object(
-                    r.Homework,
-                    "get_hw_scores_map_for_assignment",
-                    return_value={},
-                ):
-            rv = client.post(
-                "/api/class/class-1/save-grades",
-                json={
-                    "assignment_id": "qual-1",
-                    "grades": {"stu-1|piece-1": "M"},
-                },
-                headers=headers,
-            )
+        rv, send_mock = self._post_single_email({"subject": subject, "body": body})
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rv.get_json(), {"success": True, "to": STU_ALEX_EMAIL})
+        send_mock.assert_called_once_with(STU_ALEX_EMAIL, subject, body)
+        sent_body = send_mock.call_args[0][2]
+        self.assertIn("D1  |  Not graded", sent_body)
+        self.assertNotIn("D1  |  M", sent_body)
 
-        self.assertEqual(rv.status_code, 200, rv.get_json())
-        self.assertTrue(rv.get_json().get("success"))
-        upsert_rows = grades_table.upsert.call_args[0][0]
-        self.assertEqual(len(upsert_rows), 1)
-        self.assertEqual(upsert_rows[0]["learning_objective_id"], "piece-1")
-        self.assertEqual(upsert_rows[0]["top_score"], "M")
-
-    def test_save_grades_rejects_piece_from_other_qualification(self):
-        from app import routes as r
-
-        app = create_app()
-        app.config["TESTING"] = True
-        client = app.test_client()
-        with client.session_transaction() as sess:
-            sess["user_id"] = "inst1"
-            sess["role"] = "instructor"
-            sess["csrf_token"] = "test-csrf"
-        headers = {"X-CSRF-Token": "test-csrf"}
-
-        grades_table = MagicMock()
-        sa = MagicMock()
-        sa.table.return_value = grades_table
-
-        with unittest.mock.patch.object(r, "supabase_admin", sa), \
-                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(r, "_assignment_belongs_to_class", return_value=True), \
-                unittest.mock.patch.object(
-                    r.Course, "get_lo_ids_for_class", return_value=["lo-pool"]
-                ), \
-                unittest.mock.patch.object(
-                    r.Course,
-                    "get_piece_lo_ids_for_qualification",
-                    return_value=["piece-owned"],
-                ), \
-                unittest.mock.patch.object(
-                    r, "_enrolled_student_ids_for_class", return_value={"stu-1"}
-                ), \
-                unittest.mock.patch.object(
-                    r, "_class_auto_convert_m_enabled", return_value=False
-                ), \
-                unittest.mock.patch.object(
-                    r.Homework,
-                    "get_hw_scores_map_for_assignment",
-                    return_value={},
-                ):
-            rv = client.post(
-                "/api/class/class-1/save-grades",
-                json={
-                    "assignment_id": "qual-1",
-                    "grades": {"stu-1|piece-other": "M"},
-                },
-                headers=headers,
-            )
-
-        self.assertEqual(rv.status_code, 200, rv.get_json())
-        grades_table.upsert.assert_not_called()
-
-    def test_api_update_grade_accepts_piece_for_owner_assignment(self):
-        from app import routes as r
-
-        app = create_app()
-        app.config["TESTING"] = True
-        client = app.test_client()
-        with client.session_transaction() as sess:
-            sess["user_id"] = "inst1"
-            sess["role"] = "instructor"
-            sess["csrf_token"] = "test-csrf"
-        headers = {"X-CSRF-Token": "test-csrf"}
-
-        asg_table = MagicMock()
-        asg_table.select.return_value.eq.return_value.limit.return_value.execute.return_value = (
-            MagicMock(data=[{"class_id": "class-1"}])
+    def test_send_bulk_report_emails_uses_scoped_content(self):
+        self._login()
+        grades_rv = self._get_assignment_grades(ASG_NEW_ID)
+        grades_map = grades_rv.get_json()["grades"]
+        rows = _report_rows_from_scoped_grades(
+            self.store["new_assignment_objectives"], grades_map, STU_ALEX_ID
         )
-        lo_table = MagicMock()
-        lo_table.select.return_value.eq.return_value.limit.return_value.execute.return_value = (
-            MagicMock(data=[{"class_id": "class-1"}])
+        body = _email_body_from_report_rows(
+            "Algebra 1", "Test Project", STU_ALEX_NAME, rows
         )
+        subject = "Your progress report — Algebra 1"
+        rv, send_mock = self._post_bulk_email({
+            "reports": [{
+                "student_id": STU_ALEX_ID,
+                "student_name": STU_ALEX_NAME,
+                "subject": subject,
+                "body": body,
+            }]
+        })
+        self.assertEqual(rv.status_code, 200)
+        payload = rv.get_json()
+        self.assertTrue(payload.get("success"))
+        self.assertEqual(payload.get("sent"), 1)
+        send_mock.assert_called_once_with(STU_ALEX_EMAIL, subject, body)
+        sent_body = send_mock.call_args[0][2]
+        self.assertIn("Not graded", sent_body)
+        self.assertNotIn("D1  |  M", sent_body)
 
-        def table_side_effect(name):
-            if name == "assignments":
-                return asg_table
-            if name == "learning_objectives":
-                return lo_table
-            return MagicMock()
-
-        sa = MagicMock()
-        sa.table.side_effect = table_side_effect
-
-        with unittest.mock.patch.object(r, "supabase_admin", sa), \
-                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
-                unittest.mock.patch.object(
-                    r, "_student_enrolled_in_class", return_value=True
-                ), \
-                unittest.mock.patch.object(
-                    r.Course, "get_lo_ids_for_class", return_value=[]
-                ), \
-                unittest.mock.patch.object(
-                    r.Course,
-                    "get_piece_lo_ids_for_qualification",
-                    return_value=["piece-1"],
-                ), \
-                unittest.mock.patch.object(
-                    r.Grade, "update_score", return_value=MagicMock()
-                ) as update_score:
-            rv = client.post(
-                "/api/update_grade",
-                json={
-                    "class_id": "class-1",
-                    "assignment_id": "qual-1",
-                    "lo_id": "piece-1",
-                    "student_id": "stu-1",
-                    "top_score": "M",
-                },
-                headers=headers,
-            )
-
-        self.assertEqual(rv.status_code, 200, rv.get_json())
-        self.assertTrue(rv.get_json().get("success"))
-        update_score.assert_called_once()
+    def test_reports_template_print_email_uses_scoped_cache(self):
+        template_path = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "app",
+            "templates",
+            "class_reports.html",
+        )
+        with open(template_path, encoding="utf-8") as fh:
+            src = fh.read()
+        self.assertIn("function assignmentScopedGradeLetter", src)
+        self.assertIn("cached.gradesMap[key]", src)
+        self.assertIn(
+            "const scoped = assignmentScopedGradeLetter(student.id, loId, activeAssignmentId);",
+            src,
+        )
+        self.assertIn("const grade = scoped || 'Not graded';", src)
+        self.assertIn("/api/class/${classId}/student/${encodeURIComponent(studentId)}/send-report-email", src)
+        self.assertIn("/api/class/${classId}/send-report-emails", src)
 
 
 if __name__ == '__main__':

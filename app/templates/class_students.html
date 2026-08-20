@@ -50,20 +50,11 @@
             <div class="flex items-center gap-4 text-sm text-slate-600 dark:text-slate-400 flex-wrap">
               {% set los = student.learning_objectives %}
               {% set passed = los|selectattr('is_passed')|list|length %}
-              {% set project_list = student.projects if student.projects is defined else [] %}
-              {% set projects_passed = project_list|selectattr('is_complete')|list|length %}
               <span>{{ passed }} / {{ los|length }} objectives passed</span>
               {{ homework_percentage_badge(passed, los|length) }}
             </div>
             <div class="mt-1.5 max-w-[200px]">
               {{ progress_bar(passed, los|length) }}
-            </div>
-            <div class="mt-2 flex items-center gap-4 text-sm text-slate-600 dark:text-slate-400 flex-wrap">
-              <span>{{ projects_passed }} / {{ project_list|length }} projects passed</span>
-              {{ homework_percentage_badge(projects_passed, project_list|length) }}
-            </div>
-            <div class="mt-1.5 max-w-[200px]">
-              {{ progress_bar(projects_passed, project_list|length) }}
             </div>
           </div>
           <button type="button" class="delete-student text-red-600 hover:text-red-800 rounded-full p-2" data-student-id="{{ student.id }}" onclick="event.stopPropagation(); deleteStudent('{{ student.id }}')" title="Remove student">

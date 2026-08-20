@@ -152,7 +152,7 @@
     <!-- All Data View -->
     <div id="view-all" class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 print:shadow-none print:border-0">
       <div class="p-6 border-b border-slate-100 dark:border-slate-700">
-        <h2 class="font-semibold text-slate-900 dark:text-white">Assignment Report</h2>
+        <h2 id="assignmentReportHeading" class="font-semibold text-slate-900 dark:text-white">Assignment Report</h2>
         <p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{{ class_name }}</p>
       </div>
       <div class="overflow-x-auto">
@@ -204,19 +204,8 @@
                 <span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="{{ student.id }}" data-assignment-id="">—</span>
               </td>
               {% for lo in learning_objectives %}
-              {% set student_lo = student.learning_objectives|selectattr('learning_objective_id', 'equalto', lo.id|string)|first %}
-              {% set grade = student_lo.top_score if student_lo else None %}
-              {% set top_meta = student_lo.top_meta if student_lo else None %}
-              {% set is_non_counting = (grade in ('M', 'MR')) and top_meta and (top_meta.counts_for_mastery == false) %}
               <td class="px-3 py-3 text-center" data-lo-id="{{ lo.id }}">
-                {% if grade %}
-                <span class="mastery-badge mastery-{{ grade|lower }} border cursor-pointer hover:opacity-80{% if is_non_counting %} non-counting-grade{% endif %}"
-                      data-raw-grade="{{ grade }}"
-                      {% if is_non_counting %}data-non-counting="1"{% endif %}
-                      title="Click for history">{{ grade }}</span>
-                {% else %}
                 <span class="text-slate-300 dark:text-slate-600">—</span>
-                {% endif %}
               </td>
               {% endfor %}
             </tr>
@@ -589,9 +578,18 @@ function _applyCountsForMasteryInScope(scopeAssignmentId, countsMap, gradesMap) 
 }
 
 function _applyAssignmentGradesInScope(scopeAssignmentId, gradesMap, countsMap) {
-  const tables = document.querySelectorAll(
-    '#view-all-assignments table[data-assignment-id="' + String(scopeAssignmentId) + '"]'
-  );
+  const scopeId = (scopeAssignmentId === undefined || scopeAssignmentId === null)
+    ? ''
+    : String(scopeAssignmentId);
+  const tables = [];
+  if (scopeId === '') {
+    const single = document.getElementById('all-students-table');
+    if (single) tables.push(single);
+  } else {
+    document.querySelectorAll(
+      '#view-all-assignments table[data-assignment-id="' + scopeId + '"]'
+    ).forEach(function (table) { tables.push(table); });
+  }
   tables.forEach(function (table) {
     table.querySelectorAll('tbody tr.student-row').forEach(function (row) {
       const studentId = String(row.getAttribute('data-student-id') || '');
@@ -760,6 +758,8 @@ function selectAssignment(assignmentId, assignmentName) {
   assignmentDropdownEl.classList.add('hidden');
   assignmentDropdownBtnEl.innerHTML = escapeHtml(assignmentName) + ' ' + chevronSvg;
   assignmentDropdownBtnEl.className = 'flex items-center gap-2 px-4 py-2 rounded-lg font-medium text-sm transition-colors bg-blue-600 text-white hover:bg-blue-700';
+  const heading = document.getElementById('assignmentReportHeading');
+  if (heading) heading.textContent = assignmentName || 'Assignment Report';
 
   document.querySelectorAll('.assignment-dd-item').forEach(function (item) {
     const isActive = item.getAttribute('data-assignment-id') === String(assignmentId);
@@ -770,9 +770,7 @@ function selectAssignment(assignmentId, assignmentName) {
 
   applyAssignmentFilter();
   if (!isAllTypeView(selectedAssignmentId)) {
-    const asg = assignmentsData.find(function (a) { return String(a.id) === selectedAssignmentId; });
-    if (asg && assignmentTypeOf(asg) === 'project') return;
-    fetchHwScoresForAssignment(selectedAssignmentId, '');
+    fetchHwScoresForAssignment(selectedAssignmentId, '', true);
   }
 }
 
@@ -788,14 +786,6 @@ function applyAssignmentFilter() {
   const assignment = assignmentsData.find(function (a) {
     return String(a.id) === String(selectedAssignmentId);
   });
-
-  if (assignment && assignmentTypeOf(assignment) === 'project') {
-    viewAllEl.classList.add('hidden');
-    renderProjectReportsCards([assignment]);
-    viewAllAssignmentsEl.classList.remove('hidden');
-    updateEmailSelectedButton();
-    return;
-  }
 
   viewAllAssignmentsEl.classList.add('hidden');
   viewAllEl.classList.remove('hidden');
@@ -908,6 +898,15 @@ function loCodeForId(loId, fallbackObj) {
   return learningObjectiveCodeById[String(loId)] || 'LO';
 }
 
+function assignmentScopedGradeLetter(studentId, loId, assignmentId) {
+  const aid = String(assignmentId || '');
+  if (!aid || isAllTypeView(aid)) return '';
+  const cached = __assignmentGradesCache.get(aid);
+  if (!cached || !cached.gradesMap) return '';
+  const key = String(studentId || '') + '|' + String(loId || '');
+  return String(cached.gradesMap[key] || '').toUpperCase();
+}
+
 function renderAllAssignmentsView(typeFilter) {
   const container = viewAllAssignmentsEl;
   if (!container) return;
@@ -915,11 +914,6 @@ function renderAllAssignmentsView(typeFilter) {
   const list = (assignmentsData || []).filter(function (a) {
     return normalizeAssignmentType(a && a.assignment_type) === typeFilter;
   });
-
-  if (typeFilter === 'project') {
-    renderProjectReportsCards(list);
-    return;
-  }
 
   if (!list.length) {
     container.innerHTML =
@@ -964,7 +958,6 @@ function renderAllAssignmentsView(typeFilter) {
       const studentId = String(student.id || '');
       const studentName = String(student.name || '');
       const lowered = studentName.toLowerCase();
-      const los = Array.isArray(student.learning_objectives) ? student.learning_objectives : [];
       html += '        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors student-row group" data-student-name="' + escapeHtml(lowered) + '" data-student-id="' + escapeHtml(studentId) + '">';
       html += '          <td class="px-3 py-2 font-medium text-slate-900 dark:text-white"><div class="flex items-center gap-1 flex-nowrap min-w-0"><span class="truncate min-w-0">' + escapeHtml(studentName) + '</span>';
       html += '            <button type="button" onclick="printStudentReport(\'' + escapeHtml(studentId) + '\', \'' + escapeHtml(assignmentId) + '\')" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors flex-shrink-0 print:hidden">Print</button>';
@@ -978,26 +971,7 @@ function renderAllAssignmentsView(typeFilter) {
       html += '          </td>';
       html += '          <td class="px-2 py-2 text-center" data-hw-cell><span class="hw-score-display inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-slate-100 dark:bg-slate-700 text-slate-700 dark:text-slate-300" data-student-id="' + escapeHtml(studentId) + '" data-assignment-id="' + escapeHtml(assignmentId) + '">—</span></td>';
       loMeta.forEach(function (lo) {
-        const slo = los.find(function (x) { return String(x.learning_objective_id) === String(lo.id); });
-        const grade = slo ? (slo.top_score || '') : '';
-        if (grade) {
-          // Use the persisted counts_for_mastery flag (carried on top_meta by
-          // _aggregate_lo_grades) to apply the red "non-counting" outline.
-          // The per-assignment payload that arrives via fetchHwScoresForAssignment
-          // will refine this further once it loads.
-          const topMeta = slo && slo.top_meta;
-          const isNonCounting =
-            (grade === 'M' || grade === 'MR') &&
-            topMeta && topMeta.counts_for_mastery === false;
-          const badgeClass =
-            'mastery-badge mastery-' + escapeHtml(String(grade).toLowerCase()) +
-            ' border cursor-pointer hover:opacity-80' +
-            (isNonCounting ? ' non-counting-grade' : '');
-          const ncAttr = isNonCounting ? ' data-non-counting="1"' : '';
-          html += '          <td class="px-3 py-3 text-center" data-lo-id="' + escapeHtml(lo.id) + '"><span class="' + badgeClass + '" data-raw-grade="' + escapeHtml(grade) + '"' + ncAttr + '>' + escapeHtml(grade) + '</span></td>';
-        } else {
-          html += '          <td class="px-3 py-3 text-center" data-lo-id="' + escapeHtml(lo.id) + '"><span class="text-slate-300 dark:text-slate-600">—</span></td>';
-        }
+        html += '          <td class="px-3 py-3 text-center" data-lo-id="' + escapeHtml(lo.id) + '"><span class="text-slate-300 dark:text-slate-600">—</span></td>';
       });
       html += '        </tr>';
     });
@@ -1008,318 +982,11 @@ function renderAllAssignmentsView(typeFilter) {
   container.innerHTML = html;
   list.forEach(function (assignment) {
     if (assignment && assignment.id) {
-      fetchHwScoresForAssignment(String(assignment.id), String(assignment.id));
+      fetchHwScoresForAssignment(String(assignment.id), String(assignment.id), true);
     }
   });
   applyStudentFilter();
 }
-
-function reportsPieceDisplayName(lo) {
-  const info = lo || {};
-  return String(info.vendor_code || info.name || '').trim();
-}
-
-function reportsPieceRequiredMs(lo) {
-  const n = parseInt((lo && lo.required_ms), 10);
-  return (n && n >= 1) ? n : 0;
-}
-
-function mergeQualificationGradePacks(packs) {
-  const gradesMap = {};
-  const countsMap = {};
-  (packs || []).forEach(function (pack) {
-    const g = (pack && pack.gradesMap) || {};
-    const c = (pack && pack.countsMap) || {};
-    Object.keys(g).forEach(function (key) {
-      const letter = String(g[key] || '').toUpperCase();
-      if (!letter) return;
-      if (!gradesMap[key]) {
-        gradesMap[key] = letter;
-        if (Object.prototype.hasOwnProperty.call(c, key)) {
-          countsMap[key] = !!c[key];
-        }
-      }
-    });
-  });
-  return { gradesMap: gradesMap, countsMap: countsMap };
-}
-
-function fetchQualificationGradesPack(qualificationId) {
-  const qid = String(qualificationId || '');
-  if (!qid) {
-    return Promise.resolve({ qualificationId: '', gradesMap: {}, countsMap: {} });
-  }
-  const cacheKey = qid;
-  if (__assignmentGradesCache.has(cacheKey)) {
-    const cached = __assignmentGradesCache.get(cacheKey);
-    return Promise.resolve({
-      qualificationId: qid,
-      gradesMap: cached.gradesMap || {},
-      countsMap: cached.countsMap || {}
-    });
-  }
-  return fetch('/api/class/' + classId + '/assignment/' + encodeURIComponent(qid) + '/grades', {
-    credentials: 'same-origin',
-    headers: { 'Accept': 'application/json' }
-  })
-    .then(function (r) { return r.json(); })
-    .then(function (data) {
-      if (!data || !data.success) {
-        return { qualificationId: qid, gradesMap: {}, countsMap: {} };
-      }
-      const payload = {
-        hwScores: data.hw_scores || {},
-        countsMap: data.counts_for_mastery_map || {},
-        gradesMap: data.grades || {}
-      };
-      __assignmentGradesCache.set(cacheKey, payload);
-      return {
-        qualificationId: qid,
-        gradesMap: payload.gradesMap,
-        countsMap: payload.countsMap
-      };
-    })
-    .catch(function (err) {
-      console.error('Error loading qualification grades for reports:', err);
-      return { qualificationId: qid, gradesMap: {}, countsMap: {} };
-    });
-}
-
-function collectProjectReportRowsFromDom(projectId, studentId) {
-  const rows = [];
-  const root = document.querySelector(
-    '#view-all-assignments [data-project-reports="' + String(projectId) + '"]'
-  );
-  if (!root) return rows;
-  const sid = String(studentId || '');
-  root.querySelectorAll('[data-qualification-card]').forEach(function (card) {
-    const qualName = card.getAttribute('data-qualification-name') || 'Qualification';
-    const table = card.querySelector('table[data-assignment-id]');
-    if (!table) return;
-    const studentRow = table.querySelector('tbody tr.student-row[data-student-id="' + sid + '"]');
-    if (!studentRow) return;
-    table.querySelectorAll('thead th[data-lo-id]').forEach(function (th) {
-      const loId = String(th.getAttribute('data-lo-id') || '');
-      if (!loId) return;
-      const labelEl = th.querySelector('[data-piece-label]');
-      const pieceLabel = labelEl
-        ? String(labelEl.textContent || '').trim()
-        : loId;
-      const cell = studentRow.querySelector('td[data-lo-id="' + loId + '"]');
-      const badge = cell ? cell.querySelector('.mastery-badge[data-raw-grade]') : null;
-      const grade = badge
-        ? String(badge.getAttribute('data-raw-grade') || badge.textContent || '').trim()
-        : '';
-      rows.push({
-        title: qualName + ' — ' + pieceLabel,
-        grade: grade || 'Not graded'
-      });
-    });
-  });
-  return rows;
-}
-
-function buildQualificationReportsCardHtml(project, qual) {
-  const projectId = String(project.id || '');
-  const projectName = project.name || 'Project';
-  const qualId = String(qual.id || '');
-  const qualName = String(qual.name || 'Qualification');
-  const aos = Array.isArray(qual.assignment_objectives) ? qual.assignment_objectives : [];
-  const pieces = [];
-  aos.forEach(function (ao) {
-    const lo = ao.learning_objectives || {};
-    const pieceId = String(lo.id || ao.learning_objective_id || '');
-    const label = reportsPieceDisplayName(lo);
-    const need = reportsPieceRequiredMs(lo);
-    if (!pieceId || !label || need < 1) return;
-    pieces.push({ id: pieceId, label: label, required_ms: need });
-  });
-
-  let html = '';
-  html += '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden print:shadow-none print:border-0" data-qualification-card data-qualification-id="'
-    + escapeHtml(qualId) + '" data-qualification-name="' + escapeHtml(qualName) + '" data-project-id="'
-    + escapeHtml(projectId) + '">';
-  html += '<button type="button" class="w-full px-5 py-3 border-b border-slate-100 dark:border-slate-700 flex items-center gap-2 text-left hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors print:cursor-default" data-qualification-toggle aria-expanded="true">';
-  html += '<svg class="w-4 h-4 text-slate-400 shrink-0 transition-transform print:hidden" data-qualification-chevron fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>';
-  html += '<div class="min-w-0"><h3 class="font-semibold text-slate-900 dark:text-white">' + escapeHtml(qualName) + '</h3>';
-  html += '<p class="text-xs text-slate-500 dark:text-slate-400 mt-0.5">' + escapeHtml(projectName) + ' · {{ class_name }}</p>';
-  if (!pieces.length) {
-    html += '<p class="text-xs text-slate-500 dark:text-slate-400 mt-1">No pieces on this Qualification.</p>';
-  }
-  html += '</div></button>';
-
-  if (!pieces.length) {
-    html += '</div>';
-    return html;
-  }
-
-  html += '<div data-qualification-body class="overflow-x-auto">';
-  html += '<table class="w-full text-sm" data-assignment-id="' + escapeHtml(qualId) + '" data-project-id="'
-    + escapeHtml(projectId) + '">';
-  html += '<thead><tr class="border-b border-slate-200 dark:border-slate-700">';
-  html += '<th class="text-left px-3 py-2 font-medium text-slate-500 dark:text-slate-400 w-48 sticky left-0 bg-white dark:bg-slate-800 z-20">Student</th>';
-  html += '<th class="text-center px-2 py-2 font-medium text-slate-500 dark:text-slate-400 whitespace-nowrap print:hidden">Email</th>';
-  pieces.forEach(function (piece) {
-    html += '<th class="text-center px-1 py-3 font-medium text-slate-500 dark:text-slate-400 min-w-[70px]" data-lo-id="'
-      + escapeHtml(piece.id) + '">';
-    html += '<div class="text-xs font-bold text-slate-800 dark:text-white" data-piece-label>'
-      + escapeHtml(piece.label) + '</div>';
-    html += '<div class="lo-header-sub text-xs font-normal text-slate-400 dark:text-slate-500 mt-0.5 leading-tight">Need '
-      + escapeHtml(String(piece.required_ms)) + '</div>';
-    html += '</th>';
-  });
-  html += '</tr></thead>';
-  html += '<tbody class="divide-y divide-slate-50 dark:divide-slate-700">';
-
-  studentsData.forEach(function (student) {
-    const studentId = String(student.id || '');
-    const studentName = String(student.name || '');
-    const lowered = studentName.toLowerCase();
-    html += '<tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40 transition-colors student-row group" data-student-name="'
-      + escapeHtml(lowered) + '" data-student-id="' + escapeHtml(studentId) + '">';
-    html += '<td class="px-3 py-2 font-medium text-slate-900 dark:text-white sticky left-0 bg-white dark:bg-slate-800 z-10"><div class="flex items-center gap-1 flex-nowrap min-w-0"><span class="truncate min-w-0">'
-      + escapeHtml(studentName) + '</span>';
-    html += '<button type="button" onclick="printStudentReport(\'' + escapeHtml(studentId) + '\', \''
-      + escapeHtml(projectId) + '\')" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors flex-shrink-0 print:hidden">Print</button>';
-    html += '</div></td>';
-    html += '<td class="px-2 py-2 text-center print:hidden">';
-    if (student.email) {
-      html += '<button type="button" onclick="emailStudentReport(\'' + escapeHtml(studentId)
-        + '\', this, \'' + escapeHtml(projectId)
-        + '\')" class="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-xs font-semibold bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 hover:bg-emerald-200 dark:hover:bg-emerald-900/50 transition-colors">Email</button>';
-    } else {
-      html += '<span class="text-slate-300 dark:text-slate-600">—</span>';
-    }
-    html += '</td>';
-    pieces.forEach(function (piece) {
-      html += '<td class="px-3 py-3 text-center" data-lo-id="' + escapeHtml(piece.id)
-        + '"><span class="text-slate-300 dark:text-slate-600">—</span></td>';
-    });
-    html += '</tr>';
-  });
-
-  html += '</tbody></table></div></div>';
-  return html;
-}
-
-function renderProjectReportsCards(projects) {
-  const container = viewAllAssignmentsEl;
-  if (!container) return;
-  if (!projects.length) {
-    container.innerHTML =
-      '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-8 text-center text-slate-500 dark:text-slate-400 text-sm">No projects available.</div>';
-    return;
-  }
-
-  container.innerHTML =
-    '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-8 text-center text-slate-500 dark:text-slate-400 text-sm">Loading project qualifications…</div>';
-
-  const projectList = (projects || []).slice();
-  Promise.all(projectList.map(function (project) {
-    const projectId = String(project.id || '');
-    if (!projectId) {
-      return Promise.resolve({ project: project, quals: [], error: 'Missing project id' });
-    }
-    return fetch('/api/class/' + classId + '/projects/' + encodeURIComponent(projectId) + '/qualifications', {
-      credentials: 'same-origin',
-      headers: { 'Accept': 'application/json' }
-    })
-      .then(function (r) {
-        return r.json().then(function (body) {
-          return { ok: r.ok, body: body };
-        });
-      })
-      .then(function (result) {
-        if (!result.ok || !result.body || !result.body.success) {
-          return {
-            project: project,
-            quals: [],
-            error: (result.body && result.body.error) || 'Could not load qualifications.'
-          };
-        }
-        return {
-          project: project,
-          quals: Array.isArray(result.body.qualifications) ? result.body.qualifications : [],
-          error: ''
-        };
-      })
-      .catch(function (err) {
-        console.error(err);
-        return { project: project, quals: [], error: 'Could not load qualifications.' };
-      });
-  })).then(function (loaded) {
-    if (!studentsData.length) {
-      container.innerHTML =
-        '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-8 text-center text-slate-500 dark:text-slate-400 text-sm">No students enrolled.</div>';
-      return;
-    }
-
-    let html = '';
-    loaded.forEach(function (entry) {
-      const project = entry.project || {};
-      const projectId = String(project.id || '');
-      const projectName = project.name || 'Project';
-      html += '<div class="space-y-4" data-project-reports="' + escapeHtml(projectId) + '">';
-      html += '<div class="px-1">';
-      html += '<h2 class="text-lg font-semibold text-slate-900 dark:text-white">' + escapeHtml(projectName) + '</h2>';
-      html += '<p class="text-sm text-slate-500 dark:text-slate-400 mt-0.5">{{ class_name }}</p>';
-      html += '</div>';
-
-      if (entry.error) {
-        html += '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 text-sm text-red-500">'
-          + escapeHtml(entry.error) + '</div>';
-        html += '</div>';
-        return;
-      }
-      if (!entry.quals.length) {
-        html += '<div class="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 p-6 text-sm text-slate-500 dark:text-slate-400">No Qualifications on this Project yet. Add them under Assignments → Projects.</div>';
-        html += '</div>';
-        return;
-      }
-
-      entry.quals.forEach(function (qual) {
-        html += buildQualificationReportsCardHtml(project, qual);
-      });
-      html += '</div>';
-    });
-
-    container.innerHTML = html;
-    applyStudentFilter();
-
-    loaded.forEach(function (entry) {
-      const project = entry.project || {};
-      const projectId = String(project.id || '');
-      if (!projectId || entry.error) return;
-
-      const qualIds = (entry.quals || []).map(function (q) {
-        return String(q.id || '');
-      }).filter(Boolean);
-
-      Promise.all(qualIds.map(fetchQualificationGradesPack)).then(function (packs) {
-        const merged = mergeQualificationGradePacks(packs);
-        qualIds.forEach(function (qid) {
-          _applyAssignmentGradesInScope(qid, merged.gradesMap, merged.countsMap);
-        });
-      });
-    });
-  });
-}
-
-document.addEventListener('click', function (e) {
-  const btn = e.target.closest('[data-qualification-toggle]');
-  if (!btn || !viewAllAssignmentsEl || !viewAllAssignmentsEl.contains(btn)) return;
-  const card = btn.closest('[data-qualification-card]');
-  if (!card) return;
-  const body = card.querySelector('[data-qualification-body]');
-  const chevron = btn.querySelector('[data-qualification-chevron]');
-  if (!body) return;
-  const open = btn.getAttribute('aria-expanded') !== 'false';
-  const next = !open;
-  btn.setAttribute('aria-expanded', next ? 'true' : 'false');
-  body.classList.toggle('hidden', !next);
-  if (chevron) chevron.classList.toggle('-rotate-90', !next);
-});
-
 
 // --- Individual student report (same data for print + email-to-student) ---
 function getIndividualReportParts(student, assignmentIdOverride) {
@@ -1337,28 +1004,21 @@ function getIndividualReportParts(student, assignmentIdOverride) {
   const los = student.learning_objectives || [];
   const className = document.querySelector('#view-all p.text-sm')?.textContent.trim() || '';
   const rows = [];
-  let isProject = false;
   if (activeAssignmentId) {
     const assignment = assignmentsData.find(a => String(a.id) === String(activeAssignmentId));
-    if (assignment && assignmentTypeOf(assignment) === 'project') {
-      isProject = true;
-      const projectRows = collectProjectReportRowsFromDom(activeAssignmentId, student.id);
-      projectRows.forEach(function (r) { rows.push(r); });
-    } else {
-      const assignmentObjectives = assignment && Array.isArray(assignment.assignment_objectives)
-        ? assignment.assignment_objectives
-        : [];
-      assignmentObjectives.forEach((ao) => {
-        const loId = String(ao.learning_objective_id || '');
-        if (!loId) return;
-        const slo = los.find(lo => String(lo.learning_objective_id) === loId);
-        const grade = slo ? (slo.top_score || 'Not graded') : 'Not graded';
-        const loTitle = (ao.learning_objectives && ao.learning_objectives.vendor_code)
-          ? String(ao.learning_objectives.vendor_code)
-          : (learningObjectivesData.find(lo => String(lo.id) === loId)?.vendor_code || '');
-        rows.push({ title: loTitle, grade: grade });
-      });
-    }
+    const assignmentObjectives = assignment && Array.isArray(assignment.assignment_objectives)
+      ? assignment.assignment_objectives
+      : [];
+    assignmentObjectives.forEach((ao) => {
+      const loId = String(ao.learning_objective_id || '');
+      if (!loId) return;
+      const scoped = assignmentScopedGradeLetter(student.id, loId, activeAssignmentId);
+      const grade = scoped || 'Not graded';
+      const loTitle = (ao.learning_objectives && ao.learning_objectives.vendor_code)
+        ? String(ao.learning_objectives.vendor_code)
+        : (learningObjectivesData.find(lo => String(lo.id) === loId)?.vendor_code || '');
+      rows.push({ title: loTitle, grade: grade });
+    });
   } else if (visibleLoIds.length > 0) {
     visibleLoIds.forEach((loId, i) => {
       const slo = los.find(lo => String(lo.learning_objective_id) === String(loId));
@@ -1370,7 +1030,7 @@ function getIndividualReportParts(student, assignmentIdOverride) {
       rows.push({ title: lo.vendor_code || '', grade: lo.top_score || 'Not graded' });
     });
   }
-  return { student, assignmentLabel, className, rows, homeworkPct: '', isProject: isProject };
+  return { student, assignmentLabel, className, rows, homeworkPct: '' };
 }
 
 function buildEmailPayloadForStudent(student, assignmentIdOverride) {
@@ -1384,9 +1044,7 @@ function buildEmailPayloadForStudent(student, assignmentIdOverride) {
     'Student: ' + (parts.student.name || ''),
     '',
   ];
-  lines.push(parts.isProject
-    ? 'Qualifications, pieces, and scores shown in this report:'
-    : 'Learning objectives and scores shown in this report:');
+  lines.push('Learning objectives and scores shown in this report:');
   lines.push('');
   parts.rows.forEach(function (r) {
     const t = String(r.title || '').replace(/\s+/g, ' ').trim();
@@ -1404,7 +1062,6 @@ function buildEmailPayloadForStudent(student, assignmentIdOverride) {
 
 function buildAllAssignmentsEmailPayloadForStudent(student) {
   const className = document.querySelector('#view-all p.text-sm')?.textContent.trim() || '';
-  const los = Array.isArray(student.learning_objectives) ? student.learning_objectives : [];
   const lines = [
     'Hello,',
     '',
@@ -1424,34 +1081,19 @@ function buildAllAssignmentsEmailPayloadForStudent(student) {
     : assignmentsData;
 
   scopedAssignments.forEach(function (assignment) {
-    const assignmentId = String(assignment.id || '');
     const assignmentName = String(assignment.name || 'Assignment');
     lines.push('Assignment: ' + assignmentName);
-
-    if (assignmentTypeOf(assignment) === 'project') {
-      lines.push('Qualifications, pieces, and scores shown in this report:');
-      lines.push('');
-      const projectRows = collectProjectReportRowsFromDom(assignmentId, student.id);
-      if (projectRows.length) {
-        projectRows.forEach(function (r) {
-          lines.push(String(r.title || '') + '  |  ' + String(r.grade || 'Not graded'));
-        });
-      } else {
-        lines.push('(No qualification grade rows available for this project view.)');
-      }
-    } else {
-      lines.push('Learning objectives and scores shown in this report:');
-      lines.push('');
-      const assignmentObjectives = Array.isArray(assignment.assignment_objectives) ? assignment.assignment_objectives : [];
-      assignmentObjectives.forEach(function (ao) {
-        const loId = String(ao.learning_objective_id || '');
-        if (!loId) return;
-        const loCode = loCodeForId(loId, ao);
-        const slo = los.find(function (x) { return String(x.learning_objective_id) === loId; });
-        const grade = slo ? (slo.top_score || 'Not graded') : 'Not graded';
-        lines.push(String(loCode || 'LO') + '  |  ' + String(grade || 'Not graded'));
-      });
-    }
+    lines.push('Learning objectives and scores shown in this report:');
+    lines.push('');
+    const assignmentObjectives = Array.isArray(assignment.assignment_objectives) ? assignment.assignment_objectives : [];
+    assignmentObjectives.forEach(function (ao) {
+      const loId = String(ao.learning_objective_id || '');
+      if (!loId) return;
+      const loCode = loCodeForId(loId, ao);
+      const scoped = assignmentScopedGradeLetter(student.id, loId, assignment.id);
+      const grade = scoped || 'Not graded';
+      lines.push(String(loCode || 'LO') + '  |  ' + String(grade || 'Not graded'));
+    });
     lines.push('');
   });
 
@@ -1661,7 +1303,7 @@ function printStudentReport(studentId, assignmentIdOverride) {
 
   const parts = getIndividualReportParts(student, assignmentIdOverride);
   const { assignmentLabel, className, rows } = parts;
-  const scoreColLabel = parts.isProject ? 'Qualification — Piece' : 'Learning Objective';
+  const scoreColLabel = 'Learning Objective';
 
   let tbodyRows = '';
   rows.forEach(function (r) {
@@ -1675,7 +1317,7 @@ function printStudentReport(studentId, assignmentIdOverride) {
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Assignment Report - ${student.name}</title>
+  <title>${assignmentLabel} - ${student.name}</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { font-family: sans-serif; padding: 32px; color: #0f172a; }
@@ -1770,14 +1412,7 @@ function applySinglePagePrintScale() {
 }
 
 function ensureSingleAssignmentViewForExportLikePrint() {
-  // Project and All-type views live in #view-all-assignments with #view-all
-  // hidden. Never force the first Mastery Opportunity — that made Print/Export
-  // ignore Qualification piece tables.
   if (isAllTypeView(selectedAssignmentId)) return;
-  const selected = assignmentsData.find(function (a) {
-    return String(a.id) === String(selectedAssignmentId);
-  });
-  if (selected && assignmentTypeOf(selected) === 'project') return;
 
   const viewAll = document.getElementById('view-all');
   if (viewAll && viewAll.classList.contains('hidden')) {
@@ -1810,183 +1445,6 @@ function studentNameFromReportCell(cell) {
     .trim();
 }
 
-async function exportProjectQualificationTablesPdf(projectOrNull) {
-  const { jsPDF } = window.jspdf;
-  const doc = new jsPDF({
-    orientation: 'landscape',
-    unit: 'pt',
-    format: 'letter',
-    compress: true
-  });
-
-  const classLabelEl = document.querySelector('#view-all p.text-sm');
-  const classLabel = classLabelEl ? printableCellText(classLabelEl) : 'Class';
-  const roots = projectOrNull
-    ? Array.from(document.querySelectorAll(
-        '#view-all-assignments [data-project-reports="' + String(projectOrNull.id) + '"]'
-      ))
-    : Array.from(document.querySelectorAll('#view-all-assignments [data-project-reports]'));
-
-  if (!roots.length) {
-    alert('No project qualification tables available to export.');
-    return;
-  }
-
-  const PDF_GRADE_TEXT_COLOR = {
-    'M': [21, 128, 61],
-    'MR': [4, 120, 87],
-    'R': [161, 98, 7],
-    'RQ': [194, 65, 12],
-    'P': [29, 78, 216],
-    'X': [185, 28, 28],
-    'A': [71, 85, 105],
-    'I': [146, 64, 14]
-  };
-
-  let cursorY = 28;
-  const fileLabel = projectOrNull ? (projectOrNull.name || 'project') : 'all_projects';
-  let wroteAnyTable = false;
-
-  for (let r = 0; r < roots.length; r++) {
-    const root = roots[r];
-    const projectId = root.getAttribute('data-project-reports') || '';
-    const projectMeta = assignmentsData.find(function (a) {
-      return String(a.id) === String(projectId);
-    });
-    const projectName = (projectMeta && projectMeta.name) || 'Project';
-    const cards = Array.from(root.querySelectorAll('[data-qualification-card]'));
-
-    for (let c = 0; c < cards.length; c++) {
-      const card = cards[c];
-      const qualName = card.getAttribute('data-qualification-name') || 'Qualification';
-      const table = card.querySelector('table[data-assignment-id]');
-      if (!table) continue;
-      const qualId = String(table.getAttribute('data-assignment-id') || '');
-
-      let gradesMap = {};
-      let countsMap = {};
-      if (qualId) {
-        try {
-          const pack = await fetchQualificationGradesPack(qualId);
-          gradesMap = pack.gradesMap || {};
-          countsMap = pack.countsMap || {};
-        } catch (e) {
-          gradesMap = {};
-          countsMap = {};
-        }
-      }
-
-      const ths = Array.from(table.querySelectorAll('thead th'));
-      const pieceThs = ths.filter(function (th) {
-        return th.hasAttribute('data-lo-id');
-      });
-      const headers = ['Student'].concat(pieceThs.map(function (th) {
-        const labelEl = th.querySelector('[data-piece-label]');
-        return labelEl ? printableCellText(labelEl) : printableCellText(th);
-      }));
-
-      const body = [];
-      Array.from(table.querySelectorAll('tbody tr.student-row')).forEach(function (tr) {
-        if (tr.classList.contains('hidden')) return;
-        const sid = String(tr.getAttribute('data-student-id') || '').trim();
-        const nameCell = tr.querySelector('td');
-        let studentName = studentNameFromReportCell(nameCell);
-        const rowVals = [studentName];
-        pieceThs.forEach(function (th) {
-          const loId = String(th.getAttribute('data-lo-id') || '');
-          const key = sid + '|' + loId;
-          let out = gradesMap[key] ? String(gradesMap[key]) : '';
-          if ((out === 'M' || out === 'MR') &&
-              Object.prototype.hasOwnProperty.call(countsMap, key) &&
-              countsMap[key] === false) {
-            out = 'I';
-          }
-          if (!out) {
-            const cell = tr.querySelector('td[data-lo-id="' + loId + '"]');
-            const badge = cell ? cell.querySelector('.mastery-badge[data-raw-grade]') : null;
-            out = badge
-              ? String(badge.getAttribute('data-raw-grade') || '').trim()
-              : '';
-          }
-          rowVals.push(out);
-        });
-        body.push(rowVals);
-      });
-
-      if (!headers.length || !body.length) continue;
-
-      if (wroteAnyTable) {
-        doc.addPage();
-        cursorY = 28;
-      }
-
-      doc.setFont('helvetica', 'bold');
-      doc.setFontSize(14);
-      doc.text('Grade Sheet', 28, cursorY);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(10);
-      doc.text(classLabel + ' - ' + projectName + ' / ' + qualName, 28, cursorY + 16);
-      doc.text(new Date().toLocaleDateString(), 730, cursorY + 16, { align: 'right' });
-
-      doc.autoTable({
-        head: [headers],
-        body: body,
-        startY: cursorY + 26,
-        margin: { left: 20, right: 20, top: 54, bottom: 20 },
-        theme: 'grid',
-        styles: {
-          font: 'helvetica',
-          fontSize: 8,
-          cellPadding: 3,
-          lineColor: [17, 24, 39],
-          lineWidth: 0.6,
-          textColor: [15, 23, 42],
-          fillColor: [255, 255, 255],
-          overflow: 'linebreak'
-        },
-        headStyles: {
-          fillColor: [255, 255, 255],
-          textColor: [15, 23, 42],
-          fontStyle: 'bold'
-        },
-        didParseCell: function (hookData) {
-          if (hookData.section !== 'body') return;
-          if (hookData.column.index === 0) return;
-          hookData.cell.styles.halign = 'center';
-          const raw = String(hookData.cell.raw == null ? '' : hookData.cell.raw)
-            .trim()
-            .toUpperCase();
-          const tc = PDF_GRADE_TEXT_COLOR[raw];
-          if (!tc) return;
-          hookData.cell.styles.textColor = tc;
-          if (raw === 'I') {
-            hookData.cell.styles.font = 'times';
-            hookData.cell.styles.fontStyle = 'bold';
-          } else {
-            hookData.cell.styles.fontStyle = 'bold';
-          }
-        }
-      });
-      wroteAnyTable = true;
-      cursorY = (doc.lastAutoTable && doc.lastAutoTable.finalY)
-        ? doc.lastAutoTable.finalY + 28
-        : 500;
-    }
-  }
-
-  if (!wroteAnyTable) {
-    alert('No visible grade data to export.');
-    return;
-  }
-
-  const safeAssignment = String(fileLabel || 'project')
-    .trim()
-    .toLowerCase()
-    .replace(/[^\w\-]+/g, '_')
-    .replace(/^_+|_+$/g, '') || 'project';
-  doc.save(safeAssignment + '_gradesheet.pdf');
-}
-
 async function exportGradeSheetPdf(btn) {
   try {
     if (!window.jspdf || !window.jspdf.jsPDF) {
@@ -2005,18 +1463,6 @@ async function exportGradeSheetPdf(btn) {
     }
 
     applyStudentFilter();
-
-    if (isAllTypeView(selectedAssignmentId) && ALL_VIEW_IDS[selectedAssignmentId] === 'project') {
-      await exportProjectQualificationTablesPdf(null);
-      return;
-    }
-    const selectedAsg = assignmentsData.find(function (a) {
-      return String(a.id) === String(selectedAssignmentId);
-    });
-    if (selectedAsg && assignmentTypeOf(selectedAsg) === 'project') {
-      await exportProjectQualificationTablesPdf(selectedAsg);
-      return;
-    }
 
     ensureSingleAssignmentViewForExportLikePrint();
 

@@ -97,63 +97,6 @@
       </div>
     </div>
     {% endfor %}
-    {% for project in projects %}
-    <div class="student-history-tile bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 print:shadow-none print:break-inside-avoid">
-      <div class="p-6 border-b border-slate-100 dark:border-slate-700 student-history-tile-section">
-        <h2 class="font-semibold text-slate-900 dark:text-white">{{ project.name }}</h2>
-      </div>
-      <div class="p-6">
-        {% if project.pieces|length > 0 %}
-        <div class="space-y-3">
-          {% for piece in project.pieces %}
-            {% if piece.grades|length > 0 %}
-              {% for grade in piece.grades|reverse %}
-              <div class="student-history-row flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-slate-700/50 border border-transparent dark:border-transparent">
-                <div>
-                  <div class="text-sm font-medium text-slate-900 dark:text-white">{{ piece.vendor_code }}</div>
-                </div>
-                <div class="text-right">
-                  <div class="text-2xl font-bold text-slate-900 dark:text-white">
-                    {% set score1 = grade.top_score %}
-                    {% if score1 %}
-                      {% if score1 in ['M', 'R', 'RQ', 'P', 'X', 'A'] %}
-                        <span class="mastery-badge mastery-{{ score1|lower }} inline-block px-3 py-1 text-lg font-semibold font-mono rounded border">{{ score1 }}</span>
-                      {% else %}
-                        <span class="student-history-numeric inline-block px-3 py-1 text-lg font-semibold rounded border border-slate-300 bg-white dark:bg-slate-800 dark:border-slate-600">{{ score1 }}</span>
-                      {% endif %}
-                    {% else %}
-                    <span class="text-slate-300 dark:text-slate-600">—</span>
-                    {% endif %}
-                  </div>
-                  {% set score2 = grade.second_score %}
-                  {% if score2 and score2 != score1 %}
-                  <div class="text-sm text-slate-500 dark:text-slate-400 mt-2">
-                    {% if score2 in ['M', 'R', 'RQ', 'P', 'X', 'A'] %}
-                      <span class="mastery-badge mastery-{{ score2|lower }} inline-block px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ score2 }}</span>
-                    {% else %}
-                      <span class="student-history-numeric inline-block px-2 py-0.5 text-xs font-semibold rounded border border-slate-300 bg-white dark:bg-slate-800 dark:border-slate-600">{{ score2 }}</span>
-                    {% endif %}
-                  </div>
-                  {% endif %}
-                </div>
-              </div>
-              {% endfor %}
-            {% else %}
-              <div class="student-history-row flex items-center justify-between p-3 rounded-lg bg-slate-50 dark:bg-slate-700/50 border border-transparent dark:border-transparent">
-                <div>
-                  <div class="text-sm font-medium text-slate-900 dark:text-white">{{ piece.vendor_code }}</div>
-                </div>
-                <p class="text-slate-400 dark:text-slate-500 text-sm print:text-slate-500">No grades yet</p>
-              </div>
-            {% endif %}
-          {% endfor %}
-        </div>
-        {% else %}
-        <p class="text-slate-400 dark:text-slate-500 text-sm text-center py-8 print:text-slate-500">No grades yet</p>
-        {% endif %}
-      </div>
-    </div>
-    {% endfor %}
   </div>
 
   <!-- Print-only compact table (Excel-style) -->
@@ -208,63 +151,6 @@
     </table>
   </div>
 
-  <!-- Print-only Project tiles (screen grid is hidden when printing) -->
-  {% if projects %}
-  <div class="student-history-print-projects hidden print:block mt-4 space-y-4">
-    {% for project in projects %}
-    <div class="student-history-tile bg-white rounded-xl border border-slate-200 print:shadow-none print:break-inside-avoid">
-      <div class="p-4 border-b border-slate-100 student-history-tile-section">
-        <h2 class="font-semibold text-slate-900">{{ project.name }}</h2>
-      </div>
-      <div class="p-4">
-        {% if project.pieces|length > 0 %}
-        <div class="space-y-2">
-          {% for piece in project.pieces %}
-            {% if piece.grades|length > 0 %}
-              {% for grade in piece.grades|reverse %}
-              <div class="student-history-row flex items-center justify-between p-2 rounded-lg border border-slate-200">
-                <div class="text-sm font-medium text-slate-900">{{ piece.vendor_code }}</div>
-                <div class="text-right">
-                  {% set score1 = grade.top_score %}
-                  {% if score1 %}
-                    {% if score1 in ['M', 'R', 'RQ', 'P', 'X', 'A'] %}
-                      <span class="mastery-badge mastery-{{ score1|lower }} inline-block px-2 py-0.5 text-sm font-semibold font-mono rounded border">{{ score1 }}</span>
-                    {% else %}
-                      <span class="student-history-numeric inline-block px-2 py-0.5 text-sm font-semibold rounded border border-slate-300">{{ score1 }}</span>
-                    {% endif %}
-                  {% else %}
-                    <span>—</span>
-                  {% endif %}
-                  {% set score2 = grade.second_score %}
-                  {% if score2 and score2 != score1 %}
-                  <div class="text-sm text-slate-500 mt-1">
-                    {% if score2 in ['M', 'R', 'RQ', 'P', 'X', 'A'] %}
-                      <span class="mastery-badge mastery-{{ score2|lower }} inline-block px-2 py-0.5 text-xs font-semibold font-mono rounded border">{{ score2 }}</span>
-                    {% else %}
-                      <span class="student-history-numeric inline-block px-2 py-0.5 text-xs font-semibold rounded border border-slate-300">{{ score2 }}</span>
-                    {% endif %}
-                  </div>
-                  {% endif %}
-                </div>
-              </div>
-              {% endfor %}
-            {% else %}
-              <div class="student-history-row flex items-center justify-between p-2 rounded-lg border border-slate-200">
-                <div class="text-sm font-medium text-slate-900">{{ piece.vendor_code }}</div>
-                <p class="text-slate-500 text-sm">No grades yet</p>
-              </div>
-            {% endif %}
-          {% endfor %}
-        </div>
-        {% else %}
-        <p class="text-slate-500 text-sm text-center py-4">No grades yet</p>
-        {% endif %}
-      </div>
-    </div>
-    {% endfor %}
-  </div>
-  {% endif %}
-
 </div>
 
 <script id="studentHistoryEmailPayload" type="application/json">{{ {
@@ -273,8 +159,7 @@
   'email': student_email or '',
   'student_name': student_name,
   'class_name': class_name,
-  'objectives': learning_objectives,
-  'projects': projects if projects is defined else []
+  'objectives': learning_objectives
 } | tojson }}</script>
 <script>
 function emailStudentHistoryReport(btnEl) {
@@ -313,28 +198,6 @@ function emailStudentHistoryReport(btnEl) {
         var s1 = g.top_score != null ? String(g.top_score) : '—';
         var s2 = g.second_score != null && g.second_score !== g.top_score ? String(g.second_score) : '';
         lines.push('  ' + an + ': ' + s1 + (s2 ? ' / ' + s2 : ''));
-      });
-    }
-    lines.push('');
-  });
-  (p.projects || []).forEach(function (project) {
-    lines.push('--- ' + String(project.name || 'Project') + ' ---');
-    var pieces = project.pieces || [];
-    if (pieces.length === 0) {
-      lines.push('  (no grades yet)');
-    } else {
-      pieces.forEach(function (piece) {
-        var pname = piece.vendor_code || 'Piece';
-        var grades = piece.grades || [];
-        if (grades.length === 0) {
-          lines.push('  ' + pname + ': (no grades yet)');
-        } else {
-          grades.forEach(function (g) {
-            var s1 = g.top_score != null ? String(g.top_score) : '—';
-            var s2 = g.second_score != null && g.second_score !== g.top_score ? String(g.second_score) : '';
-            lines.push('  ' + pname + ': ' + s1 + (s2 ? ' / ' + s2 : ''));
-          });
-        }
       });
     }
     lines.push('');
