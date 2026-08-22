@@ -36,6 +36,14 @@
         </svg>
         Export PDF
       </button>
+      <button type="button" id="exportCsvBtn" onclick="exportAssignmentCsv()" disabled
+        title="Select one assignment to export a CSV. All Mastery Opportunities, All Exams, and All Projects are not a single gradesheet."
+        class="flex items-center gap-2 px-5 py-2.5 rounded-lg font-medium text-sm bg-emerald-600 text-white hover:bg-emerald-700 transition-colors opacity-50 cursor-not-allowed">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 16v-8m0 8l-3-3m3 3l3-3M4 20h16"/>
+        </svg>
+        Export CSV
+      </button>
     </div>
   </div>
 
@@ -713,6 +721,36 @@ function isAllTypeView(id) {
   return Object.prototype.hasOwnProperty.call(ALL_VIEW_IDS, String(id || ''));
 }
 
+function canExportAssignmentCsv() {
+  return !!(selectedAssignmentId && !isAllTypeView(selectedAssignmentId));
+}
+
+function updateExportCsvButton() {
+  const btn = document.getElementById('exportCsvBtn');
+  if (!btn) return;
+  const ok = canExportAssignmentCsv();
+  btn.disabled = !ok;
+  btn.classList.toggle('opacity-50', !ok);
+  btn.classList.toggle('cursor-not-allowed', !ok);
+  btn.classList.toggle('hover:bg-emerald-700', ok);
+  if (ok) {
+    btn.removeAttribute('title');
+  } else {
+    btn.setAttribute(
+      'title',
+      'Select one assignment to export a CSV. All Mastery Opportunities, All Exams, and All Projects are not a single gradesheet.'
+    );
+  }
+}
+
+function exportAssignmentCsv() {
+  if (!canExportAssignmentCsv()) return;
+  window.location.href =
+    '/class/' + encodeURIComponent(classId) +
+    '/assignments/' + encodeURIComponent(selectedAssignmentId) +
+    '/export-csv';
+}
+
 function assignmentTypeOf(a) {
   return normalizeAssignmentType(a && a.assignment_type);
 }
@@ -772,6 +810,7 @@ function selectAssignment(assignmentId, assignmentName) {
   if (!isAllTypeView(selectedAssignmentId)) {
     fetchHwScoresForAssignment(selectedAssignmentId, '', true);
   }
+  updateExportCsvButton();
 }
 
 function applyAssignmentFilter() {

@@ -140,6 +140,9 @@
       </div>
     </div>
     {% endif %}
+    <p id="hwGradeLockNotice" class="hidden mt-3 text-sm font-medium text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-700/60 rounded-lg px-3 py-2">
+      Enter a homework % before grading this student. Absent (A) is still allowed.
+    </p>
     <div id="autosaveNotice"
          class="hidden absolute right-4 bottom-3 flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
       <svg class="w-3 h-3 animate-spin text-slate-400" viewBox="0 0 24 24" fill="none">
@@ -379,6 +382,36 @@
   background: rgba(239, 68, 68, 0.08);
 }
 
+.grade-cell.hw-lock-no-score {
+  cursor: not-allowed;
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(148, 163, 184, 0.22) 0,
+    rgba(148, 163, 184, 0.22) 6px,
+    rgba(241, 245, 249, 0.5) 6px,
+    rgba(241, 245, 249, 0.5) 12px
+  );
+}
+.grade-cell.hw-lock-no-score:hover {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(148, 163, 184, 0.28) 0,
+    rgba(148, 163, 184, 0.28) 6px,
+    rgba(226, 232, 240, 0.7) 6px,
+    rgba(226, 232, 240, 0.7) 12px
+  );
+}
+.dark .grade-cell.hw-lock-no-score,
+.dark .grade-cell.hw-lock-no-score:hover {
+  background: repeating-linear-gradient(
+    -45deg,
+    rgba(71, 85, 105, 0.55) 0,
+    rgba(71, 85, 105, 0.55) 6px,
+    rgba(30, 41, 59, 0.4) 6px,
+    rgba(30, 41, 59, 0.4) 12px
+  );
+}
+
 </style>
 
 <script id="assignmentData" type="application/json">{{ assignments | tojson }}</script>
@@ -390,6 +423,7 @@ const GRADES = ['M', 'R', 'Q', 'P', 'X', 'A'];
 const GRADE_MAP = { 'Q': 'RQ' }; // Q key → RQ grade
 const gradeHistory = [];
 const grades = {};
+let hwScoresMap = {};
 const classId = "{{ class_id }}";
 // Read server-side flag as JSON string so this line stays valid JS in editors.
 const AUTO_CONVERT_M = JSON.parse('{{ (auto_convert_m or false)|tojson }}');
@@ -515,6 +549,7 @@ function syncHiddenHwCellFromScore(studentId, rawScore) {
     if (passCb) passCb.checked = true;
     input.dataset.lastSaved = '-1';
     setHwEligibilityFromState(studentId, null, true);
+    setLiveHwScore(studentId, -1);
   } else if (rawScore !== '' && rawScore !== null && rawScore !== undefined) {
     input.classList.remove('hidden');
     const n = Math.max(0, Math.min(100, parseInt(String(rawScore), 10) || 0));
@@ -524,6 +559,7 @@ function syncHiddenHwCellFromScore(studentId, rawScore) {
     if (passCb) passCb.checked = false;
     input.dataset.lastSaved = String(n);
     setHwEligibilityFromState(studentId, n, false);
+    setLiveHwScore(studentId, n);
   } else {
     input.classList.remove('hidden');
     input.value = '';
@@ -532,6 +568,7 @@ function syncHiddenHwCellFromScore(studentId, rawScore) {
     if (passCb) passCb.checked = false;
     input.dataset.lastSaved = '';
     setHwEligibilityFromState(studentId, null, false);
+    setLiveHwScore(studentId, '');
   }
 }
 
@@ -631,6 +668,58 @@ function coerceStudentKeyedMap(raw) {
   return out;
 }
 
+function studentHasRecordedHwScore(hwMap, studentId) {
+  const sid = normalizeStudentKeyForMap(studentId);
+  if (!sid || !hwMap || typeof hwMap !== 'object') return false;
+  if (!Object.prototype.hasOwnProperty.call(hwMap, sid)) return false;
+  return hwMap[sid] !== null && hwMap[sid] !== undefined;
+}
+
+function setLiveHwScore(studentId, scorePct) {
+  const sid = normalizeStudentKeyForMap(studentId);
+  if (!sid) return;
+  if (scorePct === null || scorePct === undefined || scorePct === '') {
+    delete hwScoresMap[sid];
+  } else {
+    hwScoresMap[sid] = scorePct;
+  }
+  applyHwGradeLockForStudent(studentId);
+}
+
+function showHwGradeLockNotice() {
+  const el = document.getElementById('hwGradeLockNotice');
+  if (!el) return;
+  el.classList.remove('hidden');
+}
+
+function applyHwGradeLockForStudent(studentId) {
+  const recorded = studentHasRecordedHwScore(hwScoresMap, studentId);
+  const sid = String(studentId || '');
+  if (!sid) return;
+  const esc = typeof CSS !== 'undefined' && typeof CSS.escape === 'function' ? CSS.escape(sid) : sid;
+  let cells;
+  try {
+    cells = getActiveGraderRoot().querySelectorAll('.grade-cell[data-student-id="' + esc + '"]');
+  } catch (e) {
+    return;
+  }
+  const lockTitle = 'Enter a homework % before grading. Absent (A) is still allowed.';
+  cells.forEach(function (cell) {
+    cell.classList.toggle('hw-lock-no-score', !recorded);
+    if (recorded) {
+      if (cell.getAttribute('title') === lockTitle) cell.removeAttribute('title');
+    } else {
+      cell.setAttribute('title', lockTitle);
+    }
+  });
+}
+
+function applyAllHwGradeLocks() {
+  document.querySelectorAll('tr[data-student-row]').forEach(function (row) {
+    applyHwGradeLockForStudent(row.getAttribute('data-student-id'));
+  });
+}
+
 function gradeBadgeHtml(grade) {
   const g = String(grade);
   return `<span class="mastery-badge mastery-${g.toLowerCase()} border">${g}</span>`;
@@ -676,7 +765,6 @@ function predictCountsForMasteryFromCurrentHw(studentId, gradeCellEl) {
   const input = hwCell.querySelector('.hw-pct-input');
   const rawHw = input ? String(input.value || '').trim() : '';
   if (rawHw === '') {
-    // Mirrors the server: missing HW data => allow M (TestSaveGradesAutoConvertHwGuard).
     return true;
   }
   const hw = parseInt(rawHw, 10);
@@ -931,16 +1019,18 @@ function handleGradeCellKeydown(e, cell) {
   const row = parseInt(cell.dataset.row);
   const col = parseInt(cell.dataset.col);
 
-  if (e.shiftKey && k === 'M') {
+  const wantsGrade = (e.shiftKey && k === 'M') ? 'MR' : (GRADES.includes(k) ? (GRADE_MAP[k] || k) : null);
+  if (wantsGrade) {
     e.preventDefault();
-    updateCellValue(cell, 'MR');
+    if (wantsGrade !== 'A' && !studentHasRecordedHwScore(hwScoresMap, cell.dataset.studentId)) {
+      showHwGradeLockNotice();
+      return;
+    }
+    updateCellValue(cell, wantsGrade);
     moveFocusForward(row, col, cell);
-  } else if (GRADES.includes(k)) {
-    e.preventDefault();
-    const grade = GRADE_MAP[k] || k;
-    updateCellValue(cell, grade);
-    moveFocusForward(row, col, cell);
-  } else if (e.key === 'Backspace' || e.key === 'Delete') {
+    return;
+  }
+  if (e.key === 'Backspace' || e.key === 'Delete') {
     e.preventDefault();
     updateCellValue(cell, null);
   } else if (e.key === 'Tab') {
@@ -1297,7 +1387,9 @@ function filterByAssignment() {
       }
 
       const hwScores = coerceStudentKeyedMap(data.hw_scores || {});
+      hwScoresMap = hwScores;
       populateHwScoreInputs(hwScores);
+      applyAllHwGradeLocks();
       if (window.graderTableSyncScrollMetrics) {
         window.requestAnimationFrame(window.graderTableSyncScrollMetrics);
       }
@@ -1358,9 +1450,11 @@ document.addEventListener('input', function (e) {
     const valNow = clampHwInputEl(input);
     if (valNow === null) {
       setHwEligibilityFromState(input.dataset.studentId, null, false);
+      setLiveHwScore(input.dataset.studentId, '');
       return;
     }
     setHwEligibilityFromState(input.dataset.studentId, valNow, false);
+    setLiveHwScore(input.dataset.studentId, valNow);
     markUnsavedChanges();
   });
 
@@ -1387,6 +1481,7 @@ document.addEventListener('change', async function (e) {
         const data = await res.json().catch(function () { return {}; });
         if (!res.ok || !data.success) throw new Error(data.error || 'Failed');
         input.dataset.lastSaved = String(val);
+        setLiveHwScore(studentId, val);
         recomputeUnsavedState();
       } catch (err) {
         console.error('Error saving HW %:', err);
@@ -1469,6 +1564,7 @@ document.addEventListener('change', async function (e) {
       markUnsavedChanges();
       if (getActiveAssignmentId()) {
         const saveScore = restored === '' ? 0 : Math.max(0, Math.min(100, parseInt(restored, 10) || 0));
+        setLiveHwScore(studentId, saveScore);
         fetch('/api/class/' + classId + '/save-hw-percentage', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

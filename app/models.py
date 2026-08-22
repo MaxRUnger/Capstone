@@ -843,6 +843,16 @@ class Homework:
             return {}
 
     @staticmethod
+    def student_has_recorded_score(hw_map, student_id) -> bool:
+        """True when this assignment's homework group has a score row (0 and -1 count)."""
+        sid = str(student_id or "").strip()
+        if not sid or not hw_map:
+            return False
+        if sid not in hw_map:
+            return False
+        return hw_map[sid] is not None
+
+    @staticmethod
     def get_student_scores(student_id, class_id):
         """Fetches homework performance for a specific student in a class."""
         response = supabase_admin.table("homework_scores").select(

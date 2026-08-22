@@ -377,6 +377,11 @@ def _class_auto_convert_m_enabled(class_id: str) -> bool:
     return val
 
 
+_HW_REQUIRED_FOR_MARK_ERROR = (
+    "Enter a homework % for this student before saving a grade other than A (Absent)."
+)
+
+
 def _assignment_lo_ids(assignment_id: str) -> List[str]:
     cache = _request_cache()
     ck = ("_assignment_lo_ids", str(assignment_id))
@@ -842,6 +847,187 @@ def _student_display_name(prof: Dict[str, Any]) -> str:
     if not fn or (pid and fn == pid):
         return "Unnamed student"
     return _format_name_last_first(fn)
+
+
+def _csv_format_hw_score(score) -> str:
+    if score is None:
+        return ""
+    if score == -1 or score == -1.0:
+        return "-1"
+    try:
+        return str(int(round(float(score))))
+    except (TypeError, ValueError):
+        return ""
+
+
+def _gradesheet_letter_map_from_rows(grade_rows) -> Dict[Tuple[str, str], str]:
+    letter_map: Dict[Tuple[str, str], str] = {}
+    for g in grade_rows or []:
+        sid = str(g.get("student_id") or "").strip()
+        lo_id = str(g.get("learning_objective_id") or "").strip()
+        letter = str(g.get("top_score") or "").strip()
+        if sid and lo_id and letter:
+            letter_map[(sid, lo_id)] = letter
+    return letter_map
+
+
+def _gradesheet_csv_data_rows(
+    students: List[Dict[str, Any]],
+    learning_objectives: List[Dict[str, Any]],
+    hw_map: Dict[str, Any],
+    letter_map: Dict[Tuple[str, str], str],
+) -> List[List[str]]:
+    rows: List[List[str]] = []
+    for student in students:
+        sid = str(student.get("id") or "").strip()
+        name = _csv_formula_safe(student.get("name") or "")
+        hw_cell = _csv_formula_safe(_csv_format_hw_score(hw_map.get(sid)))
+        lo_cells = [
+            _csv_formula_safe(letter_map.get((sid, str(lo.get("id") or "").strip()), ""))
+            for lo in learning_objectives
+        ]
+        rows.append([name, hw_cell] + lo_cells)
+    return rows
+
+
+_BLANK_GRADESHEET_NOTE = (
+    "This is a blank template. Grade columns are intentionally empty. "
+    "Re-uploading this file will CLEAR any grades already entered for this assignment."
+)
+
+
+def _build_gradesheet_csv_text(
+    assignment_name: str,
+    date_value: str,
+    vendor_codes: List[str],
+    data_rows: List[List[str]],
+    include_clear_warning: bool,
+) -> str:
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["Assignment", _csv_formula_safe(assignment_name)])
+    writer.writerow(["Date", date_value])
+    if include_clear_warning:
+        writer.writerow(["NOTE", _BLANK_GRADESHEET_NOTE])
+    writer.writerow([])
+    writer.writerow(["Student Name", "HW"] + vendor_codes)
+    for data_row in data_rows:
+        writer.writerow(data_row)
+    return "\ufeff" + output.getvalue()
+
+
+def _learning_objectives_for_assignment(class_id: str, assignment_id: str) -> List[Dict[str, Any]]:
+    """Class LO pool filtered to rows in assignment_objectives for this assignment."""
+    try:
+        pool = Course.get_learning_objectives(class_id) or []
+    except Exception as e:
+        logger.error("gradesheet export: failed to load LOs for class %s: %s", class_id, e)
+        pool = []
+    linked = {
+        str(lo_id).strip()
+        for lo_id in (Course.get_assignment_lo_ids(assignment_id) or [])
+        if str(lo_id).strip()
+    }
+    if not linked:
+        return []
+    return [
+        lo for lo in pool
+        if str(lo.get("id") or "").strip() in linked
+    ]
+
+
+def _gradesheet_export_bundle(class_id: str, assignment_id: str):
+    """Assignment row, roster, LOs, HW map. None if the assignment is missing."""
+    try:
+        assignment_result = (
+            supabase_admin.table("assignments")
+            .select("id, name, date_returned")
+            .eq("id", assignment_id)
+            .eq("class_id", class_id)
+            .limit(1)
+            .execute()
+        )
+        assignment = (assignment_result.data or [None])[0]
+    except Exception as e:
+        logger.error("gradesheet export: failed to load assignment %s: %s", assignment_id, e)
+        assignment = None
+    if not assignment:
+        return None
+
+    class_data = Course.get_full_class_data(class_id)
+    students, _, _ = _process_enrollments(class_data) if class_data else ([], [], {})
+    learning_objectives = _learning_objectives_for_assignment(class_id, assignment_id)
+
+    hw_map = Homework.get_hw_scores_map_for_assignment(class_id, assignment_id)
+    return assignment, students, learning_objectives, hw_map
+
+
+def _gradesheet_letter_map_for_assignment(
+    assignment_id: str,
+    students: List[Dict[str, Any]],
+    learning_objectives: List[Dict[str, Any]],
+) -> Dict[Tuple[str, str], str]:
+    letter_map: Dict[Tuple[str, str], str] = {}
+    lo_ids = [str(lo.get("id") or "").strip() for lo in learning_objectives if lo.get("id")]
+    student_ids = [str(s.get("id") or "").strip() for s in students if s.get("id")]
+    if not lo_ids or not student_ids:
+        return letter_map
+    try:
+        grade_rows: List[Dict[str, Any]] = []
+        chunk = 100
+        for i in range(0, len(student_ids), chunk):
+            batch = student_ids[i:i + chunk]
+            gresp = (
+                supabase_admin.table("grades")
+                .select("student_id, learning_objective_id, top_score")
+                .eq("assignment_id", assignment_id)
+                .in_("student_id", batch)
+                .in_("learning_objective_id", lo_ids)
+                .execute()
+            )
+            grade_rows.extend(gresp.data or [])
+        letter_map = _gradesheet_letter_map_from_rows(grade_rows)
+    except Exception as e:
+        logger.error(
+            "gradesheet export: failed to load grades for assignment %s: %s",
+            assignment_id, e,
+        )
+        letter_map = {}
+    return letter_map
+
+
+def _enrolled_import_name_index(profiles: List[Dict[str, Any]]) -> Dict[str, str]:
+    """Map stored names and Last-First display names to enrolled student ids."""
+    index: Dict[str, str] = {}
+
+    def add(key: str, sid: str) -> None:
+        raw = (key or "").strip()
+        if not raw or not sid:
+            return
+        lower = raw.lower()
+        if lower not in index:
+            index[lower] = sid
+        nk = _student_name_key(raw)
+        if nk and nk not in index:
+            index[nk] = sid
+
+    for p in profiles:
+        sid = str(p.get("id") or "").strip()
+        fn = (p.get("full_name") or "").strip()
+        if not sid or not fn:
+            continue
+        add(fn, sid)
+        add(_format_name_last_first(fn), sid)
+    return index
+
+
+def _lookup_enrolled_import_student_id(
+    csv_name: str, name_index: Dict[str, str]
+) -> Optional[str]:
+    n = (csv_name or "").strip()
+    if not n:
+        return None
+    return name_index.get(n.lower()) or name_index.get(_student_name_key(n))
 
 
 def _student_sort_key_last_name(display_name: Optional[str]) -> Tuple[str, str]:
@@ -1478,6 +1664,71 @@ def _log_grade_deletions(rows: List[Dict[str, Any]], class_id: str, changed_by: 
             logger.warning("grade_change_log insert skipped (table may not exist yet): %s", e)
 
 
+def _clear_grade_cells_for_assignment(
+    class_id: str,
+    assignment_id: Optional[str],
+    pairs: List[Dict[str, str]],
+    changed_by: Optional[str],
+) -> int:
+    """Delete existing grade rows for student+LO pairs on this assignment.
+
+    Same path as SpeedGrader empty-cell saves: pre-fetch, audit-log, delete.
+    Pairs with no matching row are a silent no-op.
+    """
+    if not pairs:
+        return 0
+    clear_sids = list({str(it["student_id"]) for it in pairs if it.get("student_id")})
+    clear_lo_ids = list({str(it["lo_id"]) for it in pairs if it.get("lo_id")})
+    clear_keys = {
+        f"{it['student_id']}|{it['lo_id']}"
+        for it in pairs
+        if it.get("student_id") and it.get("lo_id")
+    }
+    if not clear_sids or not clear_lo_ids or not clear_keys:
+        return 0
+    cleared_rows: List[Dict[str, Any]] = []
+    try:
+        clear_q = supabase_admin.table("grades").select(
+            "student_id, learning_objective_id, assignment_id, top_score, second_score, counts_for_mastery"
+        ).in_("student_id", clear_sids).in_("learning_objective_id", clear_lo_ids)
+        clear_q = (
+            clear_q.eq("assignment_id", assignment_id)
+            if assignment_id
+            else clear_q.is_("assignment_id", "null")
+        )
+        clear_resp = clear_q.execute()
+        for r in (clear_resp.data or []):
+            k = f"{r.get('student_id')}|{r.get('learning_objective_id')}"
+            if k in clear_keys:
+                cleared_rows.append(r)
+    except Exception as e:
+        logger.error("clear_grade_cells pre-fetch failed: %s", e)
+        return 0
+
+    if not cleared_rows:
+        return 0
+    _log_grade_deletions(cleared_rows, class_id, changed_by)
+    for r in cleared_rows:
+        try:
+            del_q = (
+                supabase_admin.table("grades").delete()
+                .eq("student_id", r["student_id"])
+                .eq("learning_objective_id", r["learning_objective_id"])
+            )
+            del_q = (
+                del_q.eq("assignment_id", assignment_id)
+                if assignment_id
+                else del_q.is_("assignment_id", "null")
+            )
+            del_q.execute()
+        except Exception as e:
+            logger.error(
+                "failed to clear grade for student=%s lo=%s: %s",
+                r.get("student_id"), r.get("learning_objective_id"), e,
+            )
+    return len(cleared_rows)
+
+
 @main_bp.route("/class/<class_id>/students/<student_id>/delete", methods=["POST"])
 @api_instructor_required
 def delete_student_from_class(class_id, student_id):
@@ -1793,11 +2044,10 @@ def create_assignment(class_id):
     name = (data.get('name') or '').strip()
     homework_group = Homework.canonicalize_homework_group_for_class(class_id, data.get('homework_group'))
 
-    if not name or not homework_group:
-        return jsonify({
-            "success": False,
-            "error": "Missing or invalid required fields (name, homework_group).",
-        }), 400
+    if not name:
+        return jsonify({"success": False, "error": "Assignment name is required."}), 400
+    if not homework_group:
+        return jsonify({"success": False, "error": "Homework group is required."}), 400
 
     assignment_type = _assignment_type_fields_from_payload(data)
 
@@ -1826,8 +2076,8 @@ def create_assignment(class_id):
                 })
             if ao_rows:
                 _insert_assignment_objectives(ao_rows)
-        
-        return jsonify({"success": True})
+            return jsonify({"success": True, "id": assignment_id})
+        return jsonify({"success": False, "error": "Could not create assignment"}), 500
     except Exception as e:
         logger.error("create_assignment failed: %s", e)
         return _safe_api_error("Could not create assignment", 500, log_detail=e)
@@ -1841,17 +2091,17 @@ def update_assignment(class_id, assignment_id):
         return jsonify({"success": False, "error": "Invalid assignment for class"}), 400
 
     data = request.get_json() or {}
+    name = (data.get('name') or '').strip()
     homework_group = Homework.canonicalize_homework_group_for_class(class_id, data.get('homework_group'))
-    if not (data.get('name') or '').strip() or not homework_group:
-        return jsonify({
-            "success": False,
-            "error": "Missing or invalid required fields (name, homework_group).",
-        }), 400
+    if not name:
+        return jsonify({"success": False, "error": "Assignment name is required."}), 400
+    if not homework_group:
+        return jsonify({"success": False, "error": "Homework group is required."}), 400
 
     assignment_type = _assignment_type_fields_from_payload(data)
 
     update_fields = {
-        "name": (data.get('name') or '').strip(),
+        "name": name,
         "homework_group": homework_group,
         "date_returned": data.get('date_returned'),
         "revision_due": data.get('revision_due'),
@@ -1932,56 +2182,195 @@ def export_blank_assignment_csv(class_id, assignment_id):
     if not _assignment_belongs_to_class(class_id, assignment_id):
         return redirect(url_for('main.class_assignments', class_id=class_id))
 
-    try:
-        assignment_result = (
-            supabase_admin.table("assignments")
-            .select("id, name, date_returned")
-            .eq("id", assignment_id)
-            .eq("class_id", class_id)
-            .limit(1)
-            .execute()
-        )
-        assignment = (assignment_result.data or [None])[0]
-    except Exception as e:
-        logger.error("export_blank_assignment_csv: failed to load assignment %s: %s", assignment_id, e)
-        assignment = None
-
-    if not assignment:
+    bundle = _gradesheet_export_bundle(class_id, assignment_id)
+    if not bundle:
         return redirect(url_for('main.class_assignments', class_id=class_id))
+    assignment, students, learning_objectives, hw_map = bundle
 
     assignment_name = assignment.get('name') or 'Assignment'
     date_value = assignment.get('date_returned') or date.today().isoformat()
-
-    class_data = Course.get_full_class_data(class_id)
-    students, _, _ = _process_enrollments(class_data) if class_data else ([], [], {})
-
-    try:
-        learning_objectives = Course.get_learning_objectives(class_id)
-    except Exception as e:
-        logger.error("export_blank_assignment_csv: failed to load LOs for class %s: %s", class_id, e)
-        learning_objectives = []
-
     vendor_codes = [_csv_formula_safe(lo.get('vendor_code') or '') for lo in learning_objectives]
-
-    output = io.StringIO()
-    writer = csv.writer(output)
-    writer.writerow(["Assignment", _csv_formula_safe(assignment_name)])
-    writer.writerow(["Date", date_value])
-    writer.writerow([])
-    writer.writerow(["Student Name", "HW"] + vendor_codes)
-    for student in students:
-        student_name = _csv_formula_safe(student.get('name') or '')
-        writer.writerow([student_name, ""] + [""] * len(vendor_codes))
-
-    csv_text = "\ufeff" + output.getvalue()
+    data_rows = _gradesheet_csv_data_rows(
+        students, learning_objectives, hw_map, {}
+    )
+    csv_text = _build_gradesheet_csv_text(
+        assignment_name, date_value, vendor_codes, data_rows, True
+    )
     safe_stem = secure_filename(str(assignment_name)) or "assignment"
     filename = f"{safe_stem}_blank_gradesheet.csv"
-
     return Response(
         csv_text,
         mimetype="text/csv",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@main_bp.route("/class/<class_id>/assignments/<assignment_id>/export-csv")
+@login_required
+def export_assignment_csv(class_id, assignment_id):
+    if not _instructor_owns_class(class_id):
+        return redirect(url_for('main.instructor_dashboard'))
+    if not _assignment_belongs_to_class(class_id, assignment_id):
+        return redirect(url_for('main.class_reports', class_id=class_id))
+
+    bundle = _gradesheet_export_bundle(class_id, assignment_id)
+    if not bundle:
+        return redirect(url_for('main.class_reports', class_id=class_id))
+    assignment, students, learning_objectives, hw_map = bundle
+
+    assignment_name = assignment.get('name') or 'Assignment'
+    date_value = assignment.get('date_returned') or date.today().isoformat()
+    vendor_codes = [_csv_formula_safe(lo.get('vendor_code') or '') for lo in learning_objectives]
+    letter_map = _gradesheet_letter_map_for_assignment(
+        assignment_id, students, learning_objectives
+    )
+    data_rows = _gradesheet_csv_data_rows(
+        students, learning_objectives, hw_map, letter_map
+    )
+    csv_text = _build_gradesheet_csv_text(
+        assignment_name, date_value, vendor_codes, data_rows, False
+    )
+    safe_stem = secure_filename(str(assignment_name)) or "assignment"
+    filename = f"{safe_stem}_gradesheet.csv"
+    return Response(
+        csv_text,
+        mimetype="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+def _strip_csv_formula_prefix(value: str) -> str:
+    s = str(value or "").strip()
+    if len(s) >= 2 and s[0] == "'" and s[1] in ("=", "+", "-", "@"):
+        return s[1:]
+    return s
+
+
+def _csv_row_cells(row) -> List[str]:
+    return [_strip_csv_formula_prefix(c) for c in (row or [])]
+
+
+def _csv_row_is_blank(cells: List[str]) -> bool:
+    return all(not c for c in cells)
+
+
+def parse_blank_gradesheet_csv_text(
+    text: str,
+    class_vendor_codes: List[str],
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Parse the Download Blank CSV gradesheet. Returns (payload, error).
+
+    Every LO header is present on each student, with "" for an empty cell.
+    Import treats "" as clear-if-a-row-exists, and a missing key as skip.
+    """
+    raw = (text or "").lstrip("\ufeff")
+    if not raw.strip():
+        return None, "CSV file is empty."
+
+    rows = list(csv.reader(io.StringIO(raw)))
+    if len(rows) < 4:
+        return None, (
+            "CSV does not match the gradesheet format. "
+            "Expected Assignment, Date, optional note rows, a blank separator, "
+            "then a Student Name,HW,<LO codes> header."
+        )
+
+    r0 = _csv_row_cells(rows[0])
+    r1 = _csv_row_cells(rows[1])
+    if len(r0) < 2 or r0[0].lower() != "assignment" or not r0[1]:
+        return None, "Row 1 must be Assignment,<assignment name>."
+    if len(r1) < 1 or r1[0].lower() != "date":
+        return None, "Row 2 must be Date,<date>."
+
+    # Metadata (Assignment, Date, NOTE, extra note lines) may grow. Do not
+    # assume a fixed header index. Skip every non-blank row after Date until
+    # the blank separator; the following row is the column header.
+    sep_idx = 2
+    while sep_idx < len(rows) and not _csv_row_is_blank(_csv_row_cells(rows[sep_idx])):
+        sep_idx += 1
+    if sep_idx >= len(rows):
+        return None, "CSV is missing the blank separator row before the header."
+    header_idx = sep_idx + 1
+    if header_idx >= len(rows):
+        return None, "CSV is missing the Student Name,HW header row."
+
+    header = _csv_row_cells(rows[header_idx])
+    while header and not header[-1]:
+        header.pop()
+    if (
+        len(header) < 2
+        or header[0].lower() != "student name"
+        or header[1].lower() != "hw"
+    ):
+        return None, (
+            "The header row must start with Student Name,HW followed by learning-objective codes."
+        )
+
+    vendor_by_lower = {}
+    for code in class_vendor_codes:
+        c = str(code or "").strip()
+        if c:
+            vendor_by_lower.setdefault(c.lower(), c)
+
+    lo_headers: List[str] = []
+    seen_lo = set()
+    unknown: List[str] = []
+    for col in header[2:]:
+        if not col:
+            continue
+        canonical = vendor_by_lower.get(col.lower())
+        if not canonical:
+            unknown.append(col)
+            continue
+        key = canonical.lower()
+        if key in seen_lo:
+            return None, f'Duplicate learning-objective column "{canonical}".'
+        seen_lo.add(key)
+        lo_headers.append(canonical)
+    if unknown:
+        shown = ", ".join(unknown[:8])
+        extra = f" (and {len(unknown) - 8} more)" if len(unknown) > 8 else ""
+        return None, (
+            "CSV learning-objective headers must match this class's vendor codes. "
+            f"Unknown: {shown}{extra}."
+        )
+
+    students: List[Dict[str, Any]] = []
+    for raw_row in rows[header_idx + 1:]:
+        cells = _csv_row_cells(raw_row)
+        if _csv_row_is_blank(cells):
+            continue
+        name = cells[0] if cells else ""
+        if not name:
+            continue
+        hw_raw = cells[1] if len(cells) > 1 else ""
+        homework_pct = None
+        if hw_raw:
+            parsed_hw = Homework.parse_import_hw_pct(hw_raw)
+            homework_pct = str(parsed_hw) if parsed_hw is not None else hw_raw
+
+        grades: Dict[str, str] = {}
+        for i, lo_code in enumerate(lo_headers):
+            idx = i + 2
+            mark = cells[idx] if idx < len(cells) else ""
+            grades[lo_code] = mark.upper() if mark else ""
+
+        students.append({
+            "name": name,
+            "grades": grades,
+            "homework_pct": homework_pct,
+        })
+        if len(students) > MAX_IMPORT_ROWS:
+            return None, f"CSV has too many student rows (max {MAX_IMPORT_ROWS})."
+
+    return {
+        "assignment_name": r0[1],
+        "date_value": r1[1] if len(r1) > 1 else "",
+        "learning_objectives": lo_headers,
+        "homework_column": "HW",
+        "students": students,
+        "extraction_path": "csv",
+    }, None
 
 
 def _instructor_owns_class(class_id: str) -> bool:
@@ -2671,6 +3060,11 @@ def update_grade_handler(class_id):
         "assignments": assignments,
     }
     if assignments:
+        try:
+            template_kwargs["learning_objectives"] = Course.get_learning_objectives(class_id) or []
+        except Exception as e:
+            logger.error("upload_grades: failed to load LOs for class %s: %s", class_id, e)
+            template_kwargs["learning_objectives"] = []
         mobile_upload_token = str(uuid4())
         _pending_put(mobile_upload_token, class_id, session["user_id"])
         mobile_upload_url = (
@@ -3011,6 +3405,17 @@ def api_update_grade():
                     "error": "Invalid learning objective for this assignment",
                 }), 400
 
+        normalized = Grade.normalize_score(data.get("top_score"))
+        if assignment_id and normalized and normalized != "A":
+            hw_map = Homework.get_hw_scores_map_for_assignment(
+                str(class_id), str(assignment_id)
+            )
+            if not Homework.student_has_recorded_score(hw_map, data.get("student_id")):
+                return jsonify({
+                    "success": False,
+                    "error": _HW_REQUIRED_FOR_MARK_ERROR,
+                }), 400
+
         Grade.update_score(student_id=data['student_id'], lo_id=data['lo_id'], 
                             top_score=data['top_score'], second_score=data.get('second_score'),
                             assignment_id=data.get('assignment_id'), changed_by=session['user_id'])
@@ -3077,6 +3482,15 @@ def save_grades(class_id):
             normalized = Grade.normalize_score(grade_value)
             if not normalized:
                 continue
+            if (
+                assignment_id
+                and normalized != "A"
+                and not Homework.student_has_recorded_score(hw_map, student_id)
+            ):
+                return jsonify({
+                    "success": False,
+                    "error": _HW_REQUIRED_FOR_MARK_ERROR,
+                }), 400
             incoming.append({
                 'student_id': student_id,
                 'lo_id': lo_id,
@@ -3140,9 +3554,8 @@ def save_grades(class_id):
                     prev_flag = existing.get('counts_for_mastery')
                     counts_for_mastery = True if prev_flag is None else bool(prev_flag)
                 elif auto_convert:
-                    # First-entry M/MR on this row; capture HW eligibility right now.
-                    # Missing HW data => allow (matches legacy behavior tested by
-                    # TestSaveGradesAutoConvertHwGuard: "sid not in hw_map" keeps M).
+                    # First-entry M/MR: capture HW eligibility. Non-A marks
+                    # already required a recorded HW score above, so sid is in hw_map.
                     if sid in hw_map:
                         counts_for_mastery = bool(
                             Homework.is_exam_grade_eligible_hw_score(hw_map[sid])
@@ -3186,56 +3599,10 @@ def save_grades(class_id):
                 else:
                     raise
 
-        # Cleared cells: delete the existing grade row (if any) for this exact
-        # student+LO+assignment combination, scoped to the same assignment
-        # context as this save so a clear never touches a different
-        # assignment's grade for the same LO. A pre-fetch confirms a row
-        # actually exists first -- clearing an already-empty cell must stay a
-        # silent no-op, not an error.
         if to_clear:
-            clear_sids = list({it['student_id'] for it in to_clear})
-            clear_lo_ids = list({it['lo_id'] for it in to_clear})
-            clear_keys = {f"{it['student_id']}|{it['lo_id']}" for it in to_clear}
-            cleared_rows: List[Dict[str, Any]] = []
-            try:
-                clear_q = supabase_admin.table("grades").select(
-                    "student_id, learning_objective_id, assignment_id, top_score, second_score, counts_for_mastery"
-                ).in_("student_id", clear_sids).in_("learning_objective_id", clear_lo_ids)
-                clear_q = (
-                    clear_q.eq("assignment_id", assignment_id)
-                    if assignment_id
-                    else clear_q.is_("assignment_id", "null")
-                )
-                clear_resp = clear_q.execute()
-                # Intersect against the exact requested keys -- the IN/IN query
-                # above can return the cartesian product of sids x lo_ids, which
-                # may include pairs that were never actually requested to clear.
-                for r in (clear_resp.data or []):
-                    k = f"{r.get('student_id')}|{r.get('learning_objective_id')}"
-                    if k in clear_keys:
-                        cleared_rows.append(r)
-            except Exception as e:
-                logger.error("save_grades clear pre-fetch failed: %s", e)
-                cleared_rows = []
-
-            if cleared_rows:
-                _log_grade_deletions(cleared_rows, class_id, session['user_id'])
-                for r in cleared_rows:
-                    try:
-                        del_q = supabase_admin.table("grades").delete() \
-                            .eq("student_id", r["student_id"]) \
-                            .eq("learning_objective_id", r["learning_objective_id"])
-                        del_q = (
-                            del_q.eq("assignment_id", assignment_id)
-                            if assignment_id
-                            else del_q.is_("assignment_id", "null")
-                        )
-                        del_q.execute()
-                    except Exception as e:
-                        logger.error(
-                            "save_grades: failed to clear grade for student=%s lo=%s: %s",
-                            r.get("student_id"), r.get("learning_objective_id"), e,
-                        )
+            _clear_grade_cells_for_assignment(
+                class_id, assignment_id, to_clear, session.get("user_id")
+            )
 
         return jsonify({"success": True})
     except Exception as e:
@@ -3279,7 +3646,10 @@ def api_assignment_grades(class_id, assignment_id):
         )
         grades_map = {}
         counts_for_mastery_map = {}
+        has_assignment_grades = False
         for g in (result.data or []):
+            if str(g.get("top_score") or "").strip():
+                has_assignment_grades = True
             key = f"{g['student_id']}|{g['learning_objective_id']}"
             grades_map[key] = g['top_score']
             flag = g.get('counts_for_mastery')
@@ -3351,6 +3721,7 @@ def api_assignment_grades(class_id, assignment_id):
         return jsonify({
             "success": True,
             "grades": grades_map,
+            "has_assignment_grades": has_assignment_grades,
             "counts_for_mastery_map": counts_for_mastery_map,
             "hw_scores": hw_map,
             "revision_eligible": eligibility,
@@ -4182,10 +4553,18 @@ def api_import_grades():
     imported = 0
     grade_rows = []
     hw_rows = []
+    to_clear_pairs: List[Dict[str, str]] = []
+    hw_clear_sids: List[str] = []
+    skipped_hw_warnings: List[str] = []
     hw_storage_key = (
         Homework.resolve_hw_group_storage_key(class_id, assignment_id)
         if assignment_id
         else None
+    )
+    hw_map = (
+        dict(Homework.get_hw_scores_map_for_assignment(str(class_id), str(assignment_id)) or {})
+        if assignment_id
+        else {}
     )
 
     # Link all extracted LOs to the selected assignment (if not already linked)
@@ -4230,13 +4609,40 @@ def api_import_grades():
 
     unique_names = sorted({nm for nm, _ in student_entries}, key=str.lower)
 
-    # Bulk fetch existing profiles for these names.
     profile_id_by_name: Dict[str, str] = {}
+    roster_resolved_keys: set = set()
+    try:
+        enr = (
+            supabase_admin.table("enrollments")
+            .select("student_id, profiles(id, full_name)")
+            .eq("class_id", class_id)
+            .execute()
+        )
+        enrolled_profiles: List[Dict[str, Any]] = []
+        for row in (enr.data or []):
+            prof = normalize_profile(row)
+            pid = str((prof or {}).get("id") or row.get("student_id") or "").strip()
+            fn = str((prof or {}).get("full_name") or "").strip()
+            if pid and fn:
+                enrolled_profiles.append({"id": pid, "full_name": fn})
+        enrolled_index = _enrolled_import_name_index(enrolled_profiles)
+        for nm in unique_names:
+            hit = _lookup_enrolled_import_student_id(nm, enrolled_index)
+            if hit:
+                profile_id_by_name[nm.lower()] = hit
+                roster_resolved_keys.add(nm.lower())
+    except Exception as e:
+        logger.error("Import roster name index failed for class %s: %s", class_id, e)
+
+    # Bulk fetch existing profiles for these names.
     if unique_names:
         try:
             CHUNK = 100
             for i in range(0, len(unique_names), CHUNK):
                 batch = unique_names[i:i + CHUNK]
+                batch = [nm for nm in batch if nm.lower() not in profile_id_by_name]
+                if not batch:
+                    continue
                 resp = (
                     supabase_admin.table("profiles")
                     .select("id, full_name")
@@ -4262,7 +4668,7 @@ def api_import_grades():
         if claimed_elsewhere:
             profile_id_by_name = {
                 name: pid for name, pid in profile_id_by_name.items()
-                if pid not in claimed_elsewhere
+                if name in roster_resolved_keys or pid not in claimed_elsewhere
             }
 
     # Build missing-profile insert payload (preserve original semantics: new uuid + role=student).
@@ -4340,26 +4746,50 @@ def api_import_grades():
 
         # Build grade rows to batch-upsert later
         grades = student.get('grades', {}) or {}
-        parsed_hw = Homework.parse_import_hw_pct(student.get("homework_pct"))
-        if assignment_id and hw_storage_key and parsed_hw is not None:
-            hw_rows.append(
-                {
-                    "student_id": profile_id,
-                    "class_id": class_id,
-                    "homework_group": str(hw_storage_key).strip(),
-                    "score_pct": parsed_hw,
-                }
-            )
+        if "homework_pct" in student:
+            parsed_hw = Homework.parse_import_hw_pct(student.get("homework_pct"))
+            sid_key = str(profile_id).strip()
+            if assignment_id and hw_storage_key and parsed_hw is not None:
+                hw_rows.append(
+                    {
+                        "student_id": profile_id,
+                        "class_id": class_id,
+                        "homework_group": str(hw_storage_key).strip(),
+                        "score_pct": parsed_hw,
+                    }
+                )
+                hw_map[sid_key] = parsed_hw
+            elif assignment_id and hw_storage_key:
+                hw_clear_sids.append(profile_id)
+                hw_map.pop(sid_key, None)
         for lo_name, mark in grades.items():
-            if not lo_name or not mark:
+            if not lo_name:
                 continue
 
             lo_id = lo_map.get(lo_name.strip().lower())
             if not lo_id:
                 continue
 
-            normalized = Grade.normalize_score(mark)
+            mark_s = "" if mark is None else str(mark).strip()
+            if not mark_s:
+                if assignment_id:
+                    to_clear_pairs.append(
+                        {"student_id": profile_id, "lo_id": lo_id}
+                    )
+                continue
+
+            normalized = Grade.normalize_score(mark_s)
             if not normalized:
+                continue
+
+            if (
+                assignment_id
+                and normalized != "A"
+                and not Homework.student_has_recorded_score(hw_map, profile_id)
+            ):
+                skipped_hw_warnings.append(
+                    f"Skipped: {full_name} - {lo_name} - no HW score recorded"
+                )
                 continue
 
             grade_rows.append({
@@ -4418,11 +4848,44 @@ def api_import_grades():
     except Exception as e:
         logger.error("Error processing homework scores in bulk: %s", e)
 
+    if assignment_id and to_clear_pairs:
+        _clear_grade_cells_for_assignment(
+            str(class_id),
+            str(assignment_id),
+            to_clear_pairs,
+            session.get("user_id"),
+        )
+
+    try:
+        if hw_clear_sids and hw_storage_key:
+            uniq_hw = list({str(sid) for sid in hw_clear_sids if sid})
+            chunk_size = 150
+            for i in range(0, len(uniq_hw), chunk_size):
+                batch = uniq_hw[i:i + chunk_size]
+                existing_hw = (
+                    supabase_admin.table("homework_scores")
+                    .select("student_id, class_id, homework_group")
+                    .eq("class_id", class_id)
+                    .eq("homework_group", str(hw_storage_key).strip())
+                    .in_("student_id", batch)
+                    .execute()
+                )
+                for row in (existing_hw.data or []):
+                    supabase_admin.table("homework_scores").delete() \
+                        .eq("student_id", row["student_id"]) \
+                        .eq("class_id", class_id) \
+                        .eq("homework_group", str(hw_storage_key).strip()) \
+                        .execute()
+    except Exception as e:
+        logger.error("Error clearing homework scores on import: %s", e)
+
     return jsonify({
         "success": True,
         "imported_students": imported,
         "imported_grades": len(grade_rows),
         "imported_hw_scores": len(hw_rows),
+        "warnings": skipped_hw_warnings,
+        "skipped_no_hw": len(skipped_hw_warnings),
     }), 200
 
 
@@ -4501,3 +4964,69 @@ def analyze_grade_pdf():
         
     except Exception as e:
         return _safe_api_error("Failed to analyze uploaded file", 500, log_detail=e)
+
+
+@main_bp.route("/api/class/<class_id>/parse-grade-csv", methods=["POST"])
+@api_instructor_required
+@rate_limited("parse_grade_csv", limit=30, window_sec=900)
+def api_parse_grade_csv(class_id):
+    """Parse a Download Blank CSV gradesheet locally. Does not call Gemini."""
+    if not _instructor_owns_class(class_id):
+        return jsonify({"success": False, "error": "Forbidden"}), 403
+
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        return jsonify({"success": False, "error": "No file provided"}), 400
+    filename = str(upload.filename or "")
+    if not filename.lower().endswith(".csv"):
+        return jsonify({"success": False, "error": "File must be a CSV"}), 400
+
+    content = upload.read()
+    if len(content) > 10 * 1024 * 1024:
+        return jsonify({"success": False, "error": "File is too large"}), 400
+    try:
+        text = content.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return jsonify({
+            "success": False,
+            "error": "CSV must be UTF-8 encoded (the blank gradesheet export is UTF-8).",
+        }), 400
+
+    try:
+        los = Course.get_learning_objectives(class_id) or []
+    except Exception as e:
+        return _safe_api_error("Could not load learning objectives", 500, log_detail=e)
+    vendor_codes = [str(lo.get("vendor_code") or "") for lo in los]
+
+    payload, err = parse_blank_gradesheet_csv_text(text, vendor_codes)
+    if err:
+        return jsonify({"success": False, "error": err}), 400
+
+    assignment_name = payload.get("assignment_name") or ""
+    matched_id = None
+    try:
+        asg_resp = (
+            supabase_admin.table("assignments")
+            .select("id, name")
+            .eq("class_id", class_id)
+            .eq("name", assignment_name)
+            .execute()
+        )
+        matches = asg_resp.data or []
+        if len(matches) == 1:
+            matched_id = matches[0].get("id")
+    except Exception as e:
+        logger.error("parse-grade-csv assignment lookup failed: %s", e)
+
+    return jsonify({
+        "success": True,
+        "matched_assignment_id": matched_id,
+        "data": {
+            "students": payload.get("students") or [],
+            "learning_objectives": payload.get("learning_objectives") or [],
+            "homework_column": payload.get("homework_column") or "HW",
+            "extraction_path": "csv",
+            "assignment_name": assignment_name,
+            "date_value": payload.get("date_value") or "",
+        },
+    }), 200

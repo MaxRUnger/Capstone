@@ -9,6 +9,7 @@ Covers:
 """
 import sys
 import os
+import io
 import unittest
 import unittest.mock
 from unittest.mock import MagicMock
@@ -35,6 +36,14 @@ from app.routes import (
     _format_name_last_first,
     _student_display_name,
     _aggregate_lo_grades,
+    parse_blank_gradesheet_csv_text,
+    _csv_format_hw_score,
+    _gradesheet_csv_data_rows,
+    _gradesheet_letter_map_from_rows,
+    _build_gradesheet_csv_text,
+    _BLANK_GRADESHEET_NOTE,
+    _enrolled_import_name_index,
+    _lookup_enrolled_import_student_id,
 )
 from app import create_app
 
@@ -189,6 +198,16 @@ class TestHomeworkImportSheetColumn(unittest.TestCase):
         self.assertIsNone(Homework.parse_import_hw_pct("M"))
         self.assertIsNone(Homework.parse_import_hw_pct(""))
         self.assertIsNone(Homework.parse_import_hw_pct(None))
+
+    def test_student_has_recorded_score(self):
+        self.assertFalse(Homework.student_has_recorded_score({}, "stu-1"))
+        self.assertFalse(Homework.student_has_recorded_score(None, "stu-1"))
+        self.assertFalse(Homework.student_has_recorded_score({"stu-1": None}, "stu-1"))
+        self.assertFalse(Homework.student_has_recorded_score({"stu-2": 80}, "stu-1"))
+        self.assertTrue(Homework.student_has_recorded_score({"stu-1": 0}, "stu-1"))
+        self.assertTrue(Homework.student_has_recorded_score({"stu-1": -1}, "stu-1"))
+        self.assertTrue(Homework.student_has_recorded_score({"stu-1": 40}, "stu-1"))
+        self.assertTrue(Homework.student_has_recorded_score({"stu-1": 80}, "stu-1"))
 
 
 class TestHomeworkEligibilityThresholds(unittest.TestCase):
@@ -623,7 +642,7 @@ class TestSaveGradesAutoConvertHwGuard(unittest.TestCase):
         self.app.config["TESTING"] = True
         self.client = self.app.test_client()
 
-    def _patched_save_grades_call(self, hw_map):
+    def _patched_save_grades_call(self, hw_map, grade="M"):
         """Common scaffolding: returns the rows the route attempted to upsert."""
         from app import routes as r
         captured_rows = []
@@ -657,19 +676,29 @@ class TestSaveGradesAutoConvertHwGuard(unittest.TestCase):
                 ):
             rv = self.client.post(
                 "/api/class/class-1/save-grades",
-                json={"assignment_id": "asg-1", "grades": {"stu-1|lo-x": "M"}},
+                json={"assignment_id": "asg-1", "grades": {"stu-1|lo-x": grade}},
                 headers=headers,
             )
         return rv, captured_rows
 
-    def test_missing_hw_map_student_keeps_m_and_counts_for_mastery(self):
-        rv, captured_rows = self._patched_save_grades_call(hw_map={})
+    def test_missing_hw_rejects_m_and_allows_a(self):
+        rv_m, rows_m = self._patched_save_grades_call(hw_map={}, grade="M")
+        self.assertEqual(rv_m.status_code, 400)
+        self.assertEqual(rows_m, [])
+        body = rv_m.get_json()
+        self.assertFalse(body.get("success"))
+        self.assertIn("homework", (body.get("error") or "").lower())
+
+        rv_a, rows_a = self._patched_save_grades_call(hw_map={}, grade="A")
+        self.assertEqual(rv_a.status_code, 200)
+        self.assertEqual(len(rows_a), 1)
+        self.assertEqual(rows_a[0]["top_score"], "A")
+
+    def test_hw_zero_is_recorded_and_allows_m(self):
+        rv, captured_rows = self._patched_save_grades_call(hw_map={"stu-1": 0})
         self.assertEqual(rv.status_code, 200)
-        self.assertEqual(len(captured_rows), 1)
         self.assertEqual(captured_rows[0]["top_score"], "M")
-        # Missing HW => allow M (legacy behavior: don't penalize when we have
-        # no data). The persisted flag is True so it still counts.
-        self.assertTrue(captured_rows[0].get("counts_for_mastery", True))
+        self.assertEqual(captured_rows[0]["counts_for_mastery"], False)
 
     def test_hw_below_threshold_keeps_m_but_marks_non_counting(self):
         rv, captured_rows = self._patched_save_grades_call(hw_map={"stu-1": 40})
@@ -686,6 +715,57 @@ class TestSaveGradesAutoConvertHwGuard(unittest.TestCase):
         self.assertEqual(len(captured_rows), 1)
         self.assertEqual(captured_rows[0]["top_score"], "M")
         self.assertEqual(captured_rows[0]["counts_for_mastery"], True)
+
+
+class TestAssignmentHomeworkGroupRequired(unittest.TestCase):
+    """create/update assignment reject a blank homework_group with a dedicated error."""
+
+    def setUp(self):
+        self.app = create_app()
+        self.app.config["TESTING"] = True
+        self.client = self.app.test_client()
+
+    def _session(self):
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        return {"X-CSRF-Token": "test-csrf"}
+
+    def test_create_blank_homework_group_400(self):
+        from app import routes as r
+        headers = self._session()
+        with unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(
+                    r.Homework, "canonicalize_homework_group_for_class", return_value=None
+                ):
+            rv = self.client.post(
+                "/class/class-1/create_assignment",
+                json={"name": "Quiz 1", "homework_group": ""},
+                headers=headers,
+            )
+        self.assertEqual(rv.status_code, 400)
+        body = rv.get_json()
+        self.assertFalse(body.get("success"))
+        self.assertIn("homework group", (body.get("error") or "").lower())
+
+    def test_update_blank_homework_group_400(self):
+        from app import routes as r
+        headers = self._session()
+        with unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_assignment_belongs_to_class", return_value=True), \
+                unittest.mock.patch.object(
+                    r.Homework, "canonicalize_homework_group_for_class", return_value=None
+                ):
+            rv = self.client.post(
+                "/class/class-1/assignments/asg-1/update",
+                json={"name": "Quiz 1", "homework_group": ""},
+                headers=headers,
+            )
+        self.assertEqual(rv.status_code, 400)
+        body = rv.get_json()
+        self.assertFalse(body.get("success"))
+        self.assertIn("homework group", (body.get("error") or "").lower())
 
 
 class TestHwPassPromotesNonCountingMasteries(unittest.TestCase):
@@ -1167,6 +1247,354 @@ class TestReportsAssignmentScopeAndEmail(unittest.TestCase):
         self.assertIn("const grade = scoped || 'Not graded';", src)
         self.assertIn("/api/class/${classId}/student/${encodeURIComponent(studentId)}/send-report-email", src)
         self.assertIn("/api/class/${classId}/send-report-emails", src)
+
+
+class TestParseBlankGradesheetCsv(unittest.TestCase):
+    VENDORS = ["D1", "D2", "D3"]
+
+    def test_parses_export_shape_keeps_blank_lo_keys(self):
+        text = (
+            "\ufeffAssignment,Quiz 1\n"
+            "Date,2026-08-20\n"
+            "\n"
+            "Student Name,HW,D1,D2,D3\n"
+            "Doe Jane,80,M,,R\n"
+            "Smith Alex,,,\n"
+        )
+        payload, err = parse_blank_gradesheet_csv_text(text, self.VENDORS)
+        self.assertIsNone(err)
+        self.assertEqual(payload["assignment_name"], "Quiz 1")
+        self.assertEqual(payload["learning_objectives"], ["D1", "D2", "D3"])
+        self.assertEqual(payload["extraction_path"], "csv")
+        by_name = {s["name"]: s for s in payload["students"]}
+        self.assertEqual(by_name["Doe Jane"]["grades"], {"D1": "M", "D2": "", "D3": "R"})
+        self.assertEqual(by_name["Doe Jane"]["homework_pct"], "80")
+        self.assertEqual(by_name["Smith Alex"]["grades"], {"D1": "", "D2": "", "D3": ""})
+        self.assertIsNone(by_name["Smith Alex"]["homework_pct"])
+
+    def test_rejects_wrong_header_shape(self):
+        payload, err = parse_blank_gradesheet_csv_text("Name,Score\nAda,M\n", self.VENDORS)
+        self.assertIsNone(payload)
+        self.assertIn("gradesheet format", err)
+
+    def test_rejects_unknown_lo_header(self):
+        text = (
+            "Assignment,Quiz 1\n"
+            "Date,2026-08-20\n"
+            "\n"
+            "Student Name,HW,D1,NOTALO\n"
+            "Doe Jane,,M,P\n"
+        )
+        payload, err = parse_blank_gradesheet_csv_text(text, self.VENDORS)
+        self.assertIsNone(payload)
+        self.assertIn("Unknown", err)
+        self.assertIn("NOTALO", err)
+
+    def test_formula_prefix_and_quoted_name(self):
+        text = (
+            "Assignment,'=Quiz\n"
+            "Date,2026-08-20\n"
+            "\n"
+            "Student Name,HW,D1\n"
+            '"Smith, Alex",,M\n'
+        )
+        payload, err = parse_blank_gradesheet_csv_text(text, ["D1"])
+        self.assertIsNone(err)
+        self.assertEqual(payload["assignment_name"], "=Quiz")
+        self.assertEqual(payload["students"][0]["name"], "Smith, Alex")
+        self.assertEqual(payload["students"][0]["grades"], {"D1": "M"})
+
+    def test_parses_three_metadata_rows_then_blank_then_header(self):
+        text = (
+            "Assignment,Quiz 1\n"
+            "Date,2026-08-20\n"
+            "NOTE,This is a blank template. Grade columns are intentionally empty. "
+            "Re-uploading this file will CLEAR any grades already entered for this assignment.\n"
+            "\n"
+            "Student Name,HW,D1,D2,D3\n"
+            "Doe Jane,80,M,,R\n"
+            "Smith Alex,,,\n"
+        )
+        payload, err = parse_blank_gradesheet_csv_text(text, self.VENDORS)
+        self.assertIsNone(err)
+        self.assertEqual(payload["assignment_name"], "Quiz 1")
+        self.assertEqual(payload["date_value"], "2026-08-20")
+        self.assertEqual(payload["learning_objectives"], ["D1", "D2", "D3"])
+        by_name = {s["name"]: s for s in payload["students"]}
+        self.assertEqual(by_name["Doe Jane"]["grades"], {"D1": "M", "D2": "", "D3": "R"})
+        self.assertEqual(by_name["Doe Jane"]["homework_pct"], "80")
+        self.assertEqual(by_name["Smith Alex"]["grades"], {"D1": "", "D2": "", "D3": ""})
+        self.assertIsNone(by_name["Smith Alex"]["homework_pct"])
+        self.assertFalse(any(
+            "NOTE" in (s.get("name") or "").upper() for s in payload["students"]
+        ))
+
+
+class TestGradesheetExportPrefill(unittest.TestCase):
+    def test_csv_format_hw_score(self):
+        self.assertEqual(_csv_format_hw_score(None), "")
+        self.assertEqual(_csv_format_hw_score(85), "85")
+        self.assertEqual(_csv_format_hw_score(85.0), "85")
+        self.assertEqual(_csv_format_hw_score(-1), "-1")
+
+    def test_data_rows_prefill_hw_and_letters_leave_true_gaps_blank(self):
+        students = [
+            {"id": "stu-1", "name": "Doe Jane"},
+            {"id": "stu-2", "name": "Smith Alex"},
+        ]
+        los = [
+            {"id": "lo-d1", "vendor_code": "D1"},
+            {"id": "lo-d2", "vendor_code": "D2"},
+        ]
+        hw_map = {"stu-1": 85}
+        letter_map = {("stu-1", "lo-d1"): "M"}
+        rows = _gradesheet_csv_data_rows(students, los, hw_map, letter_map)
+        self.assertEqual(rows[0], ["Doe Jane", "85", "M", ""])
+        self.assertEqual(rows[1], ["Smith Alex", "", "", ""])
+
+    def test_letter_map_from_assignment_rows(self):
+        mapped = _gradesheet_letter_map_from_rows([
+            {"student_id": "stu-1", "learning_objective_id": "lo-d1", "top_score": "M"},
+            {"student_id": "stu-1", "learning_objective_id": "lo-d2", "top_score": None},
+        ])
+        self.assertEqual(mapped[("stu-1", "lo-d1")], "M")
+        self.assertNotIn(("stu-1", "lo-d2"), mapped)
+
+    def test_blank_template_csv_has_note_and_empty_grade_cells(self):
+        students = [{"id": "stu-1", "name": "Doe Jane"}]
+        los = [{"id": "lo-d1", "vendor_code": "D1"}]
+        hw_map = {"stu-1": 85}
+        data_rows = _gradesheet_csv_data_rows(students, los, hw_map, {})
+        text = _build_gradesheet_csv_text("Quiz 1", "2026-08-20", ["D1"], data_rows, True)
+        self.assertIn(_BLANK_GRADESHEET_NOTE, text)
+        payload, err = parse_blank_gradesheet_csv_text(text, ["D1"])
+        self.assertIsNone(err)
+        self.assertEqual(payload["students"][0]["homework_pct"], "85")
+        self.assertEqual(payload["students"][0]["grades"], {"D1": ""})
+
+    def test_filled_export_csv_has_letters_and_no_note(self):
+        students = [{"id": "stu-1", "name": "Doe Jane"}]
+        los = [{"id": "lo-d1", "vendor_code": "D1"}]
+        hw_map = {"stu-1": 85}
+        letter_map = {("stu-1", "lo-d1"): "M"}
+        data_rows = _gradesheet_csv_data_rows(students, los, hw_map, letter_map)
+        text = _build_gradesheet_csv_text("Quiz 1", "2026-08-20", ["D1"], data_rows, False)
+        self.assertNotIn(_BLANK_GRADESHEET_NOTE, text)
+        payload, err = parse_blank_gradesheet_csv_text(text, ["D1"])
+        self.assertIsNone(err)
+        self.assertEqual(payload["students"][0]["homework_pct"], "85")
+        self.assertEqual(payload["students"][0]["grades"], {"D1": "M"})
+
+    def test_csv_columns_only_los_linked_to_assignment(self):
+        from app import routes as r
+
+        pool = [
+            {"id": "lo-1", "vendor_code": "A1"},
+            {"id": "lo-2", "vendor_code": "A2"},
+            {"id": "lo-3", "vendor_code": "B1"},
+            {"id": "lo-4", "vendor_code": "B2"},
+            {"id": "lo-5", "vendor_code": "C1"},
+        ]
+        q = MagicMock()
+        q.select.return_value = q
+        q.eq.return_value = q
+        q.limit.return_value = q
+        q.execute.return_value = MagicMock(
+            data=[{"id": "asg-1", "name": "Quiz 1", "date_returned": "2026-08-20"}]
+        )
+        with unittest.mock.patch.object(r, "supabase_admin") as sa, \
+                unittest.mock.patch.object(
+                    r.Course, "get_full_class_data", return_value={"name": "C"}
+                ), \
+                unittest.mock.patch.object(
+                    r,
+                    "_process_enrollments",
+                    return_value=([{"id": "stu-1", "name": "Doe Jane"}], [], {}),
+                ), \
+                unittest.mock.patch.object(
+                    r.Course, "get_learning_objectives", return_value=pool
+                ), \
+                unittest.mock.patch.object(
+                    r.Course, "get_assignment_lo_ids", return_value=["lo-2", "lo-4"]
+                ), \
+                unittest.mock.patch.object(
+                    r.Homework, "get_hw_scores_map_for_assignment", return_value={"stu-1": 80}
+                ):
+            sa.table.return_value = q
+            bundle = r._gradesheet_export_bundle("class-1", "asg-1")
+
+        assignment, students, learning_objectives, hw_map = bundle
+        self.assertEqual(
+            [lo["vendor_code"] for lo in learning_objectives],
+            ["A2", "B2"],
+        )
+        letter_map = {("stu-1", "lo-2"): "M", ("stu-1", "lo-4"): "R"}
+        vendor_codes = [lo["vendor_code"] for lo in learning_objectives]
+        data_rows = _gradesheet_csv_data_rows(
+            students, learning_objectives, hw_map, letter_map
+        )
+        text = _build_gradesheet_csv_text(
+            "Quiz 1", "2026-08-20", vendor_codes, data_rows, False
+        )
+        payload, err = parse_blank_gradesheet_csv_text(
+            text, ["A1", "A2", "B1", "B2", "C1"]
+        )
+        self.assertIsNone(err)
+        self.assertEqual(payload["learning_objectives"], ["A2", "B2"])
+        self.assertEqual(payload["students"][0]["grades"], {"A2": "M", "B2": "R"})
+        self.assertNotIn("A1", payload["students"][0]["grades"])
+        self.assertNotIn("C1", payload["students"][0]["grades"])
+
+
+class TestImportRosterNameMatch(unittest.TestCase):
+    def test_last_first_export_name_hits_stored_first_last(self):
+        index = _enrolled_import_name_index([
+            {"id": "stu-1", "full_name": "Jane Doe"},
+        ])
+        self.assertEqual(_lookup_enrolled_import_student_id("Doe Jane", index), "stu-1")
+        self.assertEqual(_lookup_enrolled_import_student_id("Jane Doe", index), "stu-1")
+        self.assertIsNone(_lookup_enrolled_import_student_id("Nobody", index))
+
+
+class TestImportBlankCellActions(unittest.TestCase):
+    def test_present_blank_is_clear_candidate_missing_key_is_not(self):
+        grades = {"D1": "M", "D2": ""}
+        to_save = []
+        to_clear = []
+        for lo_name, mark in grades.items():
+            mark_s = "" if mark is None else str(mark).strip()
+            if not mark_s:
+                to_clear.append(lo_name)
+            else:
+                to_save.append(lo_name)
+        self.assertEqual(to_save, ["D1"])
+        self.assertEqual(to_clear, ["D2"])
+        self.assertNotIn("D3", to_save)
+        self.assertNotIn("D3", to_clear)
+
+
+class TestParseGradeCsvRoute(unittest.TestCase):
+    def setUp(self):
+        self.app = create_app()
+        self.app.config["TESTING"] = True
+        self.client = self.app.test_client()
+
+    def test_unauthenticated_401(self):
+        rv = self.client.post("/api/class/c1/parse-grade-csv")
+        self.assertEqual(rv.status_code, 401)
+
+    def test_valid_csv_does_not_call_gemini_and_can_match_assignment(self):
+        from app import routes as r
+        gemini = unittest.mock.MagicMock()
+        csv_text = (
+            "Assignment,Quiz 1\n"
+            "Date,2026-08-20\n"
+            "\n"
+            "Student Name,HW,D1\n"
+            "Ada Lovelace,90,M\n"
+        )
+        sa = MagicMock()
+        q = MagicMock()
+        q.select.return_value = q
+        q.eq.return_value = q
+        q.execute.return_value = MagicMock(data=[{"id": "asg-1", "name": "Quiz 1"}])
+        sa.table.return_value = q
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(
+                    r.Course, "get_learning_objectives", return_value=[{"vendor_code": "D1"}]
+                ), \
+                unittest.mock.patch.object(r, "get_gemini_analyzer", gemini):
+            rv = self.client.post(
+                "/api/class/c1/parse-grade-csv",
+                data={"file": (io.BytesIO(csv_text.encode("utf-8")), "quiz.csv")},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertEqual(rv.status_code, 200)
+        body = rv.get_json()
+        self.assertTrue(body.get("success"))
+        self.assertEqual(body.get("matched_assignment_id"), "asg-1")
+        self.assertEqual(body["data"]["extraction_path"], "csv")
+        self.assertEqual(body["data"]["students"][0]["grades"], {"D1": "M"})
+        gemini.assert_not_called()
+
+    def test_three_metadata_row_csv_parses_header_and_students(self):
+        from app import routes as r
+        gemini = unittest.mock.MagicMock()
+        csv_text = (
+            "Assignment,Quiz 1\n"
+            "Date,2026-08-20\n"
+            "NOTE,This is a blank template. Grade columns are intentionally empty. "
+            "Re-uploading this file will CLEAR any grades already entered for this assignment.\n"
+            "\n"
+            "Student Name,HW,D1\n"
+            "Ada Lovelace,90,M\n"
+            "Doe Jane,0,\n"
+        )
+        sa = MagicMock()
+        q = MagicMock()
+        q.select.return_value = q
+        q.eq.return_value = q
+        q.execute.return_value = MagicMock(data=[{"id": "asg-1", "name": "Quiz 1"}])
+        sa.table.return_value = q
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(
+                    r.Course, "get_learning_objectives", return_value=[{"vendor_code": "D1"}]
+                ), \
+                unittest.mock.patch.object(r, "get_gemini_analyzer", gemini):
+            rv = self.client.post(
+                "/api/class/c1/parse-grade-csv",
+                data={"file": (io.BytesIO(csv_text.encode("utf-8")), "quiz.csv")},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertEqual(rv.status_code, 200)
+        body = rv.get_json()
+        self.assertTrue(body.get("success"))
+        self.assertEqual(body["data"]["assignment_name"], "Quiz 1")
+        self.assertEqual(body["data"]["learning_objectives"], ["D1"])
+        students = body["data"]["students"]
+        self.assertEqual(len(students), 2)
+        self.assertEqual(students[0]["name"], "Ada Lovelace")
+        self.assertEqual(students[0]["grades"], {"D1": "M"})
+        self.assertEqual(students[0]["homework_pct"], "90")
+        self.assertEqual(students[1]["name"], "Doe Jane")
+        self.assertEqual(students[1]["grades"], {"D1": ""})
+        self.assertEqual(students[1]["homework_pct"], "0")
+        self.assertFalse(any("NOTE" in (s.get("name") or "").upper() for s in students))
+        gemini.assert_not_called()
+
+    def test_malformed_csv_400_without_gemini(self):
+        from app import routes as r
+        gemini = unittest.mock.MagicMock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(
+                    r.Course, "get_learning_objectives", return_value=[{"vendor_code": "D1"}]
+                ), \
+                unittest.mock.patch.object(r, "get_gemini_analyzer", gemini):
+            rv = self.client.post(
+                "/api/class/c1/parse-grade-csv",
+                data={"file": (io.BytesIO(b"nope"), "bad.csv")},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertEqual(rv.status_code, 400)
+        gemini.assert_not_called()
 
 
 if __name__ == '__main__':

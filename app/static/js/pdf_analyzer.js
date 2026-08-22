@@ -89,6 +89,7 @@ function isHomeworkHeader(lo) {
 function extractionPathLabel(path) {
   if (path === 'pdf_table') return 'Extracted from PDF table (local, fast).';
   if (path === 'pdf_text') return 'Extracted from PDF text layout (local).';
+  if (path === 'csv') return 'Read from CSV (no OCR).';
   return 'Extracted with AI (Gemini).';
 }
 
@@ -96,21 +97,61 @@ function extractionPathLabel(path) {
 // FILE UPLOAD HANDLING
 // ============================================================================
 
+function isCsvUpload(file) {
+  const name = String((file && file.name) || '').toLowerCase();
+  return name.endsWith('.csv');
+}
+
+function showUploadParseError(message) {
+  const el = document.getElementById('uploadParseError');
+  if (el) {
+    el.textContent = String(message || 'Could not read that file.');
+    el.classList.remove('hidden');
+    return;
+  }
+  alert(message);
+}
+
+function clearUploadParseError() {
+  const el = document.getElementById('uploadParseError');
+  if (!el) return;
+  el.textContent = '';
+  el.classList.add('hidden');
+}
+
+function resetUploadChooser() {
+  const pdfInput = document.getElementById('pdfInput');
+  const fileName = document.getElementById('selectedFileName');
+  const nextBtn = document.getElementById('nextBtn1');
+  if (pdfInput) pdfInput.value = '';
+  if (fileName) {
+    fileName.textContent = '';
+    fileName.classList.add('hidden');
+  }
+  if (nextBtn) {
+    nextBtn.disabled = true;
+    nextBtn.classList.add('opacity-50', 'cursor-not-allowed');
+  }
+  uploadedPDFData = null;
+}
+
 function handleFileSelect(input) {
   const file = input.files[0];
   if (!file) return;
 
+  clearUploadParseError();
+
   const allowedTypes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
-  if (!allowedTypes.includes(file.type)) {
-    alert('Please select a PDF, JPG, or PNG file');
-    input.value = '';
+  if (!isCsvUpload(file) && !allowedTypes.includes(file.type)) {
+    showUploadParseError('Please select a CSV, PDF, JPG, or PNG file');
+    resetUploadChooser();
     return;
   }
 
   const maxSize = 10 * 1024 * 1024;
   if (file.size > maxSize) {
-    alert('File size must be less than 10MB');
-    input.value = '';
+    showUploadParseError('File size must be less than 10MB');
+    resetUploadChooser();
     return;
   }
 
@@ -178,7 +219,7 @@ function goToStep(stepNumber) {
     if (!validateStep(current)) return;
     // Trigger Gemini analysis when leaving step 1 for the first time
     if (current === 1 && !uploadedPDFData) {
-      analyzePDF();
+      analyzeUpload();
       return;
     }
     // Render the extracted data table when entering step 3
@@ -209,11 +250,25 @@ function validateStep(step) {
   if (step === 1) {
     const pdfInput = document.getElementById('pdfInput');
     if (!pdfInput.files || pdfInput.files.length === 0) {
-      alert('Please select a PDF file');
+      alert('Please select a CSV, PDF, JPG, or PNG file');
       return false;
     }
   }
   if (step === 2) {
+    const createMode = document.getElementById('mapModeCreate');
+    if (createMode && createMode.checked) {
+      const nameEl = document.getElementById('newAssignmentName');
+      const hwEl = document.getElementById('newAssignmentHwGroup');
+      if (!nameEl || !String(nameEl.value || '').trim()) {
+        alert('Enter a name for the new assignment.');
+        return false;
+      }
+      if (!hwEl || !String(hwEl.value || '').trim()) {
+        alert('Enter a homework group for the new assignment.');
+        return false;
+      }
+      return true;
+    }
     const sel = document.getElementById('assignmentSelect');
     if (!sel || !sel.value) {
       alert('Please select an assignment before continuing.');
@@ -283,6 +338,141 @@ function onAssignmentSelected() {
 
   // If extracted data already exists, run comparison immediately
   if (uploadedPDFData) runLOComparison();
+}
+
+function onMapModeChange() {
+  const createOn = document.getElementById('mapModeCreate') && document.getElementById('mapModeCreate').checked;
+  const fields = document.getElementById('createAssignmentFields');
+  const sel = document.getElementById('assignmentSelect');
+  if (fields) fields.classList.toggle('hidden', !createOn);
+  if (sel) sel.disabled = !!createOn;
+}
+
+function prefillCreateAssignmentFromCsv(data) {
+  const name = String((data && data.assignment_name) || '').trim();
+  const dateVal = String((data && data.date_value) || '').trim();
+  const nameEl = document.getElementById('newAssignmentName');
+  const hwEl = document.getElementById('newAssignmentHwGroup');
+  const createRadio = document.getElementById('mapModeCreate');
+  if (nameEl) nameEl.value = name;
+  if (hwEl && !String(hwEl.value || '').trim()) hwEl.value = name;
+  if (createRadio) {
+    createRadio.checked = true;
+    onMapModeChange();
+  }
+  window.__csvDateReturned = /^\d{4}-\d{2}-\d{2}$/.test(dateVal) ? dateVal : '';
+}
+
+function classLoIdsForExtractedHeaders() {
+  const codes = new Set(
+    ((uploadedPDFData && uploadedPDFData.learning_objectives) || []).map(function (c) {
+      return String(c || '').toUpperCase();
+    })
+  );
+  return (window.CLASS_LOS || [])
+    .filter(function (lo) {
+      return codes.has(String(lo.vendor_code || '').toUpperCase());
+    })
+    .map(function (lo) { return lo.id; })
+    .filter(Boolean);
+}
+
+function vendorCodeForLoId(loId) {
+  const hit = (window.CLASS_LOS || []).find(function (lo) {
+    return String(lo.id) === String(loId);
+  });
+  return hit && hit.vendor_code ? hit.vendor_code : '';
+}
+
+async function createAssignmentFromMapStep() {
+  const name = String((document.getElementById('newAssignmentName') || {}).value || '').trim();
+  const hwGroup = String((document.getElementById('newAssignmentHwGroup') || {}).value || '').trim();
+  const typeEl = document.getElementById('newAssignmentType');
+  const assignmentType = typeEl ? typeEl.value : 'mastery_opp';
+  const selectedLos = classLoIdsForExtractedHeaders();
+  const body = {
+    name: name,
+    homework_group: hwGroup,
+    assignment_type: assignmentType,
+    selected_los: selectedLos,
+  };
+  if (window.__csvDateReturned) body.date_returned = window.__csvDateReturned;
+
+  const resp = await fetch('/class/' + encodeURIComponent(window.CLASS_ID) + '/create_assignment', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(body)
+  });
+  const result = await resp.json().catch(function () { return {}; });
+  if (!resp.ok || !result.success || !result.id) {
+    throw new Error(result.error || 'Could not create assignment');
+  }
+
+  const newId = String(result.id);
+  const ao = selectedLos.map(function (loId) {
+    return {
+      learning_objective_id: loId,
+      learning_objectives: { vendor_code: vendorCodeForLoId(loId) }
+    };
+  });
+  window.ASSIGNMENTS_DATA = window.ASSIGNMENTS_DATA || [];
+  window.ASSIGNMENTS_DATA.push({
+    id: newId,
+    name: name,
+    assignment_type: assignmentType,
+    assignment_objectives: ao
+  });
+  const sel = document.getElementById('assignmentSelect');
+  if (sel) {
+    const opt = document.createElement('option');
+    opt.value = newId;
+    opt.textContent = name;
+    sel.appendChild(opt);
+    sel.disabled = false;
+    sel.value = newId;
+  }
+  const existingRadio = document.getElementById('mapModeExisting');
+  if (existingRadio) existingRadio.checked = true;
+  onMapModeChange();
+  onAssignmentSelected();
+  return true;
+}
+
+async function continueFromMapStep() {
+  if (!validateStep(2)) return;
+  const createOn = document.getElementById('mapModeCreate') && document.getElementById('mapModeCreate').checked;
+  if (createOn) {
+    const name = String((document.getElementById('newAssignmentName') || {}).value || '').trim();
+    const hwGroup = String((document.getElementById('newAssignmentHwGroup') || {}).value || '').trim();
+    if (!name) {
+      alert('Please provide an assignment name.');
+      return;
+    }
+    if (!hwGroup) {
+      alert('Please provide a homework group (e.g., Quiz 1, Unit 3, Midterm).');
+      return;
+    }
+  }
+  const btn = document.getElementById('nextBtn2');
+  const orig = btn ? btn.innerHTML : '';
+  try {
+    if (createOn) {
+      if (btn) {
+        btn.disabled = true;
+        btn.textContent = 'Creating assignment';
+      }
+      await createAssignmentFromMapStep();
+    }
+    goToStep(3);
+  } catch (err) {
+    alert('Error creating assignment: ' + (err.message || err));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = orig;
+    }
+  }
 }
 
 function runLOComparison() {
@@ -363,6 +553,99 @@ function setAllExtraLOs(checked) {
 // PDF / GEMINI ANALYSIS
 // ============================================================================
 
+async function analyzeUpload() {
+  const pdfInput = document.getElementById('pdfInput');
+  const file = pdfInput.files[0];
+  if (!file) {
+    showUploadParseError('Please select a CSV, PDF, JPG, or PNG file');
+    return;
+  }
+  if (isCsvUpload(file)) {
+    await analyzeCsv(file);
+    return;
+  }
+  await analyzePDF();
+}
+
+function csvLoHasAnyGrade(lo) {
+  const code = String(lo || '').toUpperCase();
+  return (uploadedPDFData.students || []).some(function (s) {
+    const grades = (s && s.grades) || {};
+    return Object.keys(grades).some(function (k) {
+      return String(k).toUpperCase() === code && String(grades[k] || '').trim() !== '';
+    });
+  });
+}
+
+function applyCsvAssignmentMapping(matchedId) {
+  const sel = document.getElementById('assignmentSelect');
+  if (!sel || !matchedId) return false;
+  const ok = Array.from(sel.options).some(function (opt) {
+    return String(opt.value) === String(matchedId);
+  });
+  if (!ok) return false;
+  const existingRadio = document.getElementById('mapModeExisting');
+  if (existingRadio) existingRadio.checked = true;
+  onMapModeChange();
+  sel.value = String(matchedId);
+  onAssignmentSelected();
+  const assignSet = new Set(assignmentLOs.map(function (v) { return String(v).toUpperCase(); }));
+  (uploadedPDFData.learning_objectives || []).forEach(function (lo) {
+    if (assignSet.has(String(lo).toUpperCase())) return;
+    if (csvLoHasAnyGrade(lo)) approvedExtraLOs.add(lo);
+  });
+  return true;
+}
+
+async function analyzeCsv(file) {
+  const nextBtn = document.getElementById('nextBtn1');
+  const origHTML = nextBtn.innerHTML;
+  nextBtn.disabled = true;
+  nextBtn.innerHTML = '<svg class="animate-spin -ml-1 mr-3 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Parsing CSV';
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    const resp = await fetch(
+      '/api/class/' + encodeURIComponent(window.CLASS_ID) + '/parse-grade-csv',
+      { method: 'POST', body: formData, credentials: 'same-origin' }
+    );
+    if (!resp.ok) {
+      const contentType = resp.headers.get('content-type') || '';
+      let message = 'Failed to parse CSV';
+      if (contentType.includes('application/json')) {
+        const e = await resp.json();
+        message = e.error || message;
+      }
+      throw new Error(message);
+    }
+    const result = await resp.json();
+    if (!result.success) throw new Error(result.error || 'CSV parse failed');
+    uploadedPDFData = result.data;
+    displayExtractedLOs(uploadedPDFData);
+    if (result.matched_assignment_id && applyCsvAssignmentMapping(result.matched_assignment_id)) {
+      goToStep(3);
+    } else {
+      prefillCreateAssignmentFromCsv(uploadedPDFData);
+      goToStep(2);
+    }
+  } catch (err) {
+    console.error('CSV parse error:', err);
+    showUploadParseError(err.message || 'Could not parse that CSV. Choose a different file to try again.');
+    resetUploadChooser();
+  } finally {
+    nextBtn.innerHTML = origHTML;
+    const input = document.getElementById('pdfInput');
+    const hasFile = input && input.files && input.files.length > 0;
+    nextBtn.disabled = !hasFile;
+    if (hasFile) {
+      nextBtn.classList.remove('opacity-50', 'cursor-not-allowed');
+    } else {
+      nextBtn.classList.add('opacity-50', 'cursor-not-allowed');
+    }
+  }
+}
+
 async function analyzePDF() {
   const pdfInput = document.getElementById('pdfInput');
   const file = pdfInput.files[0];
@@ -401,7 +684,7 @@ async function analyzePDF() {
     goToStep(2);
   } catch (err) {
     console.error('Gemini error:', err);
-    alert('Error analyzing PDF: ' + err.message);
+    showUploadParseError('Error analyzing PDF: ' + err.message);
   } finally {
     nextBtn.disabled = false;
     nextBtn.innerHTML = origHTML;
@@ -734,7 +1017,7 @@ async function handleFormSubmit(e) {
   e.preventDefault();
 
   if (!uploadedPDFData || !uploadedPDFData.students) {
-    alert('No extracted data available. Please analyze a PDF first.');
+    alert('No extracted data available. Please upload a CSV, PDF, or image first.');
     return;
   }
 
@@ -749,7 +1032,8 @@ async function handleFormSubmit(e) {
   const hasHomework = (uploadedPDFData.students || []).some(
     s => s.homework_pct != null && String(s.homework_pct).trim() !== ''
   );
-  if (includeLOs.size === 0 && !hasHomework) {
+  const isCsv = (uploadedPDFData.extraction_path || '') === 'csv';
+  if (!isCsv && includeLOs.size === 0 && !hasHomework) {
     alert(
       'Nothing to import: add learning objectives to this assignment (or approve extra columns in step 2), and/or enter homework % values, then try again.'
     );
@@ -767,26 +1051,34 @@ async function handleFormSubmit(e) {
     importBtn.innerHTML = '<svg class="animate-spin -ml-1 mr-2 h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> Importing\u2026';
     importBtn.classList.add('opacity-75', 'cursor-not-allowed');
   }
+  const priorSkipBox = document.getElementById('importHwSkipBox');
+  const priorSkipList = document.getElementById('importHwSkipWarnings');
+  if (priorSkipBox) priorSkipBox.classList.add('hidden');
+  if (priorSkipList) priorSkipList.textContent = '';
 
   // Filter each student's grades to only include the approved LOs (not homework)
   const filteredStudents = uploadedPDFData.students.map(s => {
     const grades = {};
     Object.keys(s.grades || {}).forEach(lo => {
       if (isHomeworkHeader(lo)) return;
-      if (includeLOs.has(lo.toUpperCase())) {
+      if (isCsv || includeLOs.has(lo.toUpperCase())) {
         grades[lo] = s.grades[lo];
       }
     });
     const out = { name: s.name, grades };
     if (s.homework_pct != null && String(s.homework_pct).trim() !== '') {
       out.homework_pct = s.homework_pct;
+    } else if (isCsv) {
+      out.homework_pct = null;
     }
     return out;
   });
 
-  const filteredLOs = (uploadedPDFData.learning_objectives || []).filter(lo =>
-    includeLOs.has(lo.toUpperCase())
-  );
+  const filteredLOs = isCsv
+    ? (uploadedPDFData.learning_objectives || []).filter(lo => !isHomeworkHeader(lo))
+    : (uploadedPDFData.learning_objectives || []).filter(lo =>
+        includeLOs.has(lo.toUpperCase())
+      );
 
   const payload = {
     class_id: classId,
@@ -806,7 +1098,31 @@ async function handleFormSubmit(e) {
     const result = await resp.json();
     if (!result.success) throw new Error(result.error || 'Import failed');
 
-    // Redirect to Reports tab so user can review imported data
+    const warnings = Array.isArray(result.warnings) ? result.warnings.filter(Boolean) : [];
+    const boxEl = document.getElementById('importHwSkipBox');
+    const listEl = document.getElementById('importHwSkipWarnings');
+    const reportsLink = document.getElementById('importHwSkipReportsLink');
+    if (listEl) {
+      listEl.textContent = '';
+    }
+    if (warnings.length && boxEl && listEl) {
+      warnings.forEach(function (line) {
+        const li = document.createElement('li');
+        li.textContent = line;
+        listEl.appendChild(li);
+      });
+      if (reportsLink) {
+        reportsLink.setAttribute('href', '/class/' + classId + '/reports');
+      }
+      boxEl.classList.remove('hidden');
+      if (importBtn) {
+        importBtn.disabled = false;
+        importBtn.innerHTML = '<svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg> Import Grades';
+        importBtn.classList.remove('opacity-75', 'cursor-not-allowed');
+      }
+      return;
+    }
+
     window.location.href = '/class/' + classId + '/reports';
   } catch (err) {
     console.error('Import error:', err);
