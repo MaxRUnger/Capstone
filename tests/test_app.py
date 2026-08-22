@@ -668,7 +668,7 @@ class TestSaveGradesAutoConvertHwGuard(unittest.TestCase):
                 unittest.mock.patch.object(
                     r, "_enrolled_student_ids_for_class", return_value={"stu-1"}
                 ), \
-                unittest.mock.patch.object(r.Course, "get_lo_ids_for_class", return_value=["lo-x"]), \
+                unittest.mock.patch.object(r.Course, "get_assignment_lo_ids", return_value=["lo-x"]), \
                 unittest.mock.patch.object(
                     r.Homework,
                     "get_hw_scores_map_for_assignment",
@@ -1595,6 +1595,718 @@ class TestParseGradeCsvRoute(unittest.TestCase):
             )
         self.assertEqual(rv.status_code, 400)
         gemini.assert_not_called()
+
+
+class TestRemoveStudentAuthDecorator(unittest.TestCase):
+    """api_remove_student_from_class must reject non-instructors with 401,
+    not 403 — the role check should fire at the decorator level before
+    ownership is even evaluated.
+
+    Before fix: @api_login_required let any authenticated session reach
+    _instructor_owns_class, which returned 403 (role-blind).
+    After fix: @api_instructor_required checks role == 'instructor' and
+    returns 401 immediately for student sessions.
+    """
+
+    def setUp(self):
+        self.app = create_app()
+        self.app.config["TESTING"] = True
+        self.client = self.app.test_client()
+
+    def test_student_session_gets_401_not_403(self):
+        """A logged-in student must be turned away with 401 before ownership runs."""
+        from app import routes as r
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "student-1"
+            sess["role"] = "student"        # not 'instructor'
+            sess["csrf_token"] = "test-csrf"
+
+        # _instructor_owns_class must never be called — if it were, it would
+        # return False and yield 403, masking the decorator regression.
+        with unittest.mock.patch.object(
+            r, "_instructor_owns_class"
+        ) as mock_owns:
+            rv = self.client.post(
+                "/api/class/any-class/remove_student",
+                json={"student_id": "stu-1"},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+
+        self.assertEqual(rv.status_code, 401)
+        mock_owns.assert_not_called()
+
+    def test_unauthenticated_gets_401(self):
+        """No session at all must also yield 401."""
+        rv = self.client.post(
+            "/api/class/any-class/remove_student",
+            json={"student_id": "stu-1"},
+            headers={"X-CSRF-Token": "test-csrf"},
+        )
+        self.assertEqual(rv.status_code, 401)
+
+    def test_instructor_session_passes_decorator(self):
+        """A valid instructor session reaches the route body (ownership then
+        returns 403 from _instructor_owns_class=False, proving the decorator
+        itself was satisfied)."""
+        from app import routes as r
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst-1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+
+        with unittest.mock.patch.object(
+            r, "_instructor_owns_class", return_value=False
+        ):
+            rv = self.client.post(
+                "/api/class/any-class/remove_student",
+                json={"student_id": "stu-1"},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+
+        # 403 means the decorator passed and _instructor_owns_class ran.
+        self.assertEqual(rv.status_code, 403)
+
+
+class TestAllowedLoIdsAssignmentScoping(unittest.TestCase):
+    """_allowed_lo_ids_for_grading must scope to assignment-linked LOs only.
+
+    Before fix: returned Course.get_lo_ids_for_class regardless of assignment_id,
+    so grading an LO not linked to the assignment was silently accepted and written.
+    After fix: when assignment_id is present, only LOs in assignment_objectives for
+    that assignment are returned; an unlinked LO is dropped before any DB write.
+    """
+
+    def setUp(self):
+        self.app = create_app()
+        self.app.config["TESTING"] = True
+        self.client = self.app.test_client()
+
+    def _save_grades_call(self, lo_id, linked_lo_ids, hw_map=None):
+        """Post save_grades for a single lo_id; returns (response, captured_rows).
+
+        linked_lo_ids controls what Course.get_assignment_lo_ids returns —
+        i.e. which LOs are actually linked to the assignment.
+        """
+        from app import routes as r
+        if hw_map is None:
+            hw_map = {"stu-1": 80}   # recorded score so HW gate passes
+        captured_rows = []
+        exec_m = MagicMock()
+        q = MagicMock()
+        q.upsert.side_effect = lambda rows, **kw: captured_rows.extend(rows) or exec_m
+
+        sa = MagicMock()
+        sa.table.return_value = q
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["csrf_token"] = "test-csrf"
+
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_assignment_belongs_to_class", return_value=True), \
+                unittest.mock.patch.object(r, "_class_auto_convert_m_enabled", return_value=False), \
+                unittest.mock.patch.object(
+                    r, "_enrolled_student_ids_for_class", return_value={"stu-1"}
+                ), \
+                unittest.mock.patch.object(
+                    r.Course, "get_assignment_lo_ids", return_value=linked_lo_ids
+                ), \
+                unittest.mock.patch.object(
+                    r.Homework, "get_hw_scores_map_for_assignment", return_value=hw_map
+                ):
+            rv = self.client.post(
+                "/api/class/class-1/save-grades",
+                json={"assignment_id": "asg-1", "grades": {"stu-1|" + lo_id: "M"}},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        return rv, captured_rows
+
+    def test_linked_lo_is_accepted(self):
+        """Grade for an LO that IS linked to the assignment is written."""
+        rv, rows = self._save_grades_call(
+            lo_id="lo-linked",
+            linked_lo_ids=["lo-linked"],
+        )
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["learning_objective_id"], "lo-linked")
+
+    def test_unlinked_lo_is_silently_dropped(self):
+        """Grade for an LO in the class pool but NOT linked to the assignment
+        must be silently dropped — response is 200 but no row is written."""
+        rv, rows = self._save_grades_call(
+            lo_id="lo-unlinked",
+            linked_lo_ids=["lo-linked"],   # unlinked is absent here
+        )
+        # Route still succeeds (other cells may have been valid); the bad
+        # cell is simply skipped rather than causing a 4xx.
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(rows, [], "unlinked LO must not produce a DB write")
+
+    def test_no_assignment_id_uses_full_class_pool(self):
+        """Without an assignment_id, the full class LO pool is still allowed
+        (unscoped grade entry path)."""
+        from app import routes as r
+        captured_rows = []
+        exec_m = MagicMock()
+        q = MagicMock()
+        q.upsert.side_effect = lambda rows, **kw: captured_rows.extend(rows) or exec_m
+        sa = MagicMock()
+        sa.table.return_value = q
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["csrf_token"] = "test-csrf"
+
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(
+                    r, "_enrolled_student_ids_for_class", return_value={"stu-1"}
+                ), \
+                unittest.mock.patch.object(
+                    r.Course, "get_lo_ids_for_class", return_value=["lo-any"]
+                ):
+            rv = self.client.post(
+                "/api/class/class-1/save-grades",
+                # No assignment_id — unscoped grade entry
+                json={"grades": {"stu-1|lo-any": "M"}},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(len(captured_rows), 1)
+        self.assertEqual(captured_rows[0]["learning_objective_id"], "lo-any")
+
+
+class TestImportGradesRateLimit(unittest.TestCase):
+    """api_import_grades must return 429 when the rate limiter is exhausted.
+
+    Before fix: no @rate_limited decorator on api_import_grades — _rate_limit
+    returning False had no effect, route body executed regardless.
+    After fix: @rate_limited("import_grades", 20, 900) wraps the view; a
+    False-returning _rate_limit short-circuits with 429 before any route logic
+    runs.
+    """
+
+    def setUp(self):
+        from app import create_app
+        self.app = create_app()
+        self.app.config["TESTING"] = True
+        self.client = self.app.test_client()
+
+    def test_returns_429_when_rate_limit_exhausted(self):
+        """Patching _rate_limit to return False must produce a 429 with the
+        standard rate-limit error message."""
+        from app import routes as r
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["csrf_token"] = "test-csrf"
+
+        with unittest.mock.patch.object(r, "_rate_limit", return_value=False):
+            rv = self.client.post(
+                "/api/import-grades",
+                json={"class_id": "c1"},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+
+        self.assertEqual(rv.status_code, 429)
+        body = rv.get_json()
+        self.assertFalse(body["success"])
+        self.assertIn("Rate limit", body["error"])
+
+    def test_route_proceeds_when_rate_limit_not_exhausted(self):
+        """When the limiter passes, the request must not produce a 429.
+        (It may fail for other reasons — missing data — but not rate-limiting.)"""
+        from app import routes as r
+        sa = MagicMock()
+        q = MagicMock()
+        q.select.return_value = q
+        q.eq.return_value = q
+        q.in_.return_value = q
+        q.execute.return_value = MagicMock(data=[])
+        sa.table.return_value = q
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["csrf_token"] = "test-csrf"
+
+        with unittest.mock.patch.object(r, "_rate_limit", return_value=True), \
+                unittest.mock.patch.object(r, "supabase_admin", sa):
+            rv = self.client.post(
+                "/api/import-grades",
+                json={"class_id": "c1", "assignment_id": "a1", "students": []},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+
+        self.assertNotEqual(rv.status_code, 429)
+
+
+class TestGradeChangeLogUpserts(unittest.TestCase):
+    """Grade UPSERT operations must write an audit row to grade_change_log.
+
+    Before fix: _log_grade_upserts did not exist — grade_change_log only ever
+    received DELETE rows from _log_grade_deletions. Every score written via
+    save_grades, api_update_grade, or api_import_grades was invisible in the
+    audit log.
+    After fix: save_grades calls _log_grade_upserts after a successful upsert,
+    producing operation="UPSERT" rows that mirror the rows written to the grades
+    table.
+    """
+
+    def setUp(self):
+        from app import create_app
+        self.app = create_app()
+        self.app.config["TESTING"] = True
+        self.client = self.app.test_client()
+
+    def _make_sa_mock(self):
+        """Return (sa, grade_rows_captured, log_rows_captured).
+
+        Uses table-name dispatch via side_effect so grades.upsert() and
+        grade_change_log.insert() are tracked independently.
+        """
+        grade_rows = []
+        log_rows = []
+        exec_m = MagicMock()
+        exec_m.data = []
+
+        def make_q():
+            q = MagicMock()
+            q.select.return_value = q
+            q.eq.return_value = q
+            q.in_.return_value = q
+            q.limit.return_value = q
+            q.order.return_value = q
+            q.execute.return_value = exec_m
+            q.upsert.return_value = q
+            return q
+
+        grades_q = make_q()
+        grades_q.upsert.side_effect = lambda rows, **kw: grade_rows.extend(rows) or grades_q
+
+        log_q = make_q()
+        log_q.insert.side_effect = lambda rows: log_rows.extend(rows) or log_q
+
+        fallback_q = make_q()
+
+        sa = MagicMock()
+        sa.table.side_effect = lambda name: (
+            grades_q if name == "grades" else
+            log_q if name == "grade_change_log" else
+            fallback_q
+        )
+        return sa, grade_rows, log_rows
+
+    def test_save_grades_writes_upsert_log_row(self):
+        """save_grades must insert an operation=UPSERT entry per grade written."""
+        from app import routes as r
+        sa, grade_rows, log_rows = self._make_sa_mock()
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["csrf_token"] = "test-csrf"
+
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_assignment_belongs_to_class", return_value=True), \
+                unittest.mock.patch.object(r, "_class_auto_convert_m_enabled", return_value=False), \
+                unittest.mock.patch.object(r, "_enrolled_student_ids_for_class", return_value={"stu-1"}), \
+                unittest.mock.patch.object(r.Course, "get_assignment_lo_ids", return_value=["lo-x"]), \
+                unittest.mock.patch.object(
+                    r.Homework, "get_hw_scores_map_for_assignment", return_value={"stu-1": 80}
+                ):
+            rv = self.client.post(
+                "/api/class/class-1/save-grades",
+                json={"assignment_id": "asg-1", "grades": {"stu-1|lo-x": "M"}},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+
+        self.assertEqual(rv.status_code, 200, rv.get_json())
+        self.assertEqual(len(grade_rows), 1, "sanity: one grade row must be upserted")
+        self.assertEqual(len(log_rows), 1, "exactly one audit row must be written to grade_change_log")
+        entry = log_rows[0]
+        self.assertEqual(entry["operation"], "UPSERT")
+        self.assertEqual(entry["student_id"], "stu-1")
+        self.assertEqual(entry["learning_objective_id"], "lo-x")
+        self.assertEqual(entry["assignment_id"], "asg-1")
+        self.assertEqual(entry["changed_by"], "inst1")
+        self.assertIsNone(entry["old_value"])
+        self.assertEqual(entry["new_value"]["top_score"], "M")
+
+    def test_save_grades_empty_payload_produces_no_log(self):
+        """An empty grades dict must produce no upsert and no audit log row
+        — _log_grade_upserts must short-circuit on empty rows."""
+        from app import routes as r
+        sa, grade_rows, log_rows = self._make_sa_mock()
+
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["csrf_token"] = "test-csrf"
+
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_assignment_belongs_to_class", return_value=True), \
+                unittest.mock.patch.object(r, "_class_auto_convert_m_enabled", return_value=False), \
+                unittest.mock.patch.object(r, "_enrolled_student_ids_for_class", return_value={"stu-1"}), \
+                unittest.mock.patch.object(r.Course, "get_assignment_lo_ids", return_value=["lo-x"]), \
+                unittest.mock.patch.object(
+                    r.Homework, "get_hw_scores_map_for_assignment", return_value={}
+                ):
+            rv = self.client.post(
+                "/api/class/class-1/save-grades",
+                json={"assignment_id": "asg-1", "grades": {}},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+
+        self.assertEqual(rv.status_code, 200)
+        self.assertEqual(grade_rows, [])
+        self.assertEqual(log_rows, [], "no grade written → no audit row must appear")
+
+
+class TestStudentNameHtmlEscaping(unittest.TestCase):
+    """onclick attributes using student.name must apply the |e filter so a
+    name containing a single quote (e.g. O'Brien) doesn't break the JS string.
+
+    Before fix: {{ student.name }} in onclick='...' left the single quote
+    unescaped — deleteStudent('uuid', 'O'Brien') is invalid JS.
+    After fix: {{ student.name|e }} produces O&#39;Brien which the browser
+    decodes back to O'Brien inside the handler.
+    """
+
+    def test_name_with_single_quote_is_html_escaped(self):
+        """The Jinja2 |e filter must convert ' to &#39; in onclick attributes."""
+        from jinja2 import Environment
+        env = Environment(autoescape=True)
+        tpl = env.from_string(
+            "onclick=\"deleteStudent('{{ sid }}', '{{ name|e }}')\""
+        )
+        rendered = tpl.render(sid="uuid-1", name="O'Brien")
+        self.assertIn("O&#39;Brien", rendered,
+                      "single quote must be HTML-escaped in onclick attribute")
+        self.assertNotIn("O'Brien", rendered,
+                         "raw single quote must not appear — it breaks the JS string")
+
+    def test_name_without_special_chars_is_unchanged(self):
+        """Names with no HTML-special characters render identically with |e."""
+        from jinja2 import Environment
+        env = Environment(autoescape=True)
+        tpl = env.from_string("onclick=\"deleteStudent('{{ sid }}', '{{ name|e }}')\"")
+        rendered = tpl.render(sid="uuid-1", name="Jane Doe")
+        self.assertIn("Jane Doe", rendered)
+
+    def test_double_quote_in_name_is_escaped(self):
+        """A name containing a double quote must also be safely escaped."""
+        from jinja2 import Environment
+        env = Environment(autoescape=True)
+        tpl = env.from_string("onclick=\"deleteStudent('{{ sid }}', '{{ name|e }}')\"")
+        rendered = tpl.render(sid="uuid-1", name='Say "Hello"')
+        self.assertIn("&#34;", rendered)
+        self.assertNotIn('"Hello"', rendered)
+
+
+class TestMaxLengthValidation(unittest.TestCase):
+    """Server-side max-length checks on free-text route inputs.
+
+    Before fix: oversized strings were accepted and forwarded to the DB.
+    After fix: each route returns 400 when input exceeds the defined limit,
+    and no DB call is made.
+    """
+
+    def setUp(self):
+        from app import create_app
+        self.app = create_app()
+        self.app.config["TESTING"] = True
+        self.client = self.app.test_client()
+
+    # ── create_assignment ─────────────────────────────────────────────────
+
+    def test_create_assignment_name_255_accepted(self):
+        """Exactly 255 chars must be accepted (boundary)."""
+        from app import routes as r
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["csrf_token"] = "test-csrf"
+        sa = MagicMock()
+        q = MagicMock()
+        q.execute.return_value = MagicMock(data=[{"id": "asg-new"}])
+        sa.table.return_value = q
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(
+                    r.Homework, "canonicalize_homework_group_for_class", return_value="hw1"
+                ), \
+                unittest.mock.patch.object(r.Course, "get_lo_ids_for_class", return_value=[]):
+            rv = self.client.post(
+                "/class/c1/create_assignment",
+                json={"name": "A" * 255, "homework_group": "hw1"},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertNotEqual(rv.status_code, 400)
+
+    def test_create_assignment_name_256_rejected(self):
+        """256 chars must be rejected with 400 and no DB call."""
+        from app import routes as r
+        sa = MagicMock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(
+                    r.Homework, "canonicalize_homework_group_for_class", return_value="hw1"
+                ):
+            rv = self.client.post(
+                "/class/c1/create_assignment",
+                json={"name": "A" * 256, "homework_group": "hw1"},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertEqual(rv.status_code, 400)
+        self.assertIn("255", rv.get_json()["error"])
+        sa.table.assert_not_called()
+
+    def test_create_assignment_homework_group_101_rejected(self):
+        """homework_group over 100 chars must be rejected with 400."""
+        from app import routes as r
+        sa = MagicMock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(
+                    r.Homework, "canonicalize_homework_group_for_class",
+                    return_value="H" * 101,
+                ):
+            rv = self.client.post(
+                "/class/c1/create_assignment",
+                json={"name": "Quiz 1", "homework_group": "H" * 101},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertEqual(rv.status_code, 400)
+        self.assertIn("100", rv.get_json()["error"])
+        sa.table.assert_not_called()
+
+    # ── api_add_student_to_class ──────────────────────────────────────────
+
+    def test_add_student_name_255_accepted(self):
+        """Exactly 255-char name must pass the length check."""
+        from app import routes as r
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        sa = MagicMock()
+        q = MagicMock()
+        q.execute.return_value = MagicMock(data=[])
+        sa.table.return_value = q
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True):
+            rv = self.client.post(
+                "/api/class/c1/add_student",
+                json={"student_name": "A" * 255},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertNotEqual(rv.status_code, 400, "255-char name must not be length-rejected")
+
+    def test_add_student_name_256_rejected(self):
+        """256-char student name must be rejected with 400 before any DB call."""
+        from app import routes as r
+        sa = MagicMock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True):
+            rv = self.client.post(
+                "/api/class/c1/add_student",
+                json={"student_name": "A" * 256},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertEqual(rv.status_code, 400)
+        sa.table.assert_not_called()
+
+    # ── api_update_learning_objective ─────────────────────────────────────
+
+    def _lo_update_sa_mock(self):
+        sa = MagicMock()
+        q = MagicMock()
+        q.select.return_value = q
+        q.eq.return_value = q
+        q.limit.return_value = q
+        q.update.return_value = q
+        q.execute.return_value = MagicMock(data=[{
+            "id": "lo-1", "vendor_code": "D1", "description": None, "required_ms": 2,
+        }])
+        sa.table.return_value = q
+        return sa
+
+    def test_update_lo_vendor_code_50_accepted(self):
+        """Exactly 50-char vendor_code must pass the length check."""
+        from app import routes as r
+        sa = self._lo_update_sa_mock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_lo_vendor_code_conflict", return_value=False):
+            rv = self.client.post(
+                "/api/class/c1/update-lo/lo-1",
+                json={"vendor_code": "A" * 50},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertNotEqual(rv.status_code, 400, "50-char code must not be length-rejected")
+
+    def test_update_lo_vendor_code_51_rejected(self):
+        """51-char vendor_code must be rejected with 400."""
+        from app import routes as r
+        sa = self._lo_update_sa_mock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_lo_vendor_code_conflict", return_value=False):
+            rv = self.client.post(
+                "/api/class/c1/update-lo/lo-1",
+                json={"vendor_code": "A" * 51},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertEqual(rv.status_code, 400)
+        self.assertIn("50", rv.get_json()["error"])
+
+    def test_update_lo_description_2000_accepted(self):
+        """Exactly 2000-char description must pass the length check."""
+        from app import routes as r
+        sa = self._lo_update_sa_mock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_lo_vendor_code_conflict", return_value=False):
+            rv = self.client.post(
+                "/api/class/c1/update-lo/lo-1",
+                json={"vendor_code": "D1", "description": "x" * 2000},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertNotEqual(rv.status_code, 400, "2000-char description must not be length-rejected")
+
+    def test_update_lo_description_2001_rejected(self):
+        """2001-char description must be rejected with 400."""
+        from app import routes as r
+        sa = self._lo_update_sa_mock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_lo_vendor_code_conflict", return_value=False):
+            rv = self.client.post(
+                "/api/class/c1/update-lo/lo-1",
+                json={"vendor_code": "D1", "description": "x" * 2001},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertEqual(rv.status_code, 400)
+        self.assertIn("2000", rv.get_json()["error"])
+
+    # ── api_send_single_report_email ──────────────────────────────────────
+
+    def _report_email_sa_mock(self):
+        sa = MagicMock()
+        q = MagicMock()
+        q.select.return_value = q
+        q.eq.return_value = q
+        q.limit.return_value = q
+        q.execute.return_value = MagicMock(data=[{
+            "student_id": "s1",
+            "profiles": {"id": "s1", "full_name": "Jane", "email": "jane@example.com"},
+        }])
+        sa.table.return_value = q
+        return sa
+
+    def test_report_email_subject_255_accepted(self):
+        """Exactly 255-char subject must pass the length check."""
+        from app import routes as r
+        sa = self._report_email_sa_mock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_rate_limit", return_value=True), \
+                unittest.mock.patch.object(r, "_send_via_resend", return_value=(True, None)):
+            rv = self.client.post(
+                "/api/class/c1/student/s1/send-report-email",
+                json={"subject": "S" * 255, "body": "hello"},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertNotEqual(rv.status_code, 400, "255-char subject must not be length-rejected")
+
+    def test_report_email_subject_256_rejected(self):
+        """256-char subject must be rejected with 400; _send_via_resend must not be called."""
+        from app import routes as r
+        send_mock = unittest.mock.MagicMock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_rate_limit", return_value=True), \
+                unittest.mock.patch.object(r, "_send_via_resend", send_mock):
+            rv = self.client.post(
+                "/api/class/c1/student/s1/send-report-email",
+                json={"subject": "S" * 256, "body": "hello"},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertEqual(rv.status_code, 400)
+        send_mock.assert_not_called()
+
+    def test_report_email_body_10000_accepted(self):
+        """Exactly 10 000-char body must pass the length check."""
+        from app import routes as r
+        sa = self._report_email_sa_mock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "supabase_admin", sa), \
+                unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_rate_limit", return_value=True), \
+                unittest.mock.patch.object(r, "_send_via_resend", return_value=(True, None)):
+            rv = self.client.post(
+                "/api/class/c1/student/s1/send-report-email",
+                json={"subject": "subject", "body": "b" * 10000},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertNotEqual(rv.status_code, 400, "10 000-char body must not be length-rejected")
+
+    def test_report_email_body_10001_rejected(self):
+        """10 001-char body must be rejected with 400; _send_via_resend must not be called."""
+        from app import routes as r
+        send_mock = unittest.mock.MagicMock()
+        with self.client.session_transaction() as sess:
+            sess["user_id"] = "inst1"
+            sess["role"] = "instructor"
+            sess["csrf_token"] = "test-csrf"
+        with unittest.mock.patch.object(r, "_instructor_owns_class", return_value=True), \
+                unittest.mock.patch.object(r, "_rate_limit", return_value=True), \
+                unittest.mock.patch.object(r, "_send_via_resend", send_mock):
+            rv = self.client.post(
+                "/api/class/c1/student/s1/send-report-email",
+                json={"subject": "subject", "body": "b" * 10001},
+                headers={"X-CSRF-Token": "test-csrf"},
+            )
+        self.assertEqual(rv.status_code, 400)
+        send_mock.assert_not_called()
 
 
 if __name__ == '__main__':

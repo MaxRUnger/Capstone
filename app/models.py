@@ -12,13 +12,12 @@ All write paths use the service-role client (``supabase_admin``); ownership /
 authorization is enforced upstream by helpers in ``app/routes.py``.
 """
 
-import json
 import logging
 import re
 from datetime import date
 from typing import List, Optional, Dict, Any
 
-from app.authentication import supabase, supabase_admin
+from app.authentication import supabase_admin
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +31,6 @@ MASTERY_GRADES = ('M', 'MR', 'R', 'RQ', 'P', 'X', 'A', 'I')
 # Assignment type labels stored on assignments.assignment_type.
 # All three types share the same LO selection and grading path.
 ASSIGNMENT_TYPES = ('mastery_opp', 'exam', 'project')
-ASSIGNMENT_TYPE_PROJECT = 'project'
 
 
 class Course:
@@ -739,57 +737,6 @@ class Homework:
         return canonical or hg_raw
 
     @staticmethod
-    def get_hw_scores_map_for_homework_group(class_id, homework_group):
-        """Return {student_id: score_pct} for a normalized homework_group label."""
-        class_id = str(class_id or "").strip()
-        hg = Homework.normalize_homework_group(homework_group) or str(
-            homework_group or ""
-        ).strip()
-        if not class_id or not hg:
-            return {}
-        hw_map: Dict[str, Any] = {}
-        try:
-            sib = (
-                supabase_admin.table("assignments")
-                .select("id")
-                .eq("class_id", class_id)
-                .eq("homework_group", hg)
-                .execute()
-            )
-            sib_ids = [r["id"] for r in (sib.data or []) if r.get("id")]
-            if sib_ids:
-                leg = (
-                    supabase_admin.table("homework_scores")
-                    .select("student_id, score_pct")
-                    .eq("class_id", class_id)
-                    .in_("homework_group", sib_ids)
-                    .execute()
-                )
-                for r in (leg.data or []):
-                    sid = str(r.get("student_id") or "").strip()
-                    if sid:
-                        hw_map[sid] = r.get("score_pct")
-            cur = (
-                supabase_admin.table("homework_scores")
-                .select("student_id, score_pct")
-                .eq("class_id", class_id)
-                .eq("homework_group", hg)
-                .execute()
-            )
-            for r in (cur.data or []):
-                sid = str(r.get("student_id") or "").strip()
-                if sid:
-                    hw_map[sid] = r.get("score_pct")
-        except Exception as e:
-            logger.error(
-                "Error loading homework scores for group %s in class %s: %s",
-                hg,
-                class_id,
-                e,
-            )
-        return hw_map
-
-    @staticmethod
     def get_hw_scores_map_for_assignment(class_id, assignment_id):
         """Return {student_id: score_pct} for the HW group this assignment belongs to.
 
@@ -851,28 +798,3 @@ class Homework:
         if sid not in hw_map:
             return False
         return hw_map[sid] is not None
-
-    @staticmethod
-    def get_student_scores(student_id, class_id):
-        """Fetches homework performance for a specific student in a class."""
-        response = supabase_admin.table("homework_scores").select(
-            "student_id, class_id, homework_group, score_pct"
-        ).eq("student_id", student_id).eq("class_id", class_id).execute()
-        return response.data
-
-    @staticmethod
-    def get_revision_eligibility(class_id, assignment_id):
-        """Return {student_id: bool} indicating eligibility to earn M or MR (revision to mastery).
-
-        Requires HW >= REVISION_TO_M_HW_THRESHOLD. A free pass (-1) does not grant revision to M.
-        Uses the shared homework-group HW % when the assignment is part of a group.
-        """
-        try:
-            hw_map = Homework.get_hw_scores_map_for_assignment(class_id, assignment_id)
-            eligibility = {}
-            for sid, score in hw_map.items():
-                eligibility[sid] = Homework.is_revision_to_m_eligible_hw_score(score)
-            return eligibility
-        except Exception as e:
-            logger.error("Error checking revision eligibility: %s", e)
-            return {}

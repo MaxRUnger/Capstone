@@ -192,7 +192,7 @@
             <td class="px-4 py-3 text-sm font-semibold text-slate-900 dark:text-white sticky left-0 bg-white dark:bg-slate-800 group-hover:bg-slate-50 dark:group-hover:bg-slate-700/30 z-10 shadow-[2px_0_5px_-2px_rgba(0,0,0,0.06)] transition-colors">
               <div class="flex items-center gap-2">
                 <span>{{ student.name }}</span>
-                <button type="button" onclick="deleteStudent('{{ student.id }}', '{{ student.name }}', this)" class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-all" title="Remove student">
+                <button type="button" onclick="deleteStudent('{{ student.id }}', '{{ student.name|e }}', this)" class="opacity-0 group-hover:opacity-100 text-red-400 hover:text-red-600 dark:hover:text-red-300 transition-all" title="Remove student">
                   <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
                 </button>
               </div>
@@ -591,7 +591,7 @@ function getActiveAssignmentId() {
   return v || null;
 }
 
-/** Composite client key: student|lo|assignment (Qualification or active flat assignment). */
+/** Composite client key: student|lo|assignment. */
 function gradeCellKey(studentId, loId, assignmentId) {
   return String(studentId || '') + '|' + String(loId || '') + '|' + String(assignmentId || '');
 }

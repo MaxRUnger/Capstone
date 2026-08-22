@@ -20,7 +20,6 @@ variable ``MULTI_WORKER=1`` to log a one-time warning at startup (see
 import csv
 import hmac
 import io
-import json
 import logging
 import os
 import re
@@ -382,30 +381,6 @@ _HW_REQUIRED_FOR_MARK_ERROR = (
 )
 
 
-def _assignment_lo_ids(assignment_id: str) -> List[str]:
-    cache = _request_cache()
-    ck = ("_assignment_lo_ids", str(assignment_id))
-    if ck in cache:
-        return cache[ck]
-    out: List[str] = []
-    try:
-        ao_resp = (
-            supabase_admin.table("assignment_objectives")
-            .select("learning_objective_id")
-            .eq("assignment_id", assignment_id)
-            .execute()
-        )
-        out = [
-            str(r.get("learning_objective_id"))
-            for r in (ao_resp.data or [])
-            if r.get("learning_objective_id")
-        ]
-    except Exception as e:
-        logger.error("Error reading assignment LOs for %s: %s", assignment_id, e)
-    cache[ck] = out
-    return out
-
-
 def parse_students_csv_text(text: str) -> Tuple[List[Dict[str, str]], List[str]]:
     warnings: List[str] = []
     text = (text or "").strip()
@@ -503,7 +478,17 @@ def _select_class_pool_learning_objectives(select_cols: str, class_id: str):
 
 
 def _allowed_lo_ids_for_grading(class_id, assignment_id=None) -> set:
-    """LO ids that may be graded for this class."""
+    """LO ids that may be graded.
+
+    When an assignment_id is given, only LOs actually linked to that
+    assignment via assignment_objectives are allowed. A crafted request
+    for a class LO not linked to the assignment is silently dropped before
+    any DB write, matching the scoping the CSV export helpers already apply.
+    When no assignment_id is given (unscoped grade entry), the full class
+    LO pool is returned.
+    """
+    if assignment_id:
+        return {str(x) for x in (Course.get_assignment_lo_ids(assignment_id) or [])}
     return {str(x) for x in (Course.get_lo_ids_for_class(class_id) or [])}
 
 
@@ -1396,6 +1381,10 @@ def signup():
             if not submitted or not hmac.compare_digest(submitted, invite_code_env):
                 return jsonify({"success": False, "message": "Invalid invite code."}), 403
 
+        signup_name = (data.get("name") or "").strip()
+        if len(signup_name) > 255:
+            return jsonify({"success": False, "message": "Name must be 255 characters or fewer."}), 400
+
         login_redirect_url = f"{_public_base_url()}/login"
         result = supabase.auth.sign_up({
             "email": data.get("email"),
@@ -1662,6 +1651,41 @@ def _log_grade_deletions(rows: List[Dict[str, Any]], class_id: str, changed_by: 
             supabase_admin.table("grade_change_log").insert(chunk).execute()
         except Exception as e:
             logger.warning("grade_change_log insert skipped (table may not exist yet): %s", e)
+
+
+def _log_grade_upserts(rows: List[Dict[str, Any]], class_id: str, changed_by: Optional[str]) -> None:
+    """Best-effort audit log for grade rows that were just written (inserted or updated).
+
+    Symmetric to _log_grade_deletions. Records operation="UPSERT" so the
+    change log captures every score write, not just clears. Must never raise —
+    a missing/not-yet-migrated audit table or a logging failure should never
+    block an already-completed grade save.
+    """
+    if not rows:
+        return
+    log_rows = [
+        {
+            "student_id": r.get("student_id"),
+            "class_id": class_id,
+            "learning_objective_id": r.get("learning_objective_id"),
+            "assignment_id": r.get("assignment_id"),
+            "operation": "UPSERT",
+            "old_value": None,
+            "new_value": {
+                "top_score": r.get("top_score"),
+                "counts_for_mastery": r.get("counts_for_mastery"),
+            },
+            "changed_by": changed_by,
+        }
+        for r in rows
+    ]
+    chunk_size = 150
+    for i in range(0, len(log_rows), chunk_size):
+        chunk = log_rows[i:i + chunk_size]
+        try:
+            supabase_admin.table("grade_change_log").insert(chunk).execute()
+        except Exception as e:
+            logger.warning("grade_change_log upsert insert skipped (table may not exist yet): %s", e)
 
 
 def _clear_grade_cells_for_assignment(
@@ -2046,8 +2070,12 @@ def create_assignment(class_id):
 
     if not name:
         return jsonify({"success": False, "error": "Assignment name is required."}), 400
+    if len(name) > 255:
+        return jsonify({"success": False, "error": "Assignment name must be 255 characters or fewer."}), 400
     if not homework_group:
         return jsonify({"success": False, "error": "Homework group is required."}), 400
+    if len(homework_group) > 100:
+        return jsonify({"success": False, "error": "Homework group must be 100 characters or fewer."}), 400
 
     assignment_type = _assignment_type_fields_from_payload(data)
 
@@ -2095,8 +2123,12 @@ def update_assignment(class_id, assignment_id):
     homework_group = Homework.canonicalize_homework_group_for_class(class_id, data.get('homework_group'))
     if not name:
         return jsonify({"success": False, "error": "Assignment name is required."}), 400
+    if len(name) > 255:
+        return jsonify({"success": False, "error": "Assignment name must be 255 characters or fewer."}), 400
     if not homework_group:
         return jsonify({"success": False, "error": "Homework group is required."}), 400
+    if len(homework_group) > 100:
+        return jsonify({"success": False, "error": "Homework group must be 100 characters or fewer."}), 400
 
     assignment_type = _assignment_type_fields_from_payload(data)
 
@@ -2434,22 +2466,6 @@ def _student_enrolled_in_class(class_id: str, student_id: str) -> bool:
     return str(student_id) in _enrolled_student_ids_for_class(class_id)
 
 
-def _learning_objective_belongs_to_class(class_id: str, lo_id: str) -> bool:
-    """True if lo_id belongs to class_id."""
-    try:
-        r = (
-            supabase_admin.table("learning_objectives")
-            .select("id")
-            .eq("id", lo_id)
-            .eq("class_id", class_id)
-            .limit(1)
-            .execute()
-        )
-        return bool(r.data)
-    except Exception:
-        return False
-
-
 def _lo_vendor_code_conflict(class_id: str, vendor_code: str, exclude_lo_id: str) -> bool:
     """True if another LO in the class already uses this vendor_code (case-insensitive)."""
     vc = (vendor_code or "").strip()
@@ -2533,6 +2549,8 @@ def api_update_learning_objective(class_id, lo_id):
             vendor_code = str(vendor_raw).strip() or None
         if not vendor_code:
             return jsonify({"success": False, "error": "Objective code is required"}), 400
+        if len(vendor_code) > 50:
+            return jsonify({"success": False, "error": "Objective code must be 50 characters or fewer."}), 400
         if vendor_code and _lo_vendor_code_conflict(class_id, vendor_code, lo_id):
             return jsonify(
                 {"success": False, "error": "Another objective in this class already uses that code."}
@@ -2542,6 +2560,8 @@ def api_update_learning_objective(class_id, lo_id):
             description = row.get("description")
         else:
             description = str(desc_raw).strip() or None
+        if description and len(description) > 2000:
+            return jsonify({"success": False, "error": "Description must be 2000 characters or fewer."}), 400
         if data.get("required_ms") is None:
             req = int(row.get("required_ms") or DEFAULT_REQUIRED_MS)
         else:
@@ -2775,6 +2795,10 @@ def api_send_single_report_email(class_id, student_id):
     body = str(data.get("body") or "").strip()
     if not subject or not body:
         return jsonify({"success": False, "error": "Missing subject or body"}), 400
+    if len(subject) > 255:
+        return jsonify({"success": False, "error": "Subject must be 255 characters or fewer."}), 400
+    if len(body) > 10000:
+        return jsonify({"success": False, "error": "Body must be 10,000 characters or fewer."}), 400
 
     try:
         enrollment = (
@@ -2860,6 +2884,10 @@ def api_send_bulk_report_emails(class_id):
         student_name = str(item.get("student_name") or sid).strip() or sid
         if not sid or not subject or not body:
             skipped += 1
+            continue
+        if len(subject) > 255 or len(body) > 10000:
+            skipped += 1
+            failures.append(f"{student_name}: email content too long")
             continue
         to_email = email_by_student.get(sid, "")
         if not to_email:
@@ -3210,6 +3238,10 @@ def create_lo_handler(class_id):
         lo_description = request.form.get('description', '').strip()
         lo_required_ms = request.form.get('required_ms', 2)
 
+        if lo_code and len(lo_code) > 50:
+            return "Objective code must be 50 characters or fewer.", 400
+        if lo_description and len(lo_description) > 2000:
+            return "Description must be 2000 characters or fewer.", 400
         if lo_code:
             try:
                 req_ms = int(lo_required_ms)
@@ -3254,6 +3286,8 @@ def add_class():
 
     if not request.form.get("name"):
         return "Class name is required.", 400
+    if len(request.form.get("name", "").strip()) > 255:
+        return "Class name must be 255 characters or fewer.", 400
 
     form_token = (request.form.get("create_class_token") or "").strip()
     session_token = (session.get("create_class_token") or "").strip()
@@ -3277,6 +3311,8 @@ def add_class():
         semester = request.form.get("semester", "")
         year = request.form.get("year", "")
         semester_full = f"{semester} {year}".strip() if year else semester
+        if len(semester_full) > 100:
+            return "Semester must be 100 characters or fewer.", 400
 
         new_class_data = {
             "name": request.form.get("name"),
@@ -3419,6 +3455,17 @@ def api_update_grade():
         Grade.update_score(student_id=data['student_id'], lo_id=data['lo_id'], 
                             top_score=data['top_score'], second_score=data.get('second_score'),
                             assignment_id=data.get('assignment_id'), changed_by=session['user_id'])
+        _log_grade_upserts(
+            [{
+                "student_id": data["student_id"],
+                "learning_objective_id": data["lo_id"],
+                "assignment_id": data.get("assignment_id"),
+                "top_score": Grade.normalize_score(data.get("top_score")),
+                "counts_for_mastery": None,
+            }],
+            str(class_id),
+            session["user_id"],
+        )
         return jsonify({"success": True})
     except Exception as e:
         return _safe_api_error("Could not update grade", 500, log_detail=e)
@@ -3599,6 +3646,8 @@ def save_grades(class_id):
                 else:
                     raise
 
+        _log_grade_upserts(grade_rows, class_id, session.get("user_id"))
+
         if to_clear:
             _clear_grade_cells_for_assignment(
                 class_id, assignment_id, to_clear, session.get("user_id")
@@ -3726,7 +3775,6 @@ def api_assignment_grades(class_id, assignment_id):
             "hw_scores": hw_map,
             "revision_eligible": eligibility,
             "assignment_type": assignment_type,
-            "project_progress": None,
         })
     except Exception as e:
         return _safe_api_error("Could not load assignment grades", 500, log_detail=e)
@@ -3789,6 +3837,7 @@ def _promote_non_counting_masteries_for_student(class_id: str, student_id: str, 
             )
             return 0
         raise
+    _log_grade_upserts(rows, class_id, changed_by)
     return len(rows)
 
 
@@ -3984,6 +4033,8 @@ def api_add_student_to_class(class_id):
         student_name = data.get('student_name', '').strip()
         if not student_name:
             return jsonify({"success": False, "error": "student_name is required"}), 400
+        if len(student_name) > 255:
+            return jsonify({"success": False, "error": "Student name must be 255 characters or fewer."}), 400
         student_id = str(uuid4())
         student_email = (data.get("student_email") or data.get("email") or "").strip()
         insert_row = {
@@ -4469,7 +4520,7 @@ def api_toggle_mute(class_id):
 
 
 @main_bp.route("/api/class/<class_id>/remove_student", methods=["POST"])
-@api_login_required
+@api_instructor_required
 def api_remove_student_from_class(class_id):
     try:
         if not _instructor_owns_class(class_id):
@@ -4495,6 +4546,7 @@ def api_remove_student_from_class(class_id):
 
 @main_bp.route("/api/import-grades", methods=["POST"])
 @api_login_required
+@rate_limited("import_grades", limit=30, window_sec=900)
 def api_import_grades():
 
     data = request.get_json() or {}
@@ -4834,6 +4886,8 @@ def api_import_grades():
                 logger.error("Grade upsert error: %s", upsert_err)
     except Exception as e:
         logger.error("Error processing grades in bulk: %s", e)
+
+    _log_grade_upserts(grade_rows, str(class_id), session.get("user_id"))
 
     # Persist homework % scores in homework_scores.
     try:

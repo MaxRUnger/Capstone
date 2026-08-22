@@ -971,13 +971,6 @@ function updateExtractedStudentName(idx, value) {
   uploadedPDFData.students[idx].name = value;
 }
 
-function updateExtractedGrade(idx, lo, value) {
-  if (!uploadedPDFData || !uploadedPDFData.students || !uploadedPDFData.students[idx]) return;
-  const s = uploadedPDFData.students[idx];
-  if (!s.grades) s.grades = {};
-  s.grades[lo] = value.trim().toUpperCase();
-}
-
 function updateExtractedHomeworkPct(idx, value) {
   if (!uploadedPDFData || !uploadedPDFData.students || !uploadedPDFData.students[idx]) return;
   const t = (value == null) ? '' : String(value).trim();
