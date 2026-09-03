@@ -37,6 +37,7 @@ from app.routes import (
     _student_display_name,
     _aggregate_lo_grades,
     parse_blank_gradesheet_csv_text,
+    parse_students_csv_text,
     _csv_format_hw_score,
     _gradesheet_csv_data_rows,
     _gradesheet_letter_map_from_rows,
@@ -342,6 +343,96 @@ class TestStudentSortKeyLastName(unittest.TestCase):
         result = organize_by_learning_objectives(students, los)
         names = [s["name"] for s in result[0]["students_with_2m"]]
         self.assertEqual(names, ["Adams Zoe", "Zenith Bob"])
+
+
+class TestHyphenatedLastNameSort(unittest.TestCase):
+    """Hyphenated last names (e.g. Smith-Pauley) must sort as though the hyphen
+    and suffix are absent for primary ordering, with first name as tie-break.
+
+    Exact reported scenario: "Cali Smith", "Parker Smith", "Kaiya Smith-Pauley"
+    Expected order: Cali Smith, Kaiya Smith-Pauley, Parker Smith.
+
+    Before fix: 'smith-pauley' > 'smith' lexicographically, so Kaiya sorted LAST.
+    After fix:  pre-hyphen primary 'smith' == 'smith', tie-break by first name
+                'cali' < 'kaiya' < 'parker' gives the correct order.
+    """
+
+    THREE_NAMES = ["Cali Smith", "Parker Smith", "Kaiya Smith-Pauley"]
+    EXPECTED = ["Cali Smith", "Kaiya Smith-Pauley", "Parker Smith"]
+
+    # ── sort-key unit tests ────────────────────────────────────────────────
+
+    def test_pre_hyphen_primary_key(self):
+        """Primary key for Smith-Pauley must be 'smith', not 'smith-pauley'."""
+        self.assertEqual(_student_sort_key_last_name("Kaiya Smith-Pauley")[0], "smith")
+
+    def test_plain_smith_primary_key(self):
+        """Primary key for plain Smith is also 'smith' — same bucket."""
+        self.assertEqual(_student_sort_key_last_name("Cali Smith")[0], "smith")
+
+    def test_tiebreak_is_first_name_only(self):
+        """Secondary key must be the first-name portion only, not the full string."""
+        self.assertEqual(_student_sort_key_last_name("Kaiya Smith-Pauley")[1], "kaiya")
+        self.assertEqual(_student_sort_key_last_name("Cali Smith")[1], "cali")
+        self.assertEqual(_student_sort_key_last_name("Parker Smith")[1], "parker")
+
+    def test_comma_format_also_strips_hyphen(self):
+        """'Smith-Pauley, Kaiya' (comma import format) primary key must be 'smith'."""
+        self.assertEqual(_student_sort_key_last_name("Smith-Pauley, Kaiya")[0], "smith")
+
+    def test_unhyphenated_name_unchanged(self):
+        """Names without hyphens must be unaffected — 'Adams' stays 'adams'."""
+        self.assertEqual(_student_sort_key_last_name("Zoe Adams")[0], "adams")
+
+    # ── full sort-order tests: every Python path ───────────────────────────
+
+    def test_sort_key_produces_correct_order(self):
+        """_student_sort_key_last_name sorts the three names correctly."""
+        result = sorted(self.THREE_NAMES, key=_student_sort_key_last_name)
+        self.assertEqual(result, self.EXPECTED)
+
+    def test_student_row_sort_key_produces_correct_order(self):
+        """_student_row_sort_key (roster, SpeedGrader, class_students) gives same order."""
+        rows = [{"full_name": n} for n in self.THREE_NAMES]
+        result = [r["full_name"] for r in sorted(rows, key=_student_row_sort_key)]
+        self.assertEqual(result, self.EXPECTED)
+
+    def test_reports_organize_buckets_correct_order(self):
+        """organize_by_learning_objectives (Reports page buckets) sorts correctly."""
+        students = [
+            {"id": str(i), "full_name": n, "grades": [
+                {"learning_objective_id": "lo1", "top_score": "M", "second_score": "M"}
+            ]}
+            for i, n in enumerate(self.THREE_NAMES)
+        ]
+        los = [{"id": "lo1", "name": "LO-A"}]
+        result = organize_by_learning_objectives(students, los)
+        bucket_full_names = [s["full_name"] for s in result[0]["students_with_2m"]]
+        self.assertEqual(bucket_full_names, self.EXPECTED)
+
+    def test_csv_import_preview_correct_order(self):
+        """parse_students_csv_text (CSV import preview) sorts correctly."""
+        csv_text = "name\nParker Smith\nKaiya Smith-Pauley\nCali Smith\n"
+        rows, warnings = parse_students_csv_text(csv_text)
+        self.assertEqual(warnings, [])
+        result = [r["full_name"] for r in rows]
+        self.assertEqual(result, self.EXPECTED)
+
+    # ── edge cases ─────────────────────────────────────────────────────────
+
+    def test_double_hyphen_only_first_split_used(self):
+        """'O-Brien-Murphy' primary key uses only the first split: 'o'."""
+        self.assertEqual(_student_sort_key_last_name("Pat O-Brien-Murphy")[0], "o")
+
+    def test_single_token_hyphenated_name(self):
+        """A single-token hyphenated name 'Smith-Pauley' primary key is 'smith'."""
+        self.assertEqual(_student_sort_key_last_name("Smith-Pauley")[0], "smith")
+
+    def test_existing_sort_still_correct(self):
+        """Regression: non-hyphenated names sort exactly as before."""
+        rows = [{"full_name": "Bob Zenith"}, {"full_name": "Zoe Adams"}]
+        result = [r["full_name"] for r in sorted(rows, key=_student_row_sort_key)]
+        self.assertEqual(result, ["Zoe Adams", "Bob Zenith"])
 
 
 class TestFormatNameLastFirst(unittest.TestCase):

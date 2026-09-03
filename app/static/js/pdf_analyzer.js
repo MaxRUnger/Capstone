@@ -751,6 +751,18 @@ function displayExtractedData(data) {
     });
   });
 
+  // Sort preview rows by last name (pre-hyphen primary, first name tie-break) so
+  // the upload preview matches the server-side roster order on every page.
+  data.students.sort(function(a, b) {
+    const ka = _sortKeyLastName((a && a.name) || '');
+    const kb = _sortKeyLastName((b && b.name) || '');
+    if (ka[0] < kb[0]) return -1;
+    if (ka[0] > kb[0]) return 1;
+    if (ka[1] < kb[1]) return -1;
+    if (ka[1] > kb[1]) return 1;
+    return 0;
+  });
+
   if (Array.isArray(data.learning_objectives)) {
     data.learning_objectives = data.learning_objectives.filter(
       lo => !isHomeworkHeader(lo)
@@ -969,6 +981,33 @@ function moveFocus(row, col) {
 function updateExtractedStudentName(idx, value) {
   if (!uploadedPDFData || !uploadedPDFData.students || !uploadedPDFData.students[idx]) return;
   uploadedPDFData.students[idx].name = value;
+}
+
+/**
+ * Sort key for a student display-name string — mirrors Python's
+ * _student_sort_key_last_name exactly so the upload preview always
+ * matches the server-side roster order.
+ *
+ * Returns [primary, secondary] where:
+ *   primary  = last-name token up to (not including) the first hyphen,
+ *              lower-cased  (e.g. "Smith-Pauley" → "smith")
+ *   secondary = first-name token(s), lower-cased, for tie-breaking
+ */
+function _sortKeyLastName(name) {
+  const raw = (name || '').trim();
+  if (!raw) return ['\uffff', ''];
+  if (raw.indexOf(',') !== -1) {
+    const pieces = raw.split(',');
+    const last = pieces[0].trim().toLowerCase();
+    const primary = last.split('-')[0] || '\uffff';
+    const secondary = (pieces[1] || '').trim().toLowerCase();
+    return [primary || '\uffff', secondary];
+  }
+  const parts = raw.split(/\s+/);
+  if (parts.length === 1) return [parts[0].toLowerCase().split('-')[0], ''];
+  const primary = parts[parts.length - 1].toLowerCase().split('-')[0];
+  const secondary = parts.slice(0, -1).join(' ').toLowerCase();
+  return [primary, secondary];
 }
 
 function updateExtractedHomeworkPct(idx, value) {

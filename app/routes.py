@@ -1018,21 +1018,31 @@ def _lookup_enrolled_import_student_id(
 def _student_sort_key_last_name(display_name: Optional[str]) -> Tuple[str, str]:
     """Return (primary, secondary) for ordering students by family name.
 
-    If the label contains a comma (e.g. ``Washington, George``), the substring
-    before the comma is the last name. Otherwise the last whitespace-separated
-    token is used (``Mary Jane Smith`` → ``smith``). Tie-break on full string.
+    Sorting rules applied in order:
+    - Comma format (``Washington, George``): part before the comma is the last
+      name; part after is the first name used for tie-breaking.
+    - Space-separated format (``First ... Last``): the final whitespace-
+      separated token is the last name; preceding tokens form the first name.
+    - Hyphenated last names (``Smith-Pauley``): only the portion before the
+      FIRST hyphen is used as the primary sort key, so ``Smith-Pauley`` groups
+      alongside plain ``Smith`` rather than after it.
+    - Tie-break is by first name(s) only, not the full raw string.
     """
     raw = (display_name or "").strip()
     if not raw:
         return ("\uffff", "")
-    lower_full = raw.lower()
     if "," in raw:
-        last = raw.split(",", 1)[0].strip().lower()
-        return (last or "\uffff", lower_full)
+        left, right = raw.split(",", 1)
+        last = left.strip().lower()
+        primary = last.split("-")[0] if last else "\uffff"
+        secondary = right.strip().lower()
+        return (primary or "\uffff", secondary)
     parts = raw.split()
-    if len(parts) >= 2:
-        return (parts[-1].lower(), lower_full)
-    return (parts[0].lower(), lower_full)
+    if len(parts) == 1:
+        return (parts[0].lower().split("-")[0], "")
+    primary = parts[-1].lower().split("-")[0]
+    secondary = " ".join(parts[:-1]).lower()
+    return (primary, secondary)
 
 
 def _student_row_sort_key(student: Dict[str, Any]) -> Tuple[str, str]:
